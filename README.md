@@ -12,6 +12,13 @@
 
 > Forked from [bestruirui/octopus](https://github.com/bestruirui/octopus) — see [Differences from Upstream](#-differences-from-upstream) for what this fork changes.
 
+### Fork release
+
+The maintained Docker image for this fork is `ghcr.io/tianxia3111/octopus:latest` and supports `linux/amd64` and `linux/arm64`.
+
+- Normal Chat streaming completion is no longer recorded as `context canceled`.
+- Relay requests appear in the log immediately as **Responding**, then update the same entry when completed.
+
 
 ## ✨ Features
 
@@ -36,24 +43,20 @@
 Run directly:
 
 ```bash
-docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 hureru/octopus
+docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/tianxia3111/octopus:latest
 ```
 
 Or use docker compose:
 
 ```bash
-wget https://raw.githubusercontent.com/Hureru/octopus/refs/heads/dev/docker-compose.yml
+wget https://raw.githubusercontent.com/tianxia3111/octopus/refs/heads/dev/docker-compose.yml
 docker compose up -d
 ```
 
 
-### 📦 Download from Release
+### 📦 Fork distribution
 
-Download the binary for your platform from [Releases](https://github.com/Hureru/octopus/releases), then run:
-
-```bash
-./octopus start
-```
+This fork is currently distributed through `ghcr.io/tianxia3111/octopus:latest`. Upstream release binaries do not contain the fork-specific fixes listed above.
 
 ### 🛠️ Build from Source
 
@@ -64,7 +67,7 @@ Download the binary for your platform from [Releases](https://github.com/Hureru/
 
 ```bash
 # Clone the repository
-git clone https://github.com/Hureru/octopus.git
+git clone -b dev https://github.com/tianxia3111/octopus.git
 cd octopus
 # Build frontend
 cd web && pnpm install && pnpm run build && cd ..
@@ -391,7 +394,8 @@ Compatible with [bestruirui/octopus](https://github.com/bestruirui/octopus), ~18
 ### 🛠️ Reworked
 
 - **Channel module** — tabbed Site/Manual layout; group editor preserves channel metadata.
-- **Relay core** — route learning, retry, cancel propagation, Responses compact proxy, log filtering by channel ID.
+- **Relay core** — route learning, retry, cancel propagation, Responses compact proxy, log filtering by channel ID, and correct Chat stream completion handling without false `context canceled` errors.
+- **Realtime relay logs** — a request is shown immediately as **Responding** and the same log entry is updated on completion.
 - **Auth** — JWT secret persisted in DB (rotation-safe), no longer derived from credentials.
 - **Backup**, **logs** (`Item.tsx` rewrite), and **home charts** redesigned.
 
@@ -411,4 +415,3 @@ Compatible with [bestruirui/octopus](https://github.com/bestruirui/octopus), ~18
 ## 🔗 Friend Links
 
 - 🐧 [LinuxDO](https://linux.do) - A community for tech enthusiasts
-

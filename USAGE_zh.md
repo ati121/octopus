@@ -105,16 +105,16 @@ Octopus 是一个 **LLM API 聚合与负载均衡服务**。简单说，它帮�
 
 **Docker 直接运行：**
 ```bash
-docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 hureru/octopus
+docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/tianxia3111/octopus:latest
 ```
 
 **docker compose：**
 ```bash
-wget https://raw.githubusercontent.com/Hureru/octopus/refs/heads/dev/docker-compose.yml
+wget https://raw.githubusercontent.com/tianxia3111/octopus/refs/heads/dev/docker-compose.yml
 docker compose up -d
 ```
 
-> ⚠️ **镜像一定要用 `hureru/octopus`**（带站点功能的版本）。如果你用的是 `bestrui/octopus` 等原版镜像，是看不到"站点"页面的。Release 二进制、源码编译方式见 [README_zh.md](README_zh.md)。
+> ⚠️ **本 Fork 请使用 `ghcr.io/tianxia3111/octopus:latest`。** 其他上游镜像不包含本站点功能、Chat 流取消误判修复和“响应中”实时日志。源码编译方式见 [README_zh.md](README_zh.md)。
 
 ### 4.2 首次登录
 

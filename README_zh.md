@@ -12,6 +12,13 @@
 
 > 本项目 Fork 自 [bestruirui/octopus](https://github.com/bestruirui/octopus)，与上游的差异见 [与上游的差异](#-与上游的差异)。
 
+### Fork 版本
+
+本 Fork 的维护镜像为 `ghcr.io/tianxia3111/octopus:latest`，支持 `linux/amd64` 和 `linux/arm64`。
+
+- Chat 流正常结束时不再被错误记录为 `context canceled`。
+- 客户端请求进入后立即在日志中显示为 **响应中**，完成后原位更新同一条记录。
+
 
 ## ✨ 特性
 
@@ -36,24 +43,20 @@
 直接运行
 
 ```bash
-docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 hureru/octopus
+docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/tianxia3111/octopus:latest
 ```
 
 或者使用 docker compose 运行
 
 ```bash
-wget https://raw.githubusercontent.com/Hureru/octopus/refs/heads/dev/docker-compose.yml
+wget https://raw.githubusercontent.com/tianxia3111/octopus/refs/heads/dev/docker-compose.yml
 docker compose up -d
 ```
 
 
-### 📦 从 Release 下载
+### 📦 Fork 版本分发
 
-从 [Releases](https://github.com/Hureru/octopus/releases) 下载对应平台的二进制文件，然后运行：
-
-```bash
-./octopus start
-```
+本 Fork 当前通过 `ghcr.io/tianxia3111/octopus:latest` 分发。上游 Release 二进制不包含上面列出的 Fork 专属修复。
 
 ### 🛠️ 源码运行
 
@@ -64,7 +67,7 @@ docker compose up -d
 
 ```bash
 # 克隆项目
-git clone https://github.com/Hureru/octopus.git
+git clone -b dev https://github.com/tianxia3111/octopus.git
 cd octopus
 # 构建前端
 cd web && pnpm install && pnpm run build && cd ..
@@ -393,7 +396,8 @@ base_url = "http://127.0.0.1:8080/v1"
 ### 🛠️ 重做
 
 - **渠道模块** —— Site / Manual Tab 切换；分组编辑器保留渠道元数据。
-- **Relay 内核** —— 路由学习、重试、取消传播、Responses compact proxy、日志按 channel ID 过滤。
+- **Relay 内核** —— 路由学习、重试、取消传播、Responses compact proxy、日志按 channel ID 过滤，并正确处理 Chat 流结束，不再误报 `context canceled`。
+- **实时请求日志** —— 请求进入后立即显示为 **响应中**，完成后原位更新同一条日志。
 - **认证** —— JWT 密钥持久化到数据库（密码轮换更安全），不再从凭证派生。
 - **备份**、**日志**（`Item.tsx` 重写）、**首页图表** 全部重做。
 
