@@ -9,14 +9,30 @@
 
 ## Docker 使用
 
+直接运行：
+
 ```bash
-git clone -b dev https://github.com/tianxia3111/octopus.git
-cd octopus
-docker compose up -d --build
+docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/tianxia3111/octopus:latest
+```
+
+Docker Compose：
+
+```yaml
+services:
+  octopus:
+    image: ghcr.io/tianxia3111/octopus:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - "/path/to/data:/app/data"
+    container_name: octopus
+    restart: unless-stopped
+```
+
+```bash
+docker compose up -d
 ```
 
 访问 <http://localhost:8080>。默认用户名和密码均为 `admin`，首次登录后请立即修改。
-
-数据默认保存在 `./data`，需要改到其他位置时可修改 `docker-compose.yml` 中的挂载路径。
 
 English: [README.md](README.md)

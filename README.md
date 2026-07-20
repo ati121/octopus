@@ -9,14 +9,30 @@ This fork contains local changes built on top of upstream, including:
 
 ## Docker
 
+Run directly:
+
 ```bash
-git clone -b dev https://github.com/tianxia3111/octopus.git
-cd octopus
-docker compose up -d --build
+docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/tianxia3111/octopus:latest
+```
+
+Docker Compose:
+
+```yaml
+services:
+  octopus:
+    image: ghcr.io/tianxia3111/octopus:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - "/path/to/data:/app/data"
+    container_name: octopus
+    restart: unless-stopped
+```
+
+```bash
+docker compose up -d
 ```
 
 Open <http://localhost:8080>. The default username and password are both `admin`; change them after the first login.
-
-Data is stored in `./data` by default. Edit the volume in `docker-compose.yml` if you need another location.
 
 See [README_zh.md](README_zh.md) for Chinese.

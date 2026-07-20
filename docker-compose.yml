@@ -1,13 +1,9 @@
 services:
   octopus:
-    build:
-      context: .
-      args:
-        VERSION: dev
-    image: octopus-local:dev
+    image: ghcr.io/tianxia3111/octopus:latest
     ports:
-      - "8080:8080"
-    volumes:
-      - "./data:/app/data"
+       - '8080:8080'
+    volumes:      
+       - '/path/to/data:/app/data'
     container_name: octopus
     restart: unless-stopped
