@@ -400,6 +400,16 @@ func (ra *relayAttempt) attempt() attemptResult {
 
 	// 转发请求
 	statusCode, fwdErr := ra.forward()
+	if fwdErr != nil && isClientCancellation(ra.requestContext(), fwdErr) && ra.streamPayloadWritten.Load() {
+		ra.collectResponse()
+		if chatResponseProtocolCompleted(ra.metrics.InternalResponse) {
+			log.Debugf("client disconnected after chat finish_reason, treating stream as success")
+			fwdErr = nil
+			if statusCode == 0 {
+				statusCode = http.StatusOK
+			}
+		}
+	}
 
 	// 更新 channel key 状态
 	ra.usedKey.StatusCode = statusCode
@@ -475,6 +485,18 @@ func (ra *relayAttempt) attempt() attemptResult {
 
 // parseRequest 解析并验证入站请求
 // 返回值中的 rawBody 为客户端原始请求字节，供同格式直通路径重用。
+func chatResponseProtocolCompleted(response *model.InternalLLMResponse) bool {
+	if response == nil || len(response.Choices) == 0 {
+		return false
+	}
+	for _, choice := range response.Choices {
+		if choice.FinishReason == nil || strings.TrimSpace(*choice.FinishReason) == "" {
+			return false
+		}
+	}
+	return true
+}
+
 func parseRequest(inboundType inbound.InboundType, c *gin.Context) ([]byte, *model.InternalLLMRequest, model.Inbound, error) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
