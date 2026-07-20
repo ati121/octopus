@@ -62,8 +62,9 @@ jobs:
           COMMIT_ID="$(git rev-parse --short HEAD)"
           LDFLAGS="-X 'github.com/bestruirui/octopus/internal/conf.Version=${GIT_VERSION}' \
                    -X 'github.com/bestruirui/octopus/internal/conf.BuildTime=${BUILD_TIME}' \
-                   -X 'github.com/bestruirui/octopus/internal/conf.Author=hureru' \
+                   -X 'github.com/bestruirui/octopus/internal/conf.Author=tianxia3111' \
                    -X 'github.com/bestruirui/octopus/internal/conf.Commit=${COMMIT_ID}' \
+                   -X 'github.com/bestruirui/octopus/internal/conf.Repo=https://github.com/${{ github.repository }}' \
                    -s -w"
 
           GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build -o build/bin/octopus-linux-x86_64        -ldflags="${LDFLAGS}" -tags=jsoniter ./
