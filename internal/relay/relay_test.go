@@ -958,6 +958,9 @@ func TestRelayMetricsCapturesOpenAICompatibleInputBreakdown(t *testing.T) {
 	if metrics.CacheReadTokens == nil || *metrics.CacheReadTokens != 900 {
 		t.Fatalf("expected cache read tokens to be captured, got %#v", metrics.CacheReadTokens)
 	}
+	if metrics.Stats.CacheReadToken != 900 {
+		t.Fatalf("expected stats cache read tokens to be captured, got %d", metrics.Stats.CacheReadToken)
+	}
 	if metrics.CacheWriteTokens == nil || *metrics.CacheWriteTokens != 0 {
 		t.Fatalf("expected cache write tokens to default to zero, got %#v", metrics.CacheWriteTokens)
 	}

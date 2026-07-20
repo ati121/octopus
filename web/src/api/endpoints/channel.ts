@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../client';
 import { logger } from '@/lib/logger';
 import { formatCount, formatMoney, formatTime } from '@/lib/utils';
-import { StatsChannel, type StatsMetricsFormatted } from './stats';
+import { formatCacheHitRate, StatsChannel, type StatsMetricsFormatted } from './stats';
 import type { ProxyMode } from './proxy-pool';
 /**
  * 渠道类型枚举
@@ -176,6 +176,8 @@ export function useChannelList() {
             formatted: {
                 input_token: formatCount(item.stats.input_token),
                 output_token: formatCount(item.stats.output_token),
+                cache_read_token: formatCount(item.stats.cache_read_token),
+                cache_hit_rate: formatCacheHitRate(item.stats.input_token, item.stats.cache_read_token),
                 total_token: formatCount(item.stats.input_token + item.stats.output_token),
                 input_cost: formatMoney(item.stats.input_cost),
                 output_cost: formatMoney(item.stats.output_cost),

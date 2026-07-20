@@ -1,6 +1,6 @@
 'use client';
 
-import { useStatsDaily, useStatsHourly, useStatsTotal } from '@/api/endpoints/stats';
+import { formatCacheHitRate, useStatsDaily, useStatsHourly, useStatsTotal } from '@/api/endpoints/stats';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import { useMemo } from 'react';
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
@@ -15,7 +15,11 @@ type Formatted = { value: string; unit: string };
 
 type MetricsRow = {
     requests: Formatted;
-    tokens: Formatted;
+    inputTokens: Formatted;
+    outputTokens: Formatted;
+    cacheReadTokens: Formatted;
+    cacheHitRate: Formatted;
+    totalTokens: Formatted;
     waitTime: Formatted;
 };
 
@@ -32,6 +36,24 @@ const PERIOD_KEY: Record<ChartPeriod, 'today' | 'last7Days' | 'last30Days' | 'al
     '30': 'last30Days',
     all: 'allTime',
 };
+
+function buildMetrics(
+    requests: number,
+    inputTokens: number,
+    outputTokens: number,
+    cacheReadTokens: number,
+    waitTime: number
+): MetricsRow {
+    return {
+        requests: formatCount(requests).formatted,
+        inputTokens: formatCount(inputTokens).formatted,
+        outputTokens: formatCount(outputTokens).formatted,
+        cacheReadTokens: formatCount(cacheReadTokens).formatted,
+        cacheHitRate: formatCacheHitRate(inputTokens, cacheReadTokens).formatted,
+        totalTokens: formatCount(inputTokens + outputTokens).formatted,
+        waitTime: formatTime(waitTime).formatted,
+    };
+}
 
 export function StatsChart() {
     const t = useTranslations('home.summary');
@@ -53,11 +75,7 @@ export function StatsChart() {
         metrics: MetricsRow;
         chartData: ChartPoint[];
     }>(() => {
-        const emptyMetrics: MetricsRow = {
-            requests: formatCount(0).formatted,
-            tokens: formatCount(0).formatted,
-            waitTime: formatTime(0).formatted,
-        };
+        const emptyMetrics = buildMetrics(0, 0, 0, 0, 0);
         const emptyHero: HeroValue = { value: undefined, unit: '' };
 
         if (period === 'all') {
@@ -73,11 +91,13 @@ export function StatsChart() {
                         value: statsTotal.total_cost.formatted.value,
                         unit: statsTotal.total_cost.formatted.unit,
                     },
-                    metrics: {
-                        requests: statsTotal.request_count.formatted,
-                        tokens: statsTotal.total_token.formatted,
-                        waitTime: statsTotal.wait_time.formatted,
-                    },
+                    metrics: buildMetrics(
+                        statsTotal.request_count.raw,
+                        statsTotal.input_token.raw,
+                        statsTotal.output_token.raw,
+                        statsTotal.cache_read_token.raw,
+                        statsTotal.wait_time.raw
+                    ),
                     chartData: points,
                 };
             }
@@ -88,16 +108,14 @@ export function StatsChart() {
 
             const cost = sortedDaily.reduce((acc, s) => acc + s.total_cost.raw, 0);
             const requests = sortedDaily.reduce((acc, s) => acc + s.request_count.raw, 0);
-            const tokens = sortedDaily.reduce((acc, s) => acc + s.total_token.raw, 0);
+            const inputTokens = sortedDaily.reduce((acc, s) => acc + s.input_token.raw, 0);
+            const outputTokens = sortedDaily.reduce((acc, s) => acc + s.output_token.raw, 0);
+            const cacheReadTokens = sortedDaily.reduce((acc, s) => acc + s.cache_read_token.raw, 0);
             const wait = sortedDaily.reduce((acc, s) => acc + s.wait_time.raw, 0);
             const costFmt = formatMoney(cost).formatted;
             return {
                 hero: { value: costFmt.value, unit: costFmt.unit },
-                metrics: {
-                    requests: formatCount(requests).formatted,
-                    tokens: formatCount(tokens).formatted,
-                    waitTime: formatTime(wait).formatted,
-                },
+                metrics: buildMetrics(requests, inputTokens, outputTokens, cacheReadTokens, wait),
                 chartData: points,
             };
         }
@@ -113,16 +131,14 @@ export function StatsChart() {
             }));
             const cost = statsHourly.reduce((acc, s) => acc + s.total_cost.raw, 0);
             const requests = statsHourly.reduce((acc, s) => acc + s.request_count.raw, 0);
-            const tokens = statsHourly.reduce((acc, s) => acc + s.total_token.raw, 0);
+            const inputTokens = statsHourly.reduce((acc, s) => acc + s.input_token.raw, 0);
+            const outputTokens = statsHourly.reduce((acc, s) => acc + s.output_token.raw, 0);
+            const cacheReadTokens = statsHourly.reduce((acc, s) => acc + s.cache_read_token.raw, 0);
             const wait = statsHourly.reduce((acc, s) => acc + s.wait_time.raw, 0);
             const costFmt = formatMoney(cost).formatted;
             return {
                 hero: { value: costFmt.value, unit: costFmt.unit },
-                metrics: {
-                    requests: formatCount(requests).formatted,
-                    tokens: formatCount(tokens).formatted,
-                    waitTime: formatTime(wait).formatted,
-                },
+                metrics: buildMetrics(requests, inputTokens, outputTokens, cacheReadTokens, wait),
                 chartData: points,
             };
         }
@@ -141,16 +157,14 @@ export function StatsChart() {
 
         const cost = recent.reduce((acc, s) => acc + s.total_cost.raw, 0);
         const requests = recent.reduce((acc, s) => acc + s.request_count.raw, 0);
-        const tokens = recent.reduce((acc, s) => acc + s.total_token.raw, 0);
+        const inputTokens = recent.reduce((acc, s) => acc + s.input_token.raw, 0);
+        const outputTokens = recent.reduce((acc, s) => acc + s.output_token.raw, 0);
+        const cacheReadTokens = recent.reduce((acc, s) => acc + s.cache_read_token.raw, 0);
         const wait = recent.reduce((acc, s) => acc + s.wait_time.raw, 0);
         const costFmt = formatMoney(cost).formatted;
         return {
             hero: { value: costFmt.value, unit: costFmt.unit },
-            metrics: {
-                requests: formatCount(requests).formatted,
-                tokens: formatCount(tokens).formatted,
-                waitTime: formatTime(wait).formatted,
-            },
+            metrics: buildMetrics(requests, inputTokens, outputTokens, cacheReadTokens, wait),
             chartData: points,
         };
     }, [period, statsTotal, statsHourly, sortedDaily]);
@@ -202,11 +216,13 @@ export function StatsChart() {
             </header>
 
             {/* Metrics row */}
-            <div className="mx-5 flex items-baseline gap-6 border-t border-border/60 py-3 text-sm tabular-nums">
+            <div className="mx-5 flex flex-wrap items-baseline gap-x-5 gap-y-2 border-t border-border/60 py-3 text-sm tabular-nums">
                 <StatItem label={t('metrics.requests')} value={metrics.requests} />
-                <span className="h-4 w-px bg-border/60" />
-                <StatItem label={t('metrics.tokens')} value={metrics.tokens} />
-                <span className="h-4 w-px bg-border/60" />
+                <StatItem label={t('metrics.inputTokens')} value={metrics.inputTokens} />
+                <StatItem label={t('metrics.outputTokens')} value={metrics.outputTokens} />
+                <StatItem label={t('metrics.cacheHits')} value={metrics.cacheReadTokens} />
+                <StatItem label={t('metrics.cacheHitRate')} value={metrics.cacheHitRate} />
+                <StatItem label={t('metrics.totalTokens')} value={metrics.totalTokens} />
                 <StatItem label={t('metrics.waitTime')} value={metrics.waitTime} />
             </div>
 

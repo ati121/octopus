@@ -8,6 +8,7 @@ import { formatCount, formatMoney, formatTime } from '@/lib/utils';
 interface StatsMetrics {
     input_token: number;
     output_token: number;
+    cache_read_token: number;
     input_cost: number;
     output_cost: number;
     wait_time: number;
@@ -18,6 +19,8 @@ interface StatsMetrics {
 export interface StatsMetricsFormatted {
     input_token: ReturnType<typeof formatCount>;
     output_token: ReturnType<typeof formatCount>;
+    cache_read_token: ReturnType<typeof formatCount>;
+    cache_hit_rate: ReturnType<typeof formatCacheHitRate>;
     input_cost: ReturnType<typeof formatMoney>;
     output_cost: ReturnType<typeof formatMoney>;
     wait_time: ReturnType<typeof formatTime>;
@@ -27,6 +30,15 @@ export interface StatsMetricsFormatted {
     request_count: ReturnType<typeof formatCount>;
     total_token: ReturnType<typeof formatCount>;
     total_cost: ReturnType<typeof formatMoney>;
+}
+
+export function formatCacheHitRate(inputToken: number, cacheReadToken: number) {
+    const totalInput = Math.max(0, inputToken) + Math.max(0, cacheReadToken);
+    const rate = totalInput > 0 ? (Math.max(0, cacheReadToken) / totalInput) * 100 : 0;
+    return {
+        raw: rate,
+        formatted: { value: rate.toFixed(2), unit: '%' },
+    };
 }
 
 export interface StatsChannel extends StatsMetrics {
@@ -88,6 +100,8 @@ export function useStatsDaily() {
         select: (data) => data.map((item): StatsDailyFormatted => ({
             input_token: formatCount(item.input_token),
             output_token: formatCount(item.output_token),
+            cache_read_token: formatCount(item.cache_read_token),
+            cache_hit_rate: formatCacheHitRate(item.input_token, item.cache_read_token),
             total_token: formatCount(item.input_token + item.output_token),
             input_cost: formatMoney(item.input_cost),
             output_cost: formatMoney(item.output_cost),
@@ -115,6 +129,8 @@ export function useStatsHourly() {
             date: item.date,
             input_token: formatCount(item.input_token),
             output_token: formatCount(item.output_token),
+            cache_read_token: formatCount(item.cache_read_token),
+            cache_hit_rate: formatCacheHitRate(item.input_token, item.cache_read_token),
             total_token: formatCount(item.input_token + item.output_token),
             input_cost: formatMoney(item.input_cost),
             output_cost: formatMoney(item.output_cost),
@@ -137,6 +153,8 @@ export function useStatsTotal() {
         select: (data) => ({
             input_token: formatCount(data.input_token),
             output_token: formatCount(data.output_token),
+            cache_read_token: formatCount(data.cache_read_token),
+            cache_hit_rate: formatCacheHitRate(data.input_token, data.cache_read_token),
             total_token: formatCount(data.input_token + data.output_token),
             input_cost: formatMoney(data.input_cost),
             output_cost: formatMoney(data.output_cost),
@@ -165,6 +183,8 @@ export function useStatsAPIKey() {
             api_key_id: item.api_key_id,
             input_token: formatCount(item.input_token),
             output_token: formatCount(item.output_token),
+            cache_read_token: formatCount(item.cache_read_token),
+            cache_hit_rate: formatCacheHitRate(item.input_token, item.cache_read_token),
             total_token: formatCount(item.input_token + item.output_token),
             input_cost: formatMoney(item.input_cost),
             output_cost: formatMoney(item.output_cost),
