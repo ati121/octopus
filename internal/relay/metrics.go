@@ -116,6 +116,7 @@ func (m *RelayMetrics) SetInternalResponse(resp *transformerModel.InternalLLMRes
 		m.CacheWriteTokens = intPtr(int(cacheWriteTokens))
 		m.Stats.InputToken = usage.PromptTokens
 		m.Stats.OutputToken = usage.CompletionTokens
+		m.Stats.CacheReadToken = cacheReadTokens
 		inputReported = usage.EffectiveInputTokens() > 0
 
 		if modelPrice := resolveModelPrice(actualModel); modelPrice != nil {
@@ -147,11 +148,12 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 	duration := time.Since(m.StartTime)
 
 	globalStats := model.StatsMetrics{
-		WaitTime:    duration.Milliseconds(),
-		InputToken:  m.Stats.InputToken,
-		OutputToken: m.Stats.OutputToken,
-		InputCost:   m.Stats.InputCost,
-		OutputCost:  m.Stats.OutputCost,
+		WaitTime:       duration.Milliseconds(),
+		InputToken:     m.Stats.InputToken,
+		OutputToken:    m.Stats.OutputToken,
+		CacheReadToken: m.Stats.CacheReadToken,
+		InputCost:      m.Stats.InputCost,
+		OutputCost:     m.Stats.OutputCost,
 	}
 	if success {
 		globalStats.RequestSuccess = 1
@@ -309,12 +311,13 @@ func updateFinalChannelUsageStats(channelID int, metrics model.StatsMetrics) {
 		return
 	}
 	usageStats := model.StatsMetrics{
-		InputToken:  metrics.InputToken,
-		OutputToken: metrics.OutputToken,
-		InputCost:   metrics.InputCost,
-		OutputCost:  metrics.OutputCost,
+		InputToken:     metrics.InputToken,
+		OutputToken:    metrics.OutputToken,
+		CacheReadToken: metrics.CacheReadToken,
+		InputCost:      metrics.InputCost,
+		OutputCost:     metrics.OutputCost,
 	}
-	if usageStats.InputToken == 0 && usageStats.OutputToken == 0 && usageStats.InputCost == 0 && usageStats.OutputCost == 0 {
+	if usageStats.InputToken == 0 && usageStats.OutputToken == 0 && usageStats.CacheReadToken == 0 && usageStats.InputCost == 0 && usageStats.OutputCost == 0 {
 		return
 	}
 	op.StatsChannelUpdate(channelID, usageStats)

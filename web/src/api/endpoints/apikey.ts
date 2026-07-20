@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../client';
 import { logger } from '@/lib/logger';
 import { useAuthStore } from './user';
-import { StatsAPIKey, StatsAPIKeyFormatted } from './stats';
+import { formatCacheHitRate, StatsAPIKey, StatsAPIKeyFormatted } from './stats';
 import { formatCount, formatMoney, formatTime } from '@/lib/utils';
 
 /**
@@ -66,6 +66,8 @@ export function useAPIKeyDashboardStats() {
                 api_key_id: data.stats.api_key_id,
                 input_token: formatCount(data.stats.input_token),
                 output_token: formatCount(data.stats.output_token),
+                cache_read_token: formatCount(data.stats.cache_read_token),
+                cache_hit_rate: formatCacheHitRate(data.stats.input_token, data.stats.cache_read_token),
                 total_token: formatCount(data.stats.input_token + data.stats.output_token),
                 input_cost: formatMoney(data.stats.input_cost),
                 output_cost: formatMoney(data.stats.output_cost),
@@ -212,6 +214,8 @@ export function useAPIKeyStats() {
             api_key_id: data.api_key_id,
             input_token: formatCount(data.input_token),
             output_token: formatCount(data.output_token),
+            cache_read_token: formatCount(data.cache_read_token),
+            cache_hit_rate: formatCacheHitRate(data.input_token, data.cache_read_token),
             total_token: formatCount(data.input_token + data.output_token),
             input_cost: formatMoney(data.input_cost),
             output_cost: formatMoney(data.output_cost),

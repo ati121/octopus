@@ -132,6 +132,11 @@
             "metrics": {
                 "requests": "請求",
                 "tokens": "Token",
+                "inputTokens": "輸入 Tokens",
+                "outputTokens": "輸出 Tokens",
+                "cacheHits": "快取命中",
+                "cacheHitRate": "快取命中率",
+                "totalTokens": "總計",
                 "waitTime": "耗時"
             }
         },

@@ -132,6 +132,11 @@
             "metrics": {
                 "requests": "Requests",
                 "tokens": "Tokens",
+                "inputTokens": "Input Tokens",
+                "outputTokens": "Output Tokens",
+                "cacheHits": "Cache Hits",
+                "cacheHitRate": "Cache Hit Rate",
+                "totalTokens": "Total",
                 "waitTime": "Latency"
             }
         },
