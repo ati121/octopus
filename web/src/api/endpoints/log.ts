@@ -72,6 +72,7 @@ export interface RelayLog {
     request_content: string;     // 请求内容
     response_content: string;    // 响应内容
     error: string;               // 错误信息
+    processing: boolean;         // 是否仍在等待上游响应
     attempts?: ChannelAttempt[]; // 所有尝试记录
     total_attempts?: number;     // 总尝试次数
     used_ws?: boolean;           // 是否使用了上游WebSocket
@@ -377,7 +378,15 @@ export function useLogs(options: UseLogsOptions = {}) {
                                 }
 
                                 const exists = old.pages.some((p) => p?.logs.some((x) => x.id === log.id));
-                                if (exists) return old;
+                                if (exists) {
+                                    return {
+                                        ...old,
+                                        pages: old.pages.map((page) => ({
+                                            ...page,
+                                            logs: page.logs.map((item) => item.id === log.id ? { ...item, ...log } : item),
+                                        })),
+                                    };
+                                }
 
                                 const firstPage = old.pages[0] ?? { logs: [], has_more: false, next_cursor: null };
                                 const prepended = [log, ...firstPage.logs];

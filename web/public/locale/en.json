@@ -753,6 +753,7 @@
             "tokens": "tokens",
             "retryDetails": "Retry Details",
             "attempts": "attempts",
+            "processing": "Responding",
             "success": "Success",
             "failed": "Failed",
             "skipped": "Skipped",

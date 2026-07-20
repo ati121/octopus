@@ -753,6 +753,7 @@
             "tokens": "tokens",
             "retryDetails": "重试详情",
             "attempts": "次尝试",
+            "processing": "响应中",
             "success": "成功",
             "failed": "失败",
             "skipped": "跳过",

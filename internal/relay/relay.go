@@ -125,6 +125,9 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 		return
 	}
 
+	metrics := NewRelayMetrics(apiKeyID, requestModel, rawBody, internalRequest)
+	metrics.StartLog()
+
 	// === 早期心跳 ===
 	// 在所有 forward / 重试 / 退避之前启动早期心跳协程，覆盖前置阶段（连接慢、failover、退避叠加）
 	// 期间向客户端发 SSE 注释字节，避免被 Cloudflare 在 120s 零字节阈值上判 524。
@@ -134,8 +137,6 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 	hb := startEarlyHeartbeat(c, isStream)
 	defer hb.Stop()
 
-	// 初始化 Metrics
-	metrics := NewRelayMetrics(apiKeyID, requestModel, rawBody, internalRequest)
 	// 如果触发了 HTTP replay，记录 ws_mode=replay 和 ws_recovery=replay
 	if responsesReplayState != nil {
 		metrics.SetWSMode(dbmodel.RelayLogWSModeReplay)
