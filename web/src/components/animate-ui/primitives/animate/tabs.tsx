@@ -265,13 +265,6 @@ function TabsContents({
     };
   }, [activeIndex, childrenArray.length, measure]);
 
-  React.useLayoutEffect(() => {
-    if (height === 0 && activeIndex >= 0) {
-      const next = measure(activeIndex);
-      if (next !== 0) setHeight(next);
-    }
-  }, [activeIndex, height, measure]);
-
   return (
     <motion.div
       ref={containerRef}

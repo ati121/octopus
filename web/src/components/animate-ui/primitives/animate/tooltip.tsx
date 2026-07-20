@@ -265,11 +265,17 @@ function TooltipOverlay() {
   });
 
   React.useEffect(() => {
-    if (currentTooltip) {
-      setRendered({ data: currentTooltip, open: true });
-    } else {
-      setRendered((p) => (p.data ? { ...p, open: false } : p));
-    }
+    const frame = requestAnimationFrame(() => {
+      if (currentTooltip) {
+        setRendered({ data: currentTooltip, open: true });
+      } else {
+        setRendered((previous) =>
+          previous.data ? { ...previous, open: false } : previous,
+        );
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
   }, [currentTooltip]);
 
   React.useLayoutEffect(() => {

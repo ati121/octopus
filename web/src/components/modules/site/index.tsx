@@ -1315,31 +1315,37 @@ export function Site() {
     const siteVisible = visibleSites.some((item) => item.site.id === targetSiteId);
     if (!siteVisible) return;
 
-    if (target.kind === "site-account") {
-      setExpandedSiteIds((current) => {
-        if (current.has(target.siteId)) return current;
-        const next = new Set(current);
-        next.add(target.siteId);
-        return next;
-      });
-    }
+    let timer: number | undefined;
+    const frame = window.requestAnimationFrame(() => {
+      if (target.kind === "site-account") {
+        setExpandedSiteIds((current) => {
+          if (current.has(target.siteId)) return current;
+          const next = new Set(current);
+          next.add(target.siteId);
+          return next;
+        });
+      }
 
-    const node =
-      target.kind === "site-account"
-        ? accountElementsRef.current.get(target.accountId)
-        : cardElementsRef.current.get(target.siteId);
-    if (!node) return;
+      timer = window.setTimeout(() => {
+        const node =
+          target.kind === "site-account"
+            ? accountElementsRef.current.get(target.accountId)
+            : cardElementsRef.current.get(target.siteId);
+        if (!node) return;
 
-    const timer = window.setTimeout(() => {
       node.scrollIntoView({ behavior: "smooth", block: "center" });
       flashTarget("site", target.siteId);
       if (target.kind === "site-account") {
         flashTarget("account", target.accountId);
       }
       clearPendingJump(requestId);
-    }, 80);
+      }, 80);
+    });
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [pendingSiteJump, visibleSites, clearPendingJump, flashTarget]);
 
   const masonryColumns = useMemo<[VisibleSite[], VisibleSite[]]>(() => {
