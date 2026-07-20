@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
   
 jobs:
   release:
@@ -63,35 +62,24 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/${{ github.repository }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
+            tianxia311/octopus
           tags: |
             type=raw,value=latest
-            type=raw,value=${{ steps.tag.outputs.TAG_NAME }}
 
       - name: Docker meta (Alpine)
         id: meta-alpine
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/${{ github.repository }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
+            tianxia311/octopus
           tags: |
             type=raw,value=latest-alpine
-            type=raw,value=${{ steps.tag.outputs.TAG_NAME }}-alpine
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3

@@ -12,7 +12,7 @@
 直接运行：
 
 ```bash
-docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/tianxia3111/octopus:latest
+docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 tianxia311/octopus:latest
 ```
 
 Docker Compose：
@@ -20,7 +20,7 @@ Docker Compose：
 ```yaml
 services:
   octopus:
-    image: ghcr.io/tianxia3111/octopus:latest
+    image: tianxia311/octopus:latest
     ports:
       - "8080:8080"
     volumes:
