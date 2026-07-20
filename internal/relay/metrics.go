@@ -114,7 +114,9 @@ func (m *RelayMetrics) SetInternalResponse(resp *transformerModel.InternalLLMRes
 		m.BillInputTokens = intPtr(int(nonCachedInput))
 		m.CacheReadTokens = intPtr(int(cacheReadTokens))
 		m.CacheWriteTokens = intPtr(int(cacheWriteTokens))
-		m.Stats.InputToken = usage.PromptTokens
+		// Normalize input totals across protocols. OpenAI/Gemini already include
+		// cached reads in PromptTokens, while Anthropic reports them separately.
+		m.Stats.InputToken = usage.EffectiveInputTokens()
 		m.Stats.OutputToken = usage.CompletionTokens
 		m.Stats.CacheReadToken = cacheReadTokens
 		inputReported = usage.EffectiveInputTokens() > 0
@@ -259,9 +261,13 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 		relayLog.Ftut = int(m.FirstTokenTime.Sub(m.StartTime).Milliseconds())
 	}
 
-	// Usage：统一从 Stats 读取。Stats 在 SetInternalResponse 中已由上游 usage 填充，
-	// 或在 usage 缺失时由 TransportInputTokens 降级填充，确保降级值也写入日志。
+	// Relay logs preserve the upstream protocol's reported input semantics for
+	// their existing per-request cache breakdown. Aggregated stats use the
+	// normalized total input above.
 	relayLog.InputTokens = int(m.Stats.InputToken)
+	if m.InternalResponse != nil && m.InternalResponse.Usage != nil && m.InternalResponse.Usage.EffectiveInputTokens() > 0 {
+		relayLog.InputTokens = int(m.InternalResponse.Usage.PromptTokens)
+	}
 	relayLog.OutputTokens = int(m.Stats.OutputToken)
 	relayLog.Cost = m.Stats.InputCost + m.Stats.OutputCost
 	relayLog.TransportInputTokens = m.TransportInputTokens

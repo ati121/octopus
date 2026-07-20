@@ -36,6 +36,10 @@ var statsAPIKeyCache = cache.New[int, model.StatsAPIKey](16)
 var statsAPIKeyCacheNeedUpdate = make(map[int]struct{})
 var statsAPIKeyCacheNeedUpdateLock sync.Mutex
 
+// Serializes stats persistence with destructive resets so an older snapshot
+// cannot be written back after a reset completes.
+var statsPersistenceLock sync.Mutex
+
 // pendingDailyOverrides holds prev-day StatsDaily snapshots whose persistence
 // failed. Retried on the next StatsSaveDB cycle so a rollover snapshot is
 // never silently dropped after the in-memory cache has advanced.
@@ -86,6 +90,9 @@ func StatsSaveDBTask() {
 }
 
 func StatsSaveDB(ctx context.Context) error {
+	statsPersistenceLock.Lock()
+	defer statsPersistenceLock.Unlock()
+
 	if err := flushPendingDailyOverrides(ctx); err != nil {
 		return err
 	}
@@ -225,6 +232,9 @@ func persistStatsSnapshots(
 }
 
 func statsSaveDBWithDailyOverride(ctx context.Context, dailyOverride model.StatsDaily) error {
+	statsPersistenceLock.Lock()
+	defer statsPersistenceLock.Unlock()
+
 	statsTotalCacheLock.RLock()
 	totalSnap := statsTotalCache
 	statsTotalCacheLock.RUnlock()
@@ -487,6 +497,66 @@ func StatsGetDaily(ctx context.Context) ([]model.StatsDaily, error) {
 		return nil, result.Error
 	}
 	return statsDaily, nil
+}
+
+// StatsClear resets every aggregate statistics table and its in-memory cache.
+// Relay logs and application configuration are intentionally preserved.
+func StatsClear(ctx context.Context) error {
+	statsPersistenceLock.Lock()
+	defer statsPersistenceLock.Unlock()
+
+	dbConn := db.GetDB().WithContext(ctx)
+	if err := dbConn.Transaction(func(tx *gorm.DB) error {
+		for _, value := range []interface{}{
+			&model.StatsTotal{},
+			&model.StatsDaily{},
+			&model.StatsHourly{},
+			&model.StatsChannel{},
+			&model.StatsModel{},
+			&model.StatsAPIKey{},
+			&model.StatsSiteModelHourly{},
+		} {
+			if err := tx.Where("1 = 1").Unscoped().Delete(value).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Create(&model.StatsTotal{ID: 1}).Error
+	}); err != nil {
+		return err
+	}
+
+	today := time.Now().Format("20060102")
+	statsTotalCacheLock.Lock()
+	statsTotalCache = model.StatsTotal{ID: 1}
+	statsTotalCacheLock.Unlock()
+	statsDailyCacheLock.Lock()
+	statsDailyCache = model.StatsDaily{Date: today}
+	statsDailyCacheLock.Unlock()
+	statsHourlyCacheLock.Lock()
+	statsHourlyCache = [24]model.StatsHourly{}
+	statsHourlyCacheLock.Unlock()
+
+	statsChannelCache.Clear()
+	statsChannelCacheNeedUpdateLock.Lock()
+	statsChannelCacheNeedUpdate = make(map[int]struct{})
+	statsChannelCacheNeedUpdateLock.Unlock()
+	statsModelCache.Clear()
+	statsModelCacheNeedUpdateLock.Lock()
+	statsModelCacheNeedUpdate = make(map[int]struct{})
+	statsModelCacheNeedUpdateLock.Unlock()
+	statsAPIKeyCache.Clear()
+	statsAPIKeyCacheNeedUpdateLock.Lock()
+	statsAPIKeyCacheNeedUpdate = make(map[int]struct{})
+	statsAPIKeyCacheNeedUpdateLock.Unlock()
+
+	pendingDailyOverridesLock.Lock()
+	pendingDailyOverrides = nil
+	pendingDailyOverridesLock.Unlock()
+	siteModelHourlyCacheLock.Lock()
+	siteModelHourlyCache = make(map[siteModelHourlyKey]*model.StatsSiteModelHourly)
+	siteModelHourlyCacheLock.Unlock()
+
+	return nil
 }
 
 func statsRefreshCache(ctx context.Context) error {

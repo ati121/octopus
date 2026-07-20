@@ -138,7 +138,17 @@
                 "cacheHitRate": "Cache Hit Rate",
                 "totalTokens": "Total",
                 "waitTime": "Latency"
-            }
+            },
+            "clearStats": "Clear statistics",
+            "clearStatsTitle": "Clear aggregated statistics?",
+            "clearStatsDescription": "This clears token, cost, request, and cache aggregates. Request logs and settings will be kept.",
+            "clearStatsContinue": "Continue",
+            "clearStatsFinalTitle": "Confirm clearing statistics",
+            "clearStatsFinalDescription": "This cannot be undone. New requests will start a fresh statistics baseline.",
+            "clearStatsConfirm": "Clear statistics",
+            "clearStatsSuccess": "Statistics cleared",
+            "clearStatsFailed": "Failed to clear statistics",
+            "cancel": "Cancel"
         },
         "rank": {
             "title": "Ranking",

@@ -138,7 +138,17 @@
                 "cacheHitRate": "缓存命中率",
                 "totalTokens": "总计",
                 "waitTime": "耗时"
-            }
+            },
+            "clearStats": "清空统计",
+            "clearStatsTitle": "清空统计数据？",
+            "clearStatsDescription": "将清空 Token、费用、请求和缓存聚合统计，但会保留请求日志和配置。",
+            "clearStatsContinue": "继续",
+            "clearStatsFinalTitle": "再次确认清空统计",
+            "clearStatsFinalDescription": "此操作不可撤销，后续请求将从新的统计基线开始。",
+            "clearStatsConfirm": "确认清空",
+            "clearStatsSuccess": "统计已清空",
+            "clearStatsFailed": "清空统计失败",
+            "cancel": "取消"
         },
         "rank": {
             "title": "排行榜",

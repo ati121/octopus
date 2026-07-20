@@ -1,8 +1,8 @@
 'use client';
 
-import { formatCacheHitRate, useStatsDaily, useStatsHourly, useStatsTotal } from '@/api/endpoints/stats';
+import { formatCacheHitRate, useClearStats, useStatsDaily, useStatsHourly, useStatsTotal } from '@/api/endpoints/stats';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 import { useTranslations } from 'next-intl';
 import { formatCount, formatMoney, formatTime } from '@/lib/utils';
@@ -10,6 +10,19 @@ import dayjs from 'dayjs';
 import { AnimatedNumber } from '@/components/common/AnimatedNumber';
 import { Tabs, TabsList, TabsTrigger } from '@/components/animate-ui/components/animate/tabs';
 import { useHomeViewStore, type ChartPeriod } from '@/components/modules/home/store';
+import { Button } from '@/components/ui/button';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 type Formatted = { value: string; unit: string };
 
@@ -61,6 +74,9 @@ export function StatsChart() {
     const { data: statsTotal } = useStatsTotal();
     const { data: statsDaily } = useStatsDaily();
     const { data: statsHourly } = useStatsHourly();
+    const clearStats = useClearStats();
+    const [clearStatsOpen, setClearStatsOpen] = useState(false);
+    const [clearStatsFinalOpen, setClearStatsFinalOpen] = useState(false);
 
     const period = useHomeViewStore((state) => state.chartPeriod);
     const setChartPeriod = useHomeViewStore((state) => state.setChartPeriod);
@@ -205,14 +221,27 @@ export function StatsChart() {
                         )}
                     </p>
                 </div>
-                <Tabs value={period} onValueChange={(v) => setChartPeriod(v as ChartPeriod)}>
-                    <TabsList>
-                        <TabsTrigger value="1">{t('periods.today')}</TabsTrigger>
-                        <TabsTrigger value="7">{t('periods.last7Days')}</TabsTrigger>
-                        <TabsTrigger value="30">{t('periods.last30Days')}</TabsTrigger>
-                        <TabsTrigger value="all">{t('periods.allTime')}</TabsTrigger>
-                    </TabsList>
-                </Tabs>
+                <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+                    <Tabs value={period} onValueChange={(v) => setChartPeriod(v as ChartPeriod)}>
+                        <TabsList>
+                            <TabsTrigger value="1">{t('periods.today')}</TabsTrigger>
+                            <TabsTrigger value="7">{t('periods.last7Days')}</TabsTrigger>
+                            <TabsTrigger value="30">{t('periods.last30Days')}</TabsTrigger>
+                            <TabsTrigger value="all">{t('periods.allTime')}</TabsTrigger>
+                        </TabsList>
+                    </Tabs>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setClearStatsOpen(true)}
+                        disabled={clearStats.isPending}
+                        title={t('clearStats')}
+                    >
+                        <Trash2 />
+                        {t('clearStats')}
+                    </Button>
+                </div>
             </header>
 
             {/* Metrics row */}
@@ -254,6 +283,49 @@ export function StatsChart() {
                     />
                 </AreaChart>
             </ChartContainer>
+            <AlertDialog open={clearStatsOpen} onOpenChange={setClearStatsOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>{t('clearStatsTitle')}</AlertDialogTitle>
+                        <AlertDialogDescription>{t('clearStatsDescription')}</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => {
+                            setClearStatsOpen(false);
+                            setClearStatsFinalOpen(true);
+                        }}>
+                            {t('clearStatsContinue')}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+            <AlertDialog open={clearStatsFinalOpen} onOpenChange={(open) => {
+                if (!clearStats.isPending) setClearStatsFinalOpen(open);
+            }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>{t('clearStatsFinalTitle')}</AlertDialogTitle>
+                        <AlertDialogDescription>{t('clearStatsFinalDescription')}</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={clearStats.isPending}>{t('cancel')}</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={() => clearStats.mutate(undefined, {
+                                onSuccess: () => {
+                                    setClearStatsFinalOpen(false);
+                                    toast.success(t('clearStatsSuccess'));
+                                },
+                                onError: (error) => toast.error(t('clearStatsFailed'), { description: error.message }),
+                            })}
+                            disabled={clearStats.isPending}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                            {t('clearStatsConfirm')}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </section>
     );
 }

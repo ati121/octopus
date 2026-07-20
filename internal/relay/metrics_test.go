@@ -59,7 +59,26 @@ func TestSetInternalResponseNoFallbackWhenCacheOnly(t *testing.T) {
 		Usage: &transformerModel.Usage{PromptTokens: 0, CacheReadInputTokens: 40, CompletionTokens: 5},
 	}, "test-model")
 
-	if m.Stats.InputToken != 0 {
-		t.Fatalf("input token: got %d want 0 (cache-only is reported input)", m.Stats.InputToken)
+	if m.Stats.InputToken != 40 {
+		t.Fatalf("input token: got %d want 40 (normalized cache-only input)", m.Stats.InputToken)
+	}
+}
+
+func TestSetInternalResponseNormalizesAnthropicInput(t *testing.T) {
+	m := &RelayMetrics{}
+	m.SetInternalResponse(&transformerModel.InternalLLMResponse{
+		Usage: &transformerModel.Usage{
+			PromptTokens:             120,
+			CacheReadInputTokens:     500,
+			CacheCreationInputTokens: 30,
+			CompletionTokens:         80,
+		},
+	}, "test-model")
+
+	if m.Stats.InputToken != 650 {
+		t.Fatalf("input token: got %d want 650", m.Stats.InputToken)
+	}
+	if m.Stats.CacheReadToken != 500 {
+		t.Fatalf("cache read token: got %d want 500", m.Stats.CacheReadToken)
 	}
 }

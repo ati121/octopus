@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../client';
 import { formatCount, formatMoney, formatTime } from '@/lib/utils';
 
@@ -33,7 +33,7 @@ export interface StatsMetricsFormatted {
 }
 
 export function formatCacheHitRate(inputToken: number, cacheReadToken: number) {
-    const totalInput = Math.max(0, inputToken) + Math.max(0, cacheReadToken);
+    const totalInput = Math.max(0, inputToken);
     const rate = totalInput > 0 ? (Math.max(0, cacheReadToken) / totalInput) * 100 : 0;
     return {
         raw: rate,
@@ -165,6 +165,17 @@ export function useStatsTotal() {
             request_count: formatCount(data.request_success + data.request_failed),
         }),
         refetchInterval: 10000,// 10 秒
+    });
+}
+
+export function useClearStats() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async () => apiClient.delete<null>('/api/v1/stats/clear'),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['stats'] });
+        },
     });
 }
 

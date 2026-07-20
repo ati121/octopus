@@ -138,7 +138,17 @@
                 "cacheHitRate": "快取命中率",
                 "totalTokens": "總計",
                 "waitTime": "耗時"
-            }
+            },
+            "clearStats": "清空統計",
+            "clearStatsTitle": "清空統計資料？",
+            "clearStatsDescription": "將清空 Token、費用、請求和快取聚合統計，但會保留請求日誌和設定。",
+            "clearStatsContinue": "繼續",
+            "clearStatsFinalTitle": "再次確認清空統計",
+            "clearStatsFinalDescription": "此操作無法復原，後續請求將從新的統計基線開始。",
+            "clearStatsConfirm": "確認清空",
+            "clearStatsSuccess": "統計已清空",
+            "clearStatsFailed": "清空統計失敗",
+            "cancel": "取消"
         },
         "rank": {
             "title": "排行榜",
