@@ -702,6 +702,7 @@
             "tokens": "tokens",
             "retryDetails": "重試詳情",
             "attempts": "次嘗試",
+            "processing": "響應中",
             "success": "成功",
             "failed": "失敗",
             "skipped": "跳過",

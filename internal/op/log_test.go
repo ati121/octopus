@@ -19,6 +19,10 @@ func resetRelayLogStateForTest() {
 	relayLogRecent = make([]model.RelayLog, 0, relayLogRecentMaxSize)
 	relayLogRecentLock.Unlock()
 
+	relayLogInFlightLock.Lock()
+	relayLogInFlight = make(map[int64]model.RelayLog)
+	relayLogInFlightLock.Unlock()
+
 	relayLogDroppedTotal.Store(0)
 	relayLogLastDropWarn.Store(0)
 	for {
@@ -27,6 +31,48 @@ func resetRelayLogStateForTest() {
 		default:
 			return
 		}
+	}
+}
+
+func TestRelayLogStartAndUpdateReuseID(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+	if err := settingRefreshCache(ctx); err != nil {
+		t.Fatalf("settingRefreshCache failed: %v", err)
+	}
+	resetRelayLogStateForTest()
+	events := RelayLogSubscribe()
+	defer RelayLogUnsubscribe(events)
+
+	id := RelayLogStart(model.RelayLog{Time: 100, RequestModelName: "gpt-test"})
+	startedEvent := <-events
+	if startedEvent.ID != id || !startedEvent.Processing {
+		t.Fatalf("expected processing stream event, got %+v", startedEvent)
+	}
+	started, ok := relayLogFindInFlight(id)
+	if !ok || !started.Processing {
+		t.Fatalf("expected processing relay log, got %+v", started)
+	}
+	listed, err := RelayLogListWithFilter(ctx, RelayLogListFilter{Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("RelayLogListWithFilter failed: %v", err)
+	}
+	if len(listed.Logs) != 1 || listed.Logs[0].ID != id || !listed.Logs[0].Processing {
+		t.Fatalf("expected processing relay log in list, got %+v", listed.Logs)
+	}
+
+	if err := RelayLogUpdate(ctx, model.RelayLog{ID: id, Time: 100, RequestModelName: "gpt-test", Success: true, UseTime: 123}); err != nil {
+		t.Fatalf("RelayLogUpdate failed: %v", err)
+	}
+	completedEvent := <-events
+	if completedEvent.ID != id || completedEvent.Processing || !completedEvent.Success {
+		t.Fatalf("expected completed stream event for same ID, got %+v", completedEvent)
+	}
+	if _, ok := relayLogFindInFlight(id); ok {
+		t.Fatal("completed relay log remained in flight")
+	}
+	updated, ok := relayLogFindPending(id)
+	if !ok || updated.Processing || !updated.Success || updated.UseTime != 123 {
+		t.Fatalf("expected completed pending relay log, got %+v", updated)
 	}
 }
 

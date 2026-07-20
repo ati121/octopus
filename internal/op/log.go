@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,6 +34,9 @@ var relayLogPendingLock sync.Mutex
 
 var relayLogRecent = make([]model.RelayLog, 0, relayLogRecentMaxSize)
 var relayLogRecentLock sync.Mutex
+
+var relayLogInFlight = make(map[int64]model.RelayLog)
+var relayLogInFlightLock sync.RWMutex
 
 var relayLogFlushLock sync.Mutex
 var relayLogFlushSignal = make(chan struct{}, 1)
@@ -73,7 +77,7 @@ func RelayLogStreamTokenRevoke(token string) {
 }
 
 func RelayLogSubscribe() chan model.RelayLog {
-	ch := make(chan model.RelayLog, 10)
+	ch := make(chan model.RelayLog, 64)
 	relayLogSubscribersLock.Lock()
 	relayLogSubscribers[ch] = struct{}{}
 	relayLogSubscribersLock.Unlock()
@@ -133,6 +137,13 @@ func signalRelayLogFlush() {
 
 func appendRelayLogRecent(relayLog model.RelayLog) {
 	relayLogRecentLock.Lock()
+	for i := len(relayLogRecent) - 1; i >= 0; i-- {
+		if relayLogRecent[i].ID == relayLog.ID {
+			relayLogRecent[i] = relayLog
+			relayLogRecentLock.Unlock()
+			return
+		}
+	}
 	relayLogRecent = append(relayLogRecent, relayLog)
 	if len(relayLogRecent) > relayLogRecentMaxSize {
 		keep := relayLogRecentMaxSize / 2
@@ -302,6 +313,7 @@ func RelayLogAdd(ctx context.Context, relayLog model.RelayLog) error {
 		return err
 	}
 	relayLog.ID = snowflake.GenerateID()
+	relayLog.Processing = false
 	notifySubscribers(relayLog)
 	appendRelayLogRecent(relayLog)
 
@@ -310,6 +322,44 @@ func RelayLogAdd(ctx context.Context, relayLog model.RelayLog) error {
 	}
 	enqueueRelayLogPending(relayLog)
 	_ = ctx // kept for API compatibility; DB writes are handled by the background writer.
+	return nil
+}
+
+func RelayLogStart(relayLog model.RelayLog) int64 {
+	if relayLog.ID == 0 {
+		relayLog.ID = snowflake.GenerateID()
+	}
+	relayLog.Processing = true
+
+	relayLogInFlightLock.Lock()
+	relayLogInFlight[relayLog.ID] = relayLog
+	relayLogInFlightLock.Unlock()
+
+	appendRelayLogRecent(relayLog)
+	notifySubscribers(relayLog)
+	return relayLog.ID
+}
+
+func RelayLogUpdate(ctx context.Context, relayLog model.RelayLog) error {
+	if relayLog.ID == 0 {
+		return RelayLogAdd(ctx, relayLog)
+	}
+	relayLog.Processing = false
+
+	relayLogInFlightLock.Lock()
+	delete(relayLogInFlight, relayLog.ID)
+	relayLogInFlightLock.Unlock()
+
+	appendRelayLogRecent(relayLog)
+	notifySubscribers(relayLog)
+
+	enabled, err := SettingGetBool(model.SettingKeyRelayLogKeepEnabled)
+	if err != nil {
+		return err
+	}
+	if enabled {
+		enqueueRelayLogPending(relayLog)
+	}
 	return nil
 }
 
@@ -738,6 +788,9 @@ func appendDedupedByID(logs []model.RelayLog, cachedSource []model.RelayLog, dbL
 }
 
 func RelayLogGet(ctx context.Context, id int64) (*model.RelayLog, error) {
+	if item, ok := relayLogFindInFlight(id); ok {
+		return &item, nil
+	}
 	if item, ok := relayLogFindPending(id); ok {
 		return &item, nil
 	}
@@ -759,9 +812,21 @@ func relayLogCachedMatches(filter RelayLogListFilter, channelSet map[int]struct{
 }
 
 func relayLogCollectPending(filter RelayLogListFilter, channelSet map[int]struct{}, keyword string, light bool) []model.RelayLog {
+	result := make([]model.RelayLog, 0, filter.PageSize+filter.Limit+1)
+
+	relayLogInFlightLock.RLock()
+	for _, entry := range relayLogInFlight {
+		if !relayLogMatchesFilter(entry, filter, channelSet, keyword) {
+			continue
+		}
+		if light {
+			entry = relayLogLightCopy(entry)
+		}
+		result = append(result, entry)
+	}
+	relayLogInFlightLock.RUnlock()
+
 	relayLogPendingLock.Lock()
-	defer relayLogPendingLock.Unlock()
-	result := make([]model.RelayLog, 0, min(len(relayLogPending), filter.PageSize+filter.Limit+1))
 	for i := len(relayLogPending) - 1; i >= 0; i-- {
 		entry := relayLogPending[i]
 		if !relayLogMatchesFilter(entry, filter, channelSet, keyword) {
@@ -772,6 +837,28 @@ func relayLogCollectPending(filter RelayLogListFilter, channelSet map[int]struct
 		}
 		result = append(result, entry)
 	}
+	relayLogPendingLock.Unlock()
+
+	byID := make(map[int64]int, len(result))
+	deduped := result[:0]
+	for _, entry := range result {
+		if index, ok := byID[entry.ID]; ok {
+			if deduped[index].Processing && !entry.Processing {
+				deduped[index] = entry
+			}
+			continue
+		}
+		byID[entry.ID] = len(deduped)
+		deduped = append(deduped, entry)
+	}
+	result = deduped
+
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Time == result[j].Time {
+			return result[i].ID > result[j].ID
+		}
+		return result[i].Time > result[j].Time
+	})
 	return result
 }
 
@@ -801,6 +888,13 @@ func relayLogFindPending(id int64) (model.RelayLog, bool) {
 		}
 	}
 	return model.RelayLog{}, false
+}
+
+func relayLogFindInFlight(id int64) (model.RelayLog, bool) {
+	relayLogInFlightLock.RLock()
+	defer relayLogInFlightLock.RUnlock()
+	entry, ok := relayLogInFlight[id]
+	return entry, ok
 }
 
 func relayLogFindRecent(id int64) (model.RelayLog, bool) {
@@ -834,6 +928,9 @@ func relayLogMatchesFilter(relayLog model.RelayLog, filter RelayLogListFilter, c
 		return false
 	}
 	if filter.Status == RelayLogStatusError && relayLog.Success {
+		return false
+	}
+	if filter.Status == RelayLogStatusError && relayLog.Processing {
 		return false
 	}
 	if keyword != "" && !logMatchesKeyword(relayLog, keyword, filter.KeywordScope, filter.KeywordMode) {
@@ -1025,6 +1122,10 @@ func RelayLogClear(ctx context.Context) error {
 	relayLogRecentLock.Lock()
 	relayLogRecent = make([]model.RelayLog, 0, relayLogRecentMaxSize)
 	relayLogRecentLock.Unlock()
+
+	relayLogInFlightLock.Lock()
+	relayLogInFlight = make(map[int64]model.RelayLog)
+	relayLogInFlightLock.Unlock()
 
 	start := time.Now()
 	deletedRows := int64(0)

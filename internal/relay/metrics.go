@@ -19,6 +19,7 @@ type RelayMetrics struct {
 	APIKeyID     int
 	RequestModel string
 	StartTime    time.Time
+	LogID        int64
 
 	// 首 Token 时间
 	FirstTokenTime time.Time
@@ -40,6 +41,17 @@ type RelayMetrics struct {
 	BillInputTokens      *int
 	CacheReadTokens      *int
 	CacheWriteTokens     *int
+}
+
+func (m *RelayMetrics) StartLog() {
+	if m.LogID != 0 {
+		return
+	}
+	m.LogID = op.RelayLogStart(model.RelayLog{
+		Time:             m.StartTime.Unix(),
+		RequestModelName: m.RequestModel,
+		ActualModelName:  m.RequestModel,
+	})
 }
 
 func NewRelayMetrics(apiKeyID int, requestModel string, rawBody []byte, req *transformerModel.InternalLLMRequest) *RelayMetrics {
@@ -224,6 +236,7 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 	}
 
 	relayLog := model.RelayLog{
+		ID:               m.LogID,
 		Time:             m.StartTime.Unix(),
 		RequestModelName: m.RequestModel,
 		ChannelName:      channelName,
@@ -280,7 +293,13 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 	}
 	relayLog.Success = success
 
-	if logErr := op.RelayLogAdd(ctx, relayLog); logErr != nil {
+	var logErr error
+	if m.LogID != 0 {
+		logErr = op.RelayLogUpdate(ctx, relayLog)
+	} else {
+		logErr = op.RelayLogAdd(ctx, relayLog)
+	}
+	if logErr != nil {
 		log.Warnf("failed to save relay log: %v", logErr)
 	}
 }

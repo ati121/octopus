@@ -534,7 +534,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
     const requestAPIKeyName = useMemo(() => log.request_api_key_name?.trim() ?? '', [log.request_api_key_name]);
     const disableMutation = useUpdateSiteChannelModelDisabled();
 
-    const hasError = !!log.error;
+    const hasError = !log.processing && !!log.error;
     const hasAttempts = (log.attempts?.length ?? 0) > 0;
     const hasMultipleAttempts = (log.attempts?.length ?? 0) > 1;
     const [isDiagnosticExpanded, setIsDiagnosticExpanded] = useState(false);
@@ -651,7 +651,12 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                         {log.request_model_name}
                                     </span>
                                     <ArrowRight className="size-3.5 shrink-0 text-muted-foreground/50" />
-                                    {hasMultipleAttempts ? (
+                                    {log.processing ? (
+                                        <Badge variant="secondary" className="shrink-0 gap-1 px-1.5 py-0 text-xs bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                                            <Loader2 className="size-3 animate-spin" />
+                                            {t('processing')}
+                                        </Badge>
+                                    ) : hasMultipleAttempts ? (
                                         <RetryBadgeWithTooltip
                                             channelName={log.channel_name}
                                             brandColor={brandColor}
@@ -735,7 +740,12 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                 <ModelAvatar size={28} />
                                 <span className="font-semibold text-card-foreground truncate">{log.request_model_name}</span>
                                 <ArrowRight className="size-3.5 shrink-0 text-muted-foreground/50" />
-                                {hasMultipleAttempts ? (
+                                {log.processing ? (
+                                    <Badge variant="secondary" className="shrink-0 gap-1 px-1.5 py-0 text-xs bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                                        <Loader2 className="size-3 animate-spin" />
+                                        {t('processing')}
+                                    </Badge>
+                                ) : hasMultipleAttempts ? (
                                     <RetryBadgeWithTooltip
                                         channelName={log.channel_name}
                                         brandColor={brandColor}
