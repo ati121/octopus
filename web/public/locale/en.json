@@ -613,6 +613,7 @@
             "maxRetriesHint": "Same-channel retry count, only effective when same-channel retry is enabled",
             "items": "Selected Models",
             "addItem": "Add Model",
+            "copyModelName": "Copy model name",
             "autoAdd": "Auto Add",
             "clear": "Clear",
             "selectChannel": "Channel",

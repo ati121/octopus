@@ -613,6 +613,7 @@
             "maxRetriesHint": "同通道重试次数，仅在开启同通道重试时生效",
             "items": "已选模型",
             "addItem": "添加模型",
+            "copyModelName": "复制模型名称",
             "autoAdd": "自动添加",
             "clear": "清空",
             "selectChannel": "渠道",

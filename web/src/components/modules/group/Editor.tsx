@@ -10,6 +10,7 @@ import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Accordion, AccordionContent, AccordionItem } from '@/components/ui/accordion';
+import { CopyIconButton } from '@/components/common/CopyButton';
 import { cn } from '@/lib/utils';
 import { getModelIcon } from '@/lib/model-icons';
 import type { GroupMode } from '@/api/endpoints/group';
@@ -149,32 +150,55 @@ function ModelPickerSection({
                                                 .filter(Boolean)
                                                 .join(' · ');
                                             return (
-                                                <button
+                                                <div
                                                     key={memberKey(m)}
-                                                    type="button"
-                                                    onClick={() => !isSelected && onAdd(m)}
-                                                    disabled={isSelected}
                                                     className={cn(
-                                                        'w-full flex items-center justify-between gap-2 rounded-lg border border-border/50 bg-background px-2.5 py-2 text-left transition-colors',
-                                                        isSelected ? 'opacity-60 cursor-not-allowed' : 'hover:bg-muted'
+                                                        'group/model flex w-full items-center gap-1 rounded-lg border border-border/50 bg-background transition-colors',
+                                                        isSelected ? 'opacity-60' : 'hover:bg-muted'
                                                     )}
                                                 >
-                                                    <span className="flex items-center gap-2 min-w-0">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => onAdd(m)}
+                                                        disabled={isSelected}
+                                                        className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left disabled:cursor-not-allowed"
+                                                    >
                                                         <Avatar size={16} />
                                                         <span className="min-w-0 flex flex-col">
                                                             <span className="text-sm font-medium truncate">{m.name}</span>
                                                             {suffix && <span className="text-[10px] text-muted-foreground truncate">{suffix}</span>}
                                                         </span>
-                                                    </span>
+                                                    </button>
 
-                                                    <span className="shrink-0 text-muted-foreground">
-                                                        {isSelected ? (
-                                                            <Check className="size-4 text-primary" />
-                                                        ) : (
-                                                            <Plus className="size-4" />
-                                                        )}
-                                                    </span>
-                                                </button>
+                                                    <div className="flex shrink-0 items-center gap-0.5 pr-1.5 text-muted-foreground">
+                                                        <TooltipProvider>
+                                                            <Tooltip>
+                                                                <TooltipTrigger asChild>
+                                                                    <CopyIconButton
+                                                                        text={m.name}
+                                                                        className="rounded-md p-1.5 transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                                                        copyIconClassName="size-4"
+                                                                        checkIconClassName="size-4 text-primary"
+                                                                    />
+                                                                </TooltipTrigger>
+                                                                <TooltipContent>{t('form.copyModelName')}</TooltipContent>
+                                                            </Tooltip>
+                                                        </TooltipProvider>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => onAdd(m)}
+                                                            disabled={isSelected}
+                                                            className="rounded-md p-1.5 disabled:cursor-not-allowed"
+                                                            title={isSelected ? undefined : t('form.addItem')}
+                                                        >
+                                                            {isSelected ? (
+                                                                <Check className="size-4 text-primary" />
+                                                            ) : (
+                                                                <Plus className="size-4" />
+                                                            )}
+                                                        </button>
+                                                    </div>
+                                                </div>
                                             );
                                         })}
                                     </div>
