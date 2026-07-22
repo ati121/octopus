@@ -240,11 +240,18 @@ func SiteUpdate(req *model.SiteUpdateRequest, ctx context.Context) (*model.Site,
 		updates.Tags = merged.Tags
 	}
 	if len(selectFields) > 0 {
-		if err := db.GetDB().WithContext(ctx).
-			Model(&model.Site{}).
-			Where("id = ?", req.ID).
-			Select(selectFields).
-			Updates(&updates).Error; err != nil {
+		if err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&model.Site{}).
+				Where("id = ?", req.ID).
+				Select(selectFields).
+				Updates(&updates).Error; err != nil {
+				return err
+			}
+			if req.Enabled != nil && !*req.Enabled {
+				return clearSiteAccountFailures(tx, "site_id = ?", req.ID)
+			}
+			return nil
+		}); err != nil {
 			return nil, fmt.Errorf("failed to update site: %w", err)
 		}
 	}
@@ -407,7 +414,13 @@ func SiteEnabled(id int, enabled bool, ctx context.Context) error {
 		if err := tx.Model(&model.Site{}).Where("id = ?", id).Update("enabled", enabled).Error; err != nil {
 			return err
 		}
-		return tx.Model(&model.SiteAccount{}).Where("site_id = ?", id).Update("enabled", enabled).Error
+		if err := tx.Model(&model.SiteAccount{}).Where("site_id = ?", id).Update("enabled", enabled).Error; err != nil {
+			return err
+		}
+		if !enabled {
+			return clearSiteAccountFailures(tx, "site_id = ?", id)
+		}
+		return nil
 	})
 }
 
@@ -688,11 +701,18 @@ func SiteAccountUpdate(req *model.SiteAccountUpdateRequest, ctx context.Context)
 	}
 
 	if len(selectFields) > 0 {
-		if err := db.GetDB().WithContext(ctx).
-			Model(&model.SiteAccount{}).
-			Where("id = ?", req.ID).
-			Select(selectFields).
-			Updates(&updates).Error; err != nil {
+		if err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&model.SiteAccount{}).
+				Where("id = ?", req.ID).
+				Select(selectFields).
+				Updates(&updates).Error; err != nil {
+				return err
+			}
+			if req.Enabled != nil && !*req.Enabled {
+				return clearSiteAccountFailures(tx, "id = ?", req.ID)
+			}
+			return nil
+		}); err != nil {
 			return nil, fmt.Errorf("failed to update site account: %w", err)
 		}
 	}
@@ -700,7 +720,36 @@ func SiteAccountUpdate(req *model.SiteAccountUpdateRequest, ctx context.Context)
 }
 
 func SiteAccountEnabled(id int, enabled bool, ctx context.Context) error {
-	return db.GetDB().WithContext(ctx).Model(&model.SiteAccount{}).Where("id = ?", id).Update("enabled", enabled).Error
+	return db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.SiteAccount{}).Where("id = ?", id).Update("enabled", enabled).Error; err != nil {
+			return err
+		}
+		if !enabled {
+			return clearSiteAccountFailures(tx, "id = ?", id)
+		}
+		return nil
+	})
+}
+
+func clearSiteAccountFailures(tx *gorm.DB, query string, args ...any) error {
+	if err := tx.Model(&model.SiteAccount{}).
+		Where(query, args...).
+		Where("last_sync_status = ?", model.SiteExecutionStatusFailed).
+		Updates(map[string]any{
+			"last_sync_at":      nil,
+			"last_sync_status":  model.SiteExecutionStatusIdle,
+			"last_sync_message": "",
+		}).Error; err != nil {
+		return err
+	}
+	return tx.Model(&model.SiteAccount{}).
+		Where(query, args...).
+		Where("last_checkin_status = ?", model.SiteExecutionStatusFailed).
+		Updates(map[string]any{
+			"last_checkin_at":      nil,
+			"last_checkin_status":  model.SiteExecutionStatusIdle,
+			"last_checkin_message": "",
+		}).Error
 }
 
 func deleteLegacySitePricesByAccountIDs(tx *gorm.DB, accountIDs []int) error {

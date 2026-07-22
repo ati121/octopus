@@ -260,6 +260,7 @@ function accountHasHealthFailure(
   site: SiteRecord,
   account: SiteAccount,
 ) {
+  if (!site.enabled || !account.enabled) return false;
   return accountHasSyncFailure(account) || accountHasCheckinFailure(site, account);
 }
 
@@ -1626,16 +1627,18 @@ export function Site() {
                     ) : (
                       <div className="space-y-2">
                         {visibleAccounts.map((account) => {
+                          const accountDisabled = !site.enabled || !account.enabled;
                           const accountFailed = accountHasHealthFailure(site, account);
-                          const accountTone: HealthTone = accountFailed
-                            ? "danger"
-                            : account.enabled
-                              ? "default"
-                              : "muted";
+                          const accountTone: HealthTone = accountDisabled
+                            ? "muted"
+                            : accountFailed
+                              ? "danger"
+                              : "default";
                           const supportsCheckin = sitePlatformSupportsCheckin(
                             site.platform,
                           );
                           const canShowManualCheckin =
+                            !accountDisabled &&
                             supportsCheckin &&
                             accountHasCheckinEnabled(account, site.platform);
 
@@ -1667,12 +1670,12 @@ export function Site() {
                                       <Badge
                                         variant="outline"
                                         className={
-                                          account.enabled
-                                            ? "text-emerald-600"
-                                            : "text-muted-foreground"
+                                          accountDisabled
+                                            ? "text-muted-foreground"
+                                            : "text-emerald-600"
                                         }
                                       >
-                                        {account.enabled ? "启用中" : "已停用"}
+                                        {accountDisabled ? "已停用" : "启用中"}
                                       </Badge>
                                     </div>
 
@@ -1723,8 +1726,11 @@ export function Site() {
                                       <TooltipTrigger asChild>
                                         <span>
                                           <Switch
-                                            checked={account.enabled}
-                                            disabled={enableSiteAccount.isPending}
+                                            checked={!accountDisabled}
+                                            disabled={
+                                              !site.enabled ||
+                                              enableSiteAccount.isPending
+                                            }
                                             onCheckedChange={() =>
                                               handleToggleAccount(account)
                                             }
@@ -1732,13 +1738,20 @@ export function Site() {
                                         </span>
                                       </TooltipTrigger>
                                       <TooltipContent>
-                                        {account.enabled ? "停用账号" : "启用账号"}
+                                        {!site.enabled
+                                          ? "请先启用站点"
+                                          : account.enabled
+                                            ? "停用账号"
+                                            : "启用账号"}
                                       </TooltipContent>
                                     </Tooltip>
 
                                     <IconActionButton
                                       label="同步账号"
-                                      disabled={syncingAccountIds.has(account.id)}
+                                      disabled={
+                                        accountDisabled ||
+                                        syncingAccountIds.has(account.id)
+                                      }
                                       onClick={() => handleSyncAccount(account)}
                                     >
                                       <RefreshCw
@@ -1823,6 +1836,12 @@ export function Site() {
                                 </div>
 
                                 <div className="space-y-1">
+                                  {accountDisabled ? (
+                                    <StaticSummary
+                                      text={site.enabled ? "账号已停用" : "站点已停用"}
+                                    />
+                                  ) : (
+                                    <>
                                     <ExecutionSummary
                                       label="同步"
                                       status={normalizedStatus(
@@ -1872,6 +1891,8 @@ export function Site() {
                                         {account.checkin_random_window_minutes} 分钟
                                       </div>
                                     ) : null}
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             </article>

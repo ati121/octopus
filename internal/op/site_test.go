@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/apperror"
 	dbpkg "github.com/bestruirui/octopus/internal/db"
@@ -146,6 +147,120 @@ func TestSiteCreateAndAccountCreatePersistExplicitFalseValues(t *testing.T) {
 	}
 	if reloadedAccount.Enabled || reloadedAccount.AutoSync || reloadedAccount.AutoCheckin {
 		t.Fatalf("expected explicit false flags to persist, got enabled=%v auto_sync=%v auto_checkin=%v", reloadedAccount.Enabled, reloadedAccount.AutoSync, reloadedAccount.AutoCheckin)
+	}
+}
+
+func TestSiteAccountEnabledClearsFailuresWhenDisabled(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+	_, account := createSiteOpTestSiteAccount(t, ctx, "disable-account-site", "disable-account")
+	now := time.Now()
+	if err := dbpkg.GetDB().WithContext(ctx).Model(&model.SiteAccount{}).Where("id = ?", account.ID).Updates(map[string]any{
+		"last_sync_at":         &now,
+		"last_sync_status":     model.SiteExecutionStatusFailed,
+		"last_sync_message":    "sync failed",
+		"last_checkin_at":      &now,
+		"last_checkin_status":  model.SiteExecutionStatusFailed,
+		"last_checkin_message": "checkin failed",
+	}).Error; err != nil {
+		t.Fatalf("seed account failures failed: %v", err)
+	}
+
+	if err := SiteAccountEnabled(account.ID, false, ctx); err != nil {
+		t.Fatalf("SiteAccountEnabled(false) failed: %v", err)
+	}
+	reloaded, err := SiteAccountGet(account.ID, ctx)
+	if err != nil {
+		t.Fatalf("SiteAccountGet failed: %v", err)
+	}
+	if reloaded.Enabled {
+		t.Fatalf("expected account to be disabled")
+	}
+	if reloaded.LastSyncStatus != model.SiteExecutionStatusIdle || reloaded.LastSyncAt != nil || reloaded.LastSyncMessage != "" {
+		t.Fatalf("expected sync failure to be cleared, got status=%q at=%v message=%q", reloaded.LastSyncStatus, reloaded.LastSyncAt, reloaded.LastSyncMessage)
+	}
+	if reloaded.LastCheckinStatus != model.SiteExecutionStatusIdle || reloaded.LastCheckinAt != nil || reloaded.LastCheckinMessage != "" {
+		t.Fatalf("expected checkin failure to be cleared, got status=%q at=%v message=%q", reloaded.LastCheckinStatus, reloaded.LastCheckinAt, reloaded.LastCheckinMessage)
+	}
+
+	if err := SiteAccountEnabled(account.ID, true, ctx); err != nil {
+		t.Fatalf("SiteAccountEnabled(true) failed: %v", err)
+	}
+	reloaded, err = SiteAccountGet(account.ID, ctx)
+	if err != nil {
+		t.Fatalf("SiteAccountGet after enable failed: %v", err)
+	}
+	if !reloaded.Enabled || reloaded.LastSyncStatus != model.SiteExecutionStatusIdle || reloaded.LastCheckinStatus != model.SiteExecutionStatusIdle {
+		t.Fatalf("expected re-enabled account to remain clean, got enabled=%v sync=%q checkin=%q", reloaded.Enabled, reloaded.LastSyncStatus, reloaded.LastCheckinStatus)
+	}
+}
+
+func TestSiteEnabledClearsAccountFailuresWhenDisabled(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+	site, account := createSiteOpTestSiteAccount(t, ctx, "disable-site", "disable-site-account")
+	if err := dbpkg.GetDB().WithContext(ctx).Model(&model.SiteAccount{}).Where("id = ?", account.ID).Updates(map[string]any{
+		"last_sync_status":  model.SiteExecutionStatusFailed,
+		"last_sync_message": "sync failed",
+	}).Error; err != nil {
+		t.Fatalf("seed account failure failed: %v", err)
+	}
+
+	if err := SiteEnabled(site.ID, false, ctx); err != nil {
+		t.Fatalf("SiteEnabled(false) failed: %v", err)
+	}
+	reloaded, err := SiteAccountGet(account.ID, ctx)
+	if err != nil {
+		t.Fatalf("SiteAccountGet failed: %v", err)
+	}
+	if reloaded.Enabled || reloaded.LastSyncStatus != model.SiteExecutionStatusIdle || reloaded.LastSyncMessage != "" {
+		t.Fatalf("expected disabled site account failure to be cleared, got enabled=%v status=%q message=%q", reloaded.Enabled, reloaded.LastSyncStatus, reloaded.LastSyncMessage)
+	}
+}
+
+func TestSiteAndAccountUpdatesClearFailuresWhenDisabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		disable func(context.Context, *model.Site, *model.SiteAccount) error
+	}{
+		{
+			name: "site update",
+			disable: func(ctx context.Context, site *model.Site, _ *model.SiteAccount) error {
+				enabled := false
+				_, err := SiteUpdate(&model.SiteUpdateRequest{ID: site.ID, Enabled: &enabled}, ctx)
+				return err
+			},
+		},
+		{
+			name: "account update",
+			disable: func(ctx context.Context, _ *model.Site, account *model.SiteAccount) error {
+				enabled := false
+				_, err := SiteAccountUpdate(&model.SiteAccountUpdateRequest{ID: account.ID, Enabled: &enabled}, ctx)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := setupSiteOpTestDB(t)
+			site, account := createSiteOpTestSiteAccount(t, ctx, "update-disable-site", "update-disable-account")
+			if err := dbpkg.GetDB().WithContext(ctx).Model(&model.SiteAccount{}).Where("id = ?", account.ID).Updates(map[string]any{
+				"last_sync_status":  model.SiteExecutionStatusFailed,
+				"last_sync_message": "sync failed",
+			}).Error; err != nil {
+				t.Fatalf("seed account failure failed: %v", err)
+			}
+
+			if err := tt.disable(ctx, site, account); err != nil {
+				t.Fatalf("disable failed: %v", err)
+			}
+			reloaded, err := SiteAccountGet(account.ID, ctx)
+			if err != nil {
+				t.Fatalf("SiteAccountGet failed: %v", err)
+			}
+			if reloaded.LastSyncStatus != model.SiteExecutionStatusIdle || reloaded.LastSyncMessage != "" {
+				t.Fatalf("expected failure to be cleared, got status=%q message=%q", reloaded.LastSyncStatus, reloaded.LastSyncMessage)
+			}
+		})
 	}
 }
 
