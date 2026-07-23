@@ -378,11 +378,11 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 		if lastResult.RetryAfter > 0 {
 			c.Header("Retry-After", fmt.Sprintf("%d", int(lastResult.RetryAfter.Seconds())))
 		}
-		hb.FlushOrError(c, lastResult.StatusCode, "channel failed")
+		hb.FlushOrError(c, lastResult.StatusCode, publicRelayErrorMessage(lastResult.Err))
 		return
 	}
 	if lastResult.StatusCode > 0 {
-		hb.FlushOrError(c, lastResult.StatusCode, "channel failed")
+		hb.FlushOrError(c, lastResult.StatusCode, publicRelayErrorMessage(lastResult.Err))
 		return
 	}
 	hb.FlushOrError(c, http.StatusBadGateway, "channel failed")
@@ -478,7 +478,7 @@ func (ra *relayAttempt) attempt() attemptResult {
 		Written:           written,
 		ResetConversation: statusCode == http.StatusConflict && needsConversationRestart(relayErrorMessage(fwdErr)),
 		FirstTokenTimeout: firstTokenTimeout,
-		Err:               fmt.Errorf("channel %s failed: %v", ra.channel.Name, fwdErr),
+		Err:               fmt.Errorf("channel %s failed: %w", ra.channel.Name, fwdErr),
 		StatusCode:        statusCode,
 		RetryAfter:        ra.retryAfter,
 	}
@@ -835,7 +835,7 @@ func (ra *relayAttempt) forwardViaHTTPPassthrough(ctx context.Context, pt model.
 		body, _ := io.ReadAll(response.Body)
 		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
 		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, string(body))
-		return statusCode, fmt.Errorf("upstream error: %d: %s", response.StatusCode, string(body))
+		return statusCode, newUpstreamHTTPError(response.StatusCode, body)
 	}
 
 	// Get passthrough config
@@ -919,7 +919,7 @@ func (ra *relayAttempt) forwardViaHTTPStandard(ctx context.Context) (int, error)
 		}
 		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
 		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, string(body))
-		return statusCode, fmt.Errorf("upstream error: %d: %s", response.StatusCode, string(body))
+		return statusCode, newUpstreamHTTPError(response.StatusCode, body)
 	}
 
 	// 处理响应

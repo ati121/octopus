@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/samber/lo"
@@ -751,7 +752,8 @@ func convertToAnthropicRequest(req *model.InternalLLMRequest) *anthropicModel.Me
 
 	// Convert thinking/reasoning
 	if req.ReasoningEffort != "" {
-		if req.AdaptiveThinking {
+		adaptiveThinking := req.AdaptiveThinking || (req.ReasoningBudget == nil && supportsAdaptiveThinkingModel(req.Model))
+		if adaptiveThinking {
 			result.Thinking = &anthropicModel.Thinking{
 				Type:    anthropicModel.ThinkingTypeAdaptive,
 				Display: req.ThinkingDisplay,
@@ -767,6 +769,7 @@ func convertToAnthropicRequest(req *model.InternalLLMRequest) *anthropicModel.Me
 			}
 		}
 	}
+	coordinateClassicThinkingTokens(result, req.MaxTokens != nil || req.MaxCompletionTokens != nil)
 
 	// A-H4: Anthropic rejects temperature != 1 and any top_p/top_k when
 	// extended thinking is active. Force the sampling knobs to the only
@@ -804,6 +807,78 @@ func applyThinkingParamConstraints(req *anthropicModel.MessageRequest) {
 	req.Temperature = lo.ToPtr(1.0)
 	req.TopP = nil
 	req.TopK = nil
+}
+
+const (
+	minClassicThinkingBudgetTokens int64 = 1024
+	defaultThinkingMaxTokens       int64 = 16384
+	maxInt64Value                  int64 = 1<<63 - 1
+)
+
+// supportsAdaptiveThinkingModel recognizes Claude generations that accept
+// thinking.type=adaptive with output_config.effort. Explicit reasoning budgets
+// still use classic thinking because adaptive thinking has no budget_tokens.
+func supportsAdaptiveThinkingModel(modelName string) bool {
+	normalized := strings.NewReplacer(".", "-", "_", "-").Replace(strings.ToLower(strings.TrimSpace(modelName)))
+	if !strings.Contains(normalized, "claude") {
+		return false
+	}
+
+	parts := strings.FieldsFunc(normalized, func(r rune) bool { return r == '-' })
+	for i, part := range parts {
+		major, err := strconv.Atoi(part)
+		if err != nil || major < 3 || major >= 100 {
+			continue
+		}
+		if major >= 5 {
+			return true
+		}
+		if major != 4 || i+1 >= len(parts) {
+			return false
+		}
+		minor, err := strconv.Atoi(parts[i+1])
+		if err != nil || minor < 0 || minor >= 100 {
+			return false
+		}
+		return minor >= 6
+	}
+	return false
+}
+
+// coordinateClassicThinkingTokens enforces Anthropic's classic extended
+// thinking constraints. A valid explicit max_tokens is preserved by reducing
+// the budget; impossible tiny limits are raised only to the minimum valid pair.
+func coordinateClassicThinkingTokens(req *anthropicModel.MessageRequest, explicitMaxTokens bool) {
+	if req == nil || req.Thinking == nil || req.Thinking.Type != anthropicModel.ThinkingTypeEnabled || req.Thinking.BudgetTokens == nil {
+		return
+	}
+
+	budget := *req.Thinking.BudgetTokens
+	if budget < minClassicThinkingBudgetTokens {
+		budget = minClassicThinkingBudgetTokens
+	}
+
+	maxTokens := req.MaxTokens
+	if !explicitMaxTokens && maxTokens < defaultThinkingMaxTokens {
+		maxTokens = defaultThinkingMaxTokens
+	}
+	if maxTokens <= minClassicThinkingBudgetTokens {
+		maxTokens = minClassicThinkingBudgetTokens + 1
+	}
+
+	if budget >= maxTokens {
+		if explicitMaxTokens {
+			budget = maxTokens - 1
+		} else if budget < maxInt64Value {
+			maxTokens = budget + 1
+		} else {
+			maxTokens = maxInt64Value
+			budget = maxInt64Value - 1
+		}
+	}
+
+	req.MaxTokens = maxTokens
+	req.Thinking.BudgetTokens = lo.ToPtr(budget)
 }
 
 func resolveAnthropicUserID(req *model.InternalLLMRequest) string {
