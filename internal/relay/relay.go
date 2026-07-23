@@ -745,6 +745,7 @@ func (ra *relayAttempt) handleWSStreamResponseV2(ctx context.Context, reader *ws
 		Context:           ctx,
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
+		TerminalEvents:    inboundStreamTerminalEvents(ra.inAdapter),
 		OnFirstToken: func() {
 			ra.metrics.SetFirstTokenTime(time.Now())
 			ra.stopFirstTokenTimer()
@@ -1105,6 +1106,7 @@ func (ra *relayAttempt) handleStreamResponseV2(ctx context.Context, response *ht
 		Context:           ctx,
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
+		TerminalEvents:    inboundStreamTerminalEvents(ra.inAdapter),
 		OnFirstToken: func() {
 			ra.metrics.SetFirstTokenTime(time.Now())
 			ra.stopFirstTokenTimer()
@@ -1133,6 +1135,14 @@ func (ra *relayAttempt) handleStreamResponseV2(ctx context.Context, response *ht
 	}
 
 	return err
+}
+
+func inboundStreamTerminalEvents(inAdapter model.Inbound) map[string]struct{} {
+	provider, ok := inAdapter.(model.InboundStreamTerminalProvider)
+	if !ok {
+		return nil
+	}
+	return provider.StreamTerminalEvents()
 }
 
 // handleStreamResponsePassthroughV2 uses StreamProcessor for unified passthrough handling.

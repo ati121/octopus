@@ -71,6 +71,14 @@ type ResponseInbound struct {
 	storedResponse *model.InternalLLMResponse
 }
 
+func (i *ResponseInbound) StreamTerminalEvents() map[string]struct{} {
+	return map[string]struct{}{
+		"response.completed":  {},
+		"response.incomplete": {},
+		"response.failed":     {},
+	}
+}
+
 func (i *ResponseInbound) TransformRequest(ctx context.Context, body []byte) (*model.InternalLLMRequest, error) {
 	var req ResponsesRequest
 	if err := json.Unmarshal(body, &req); err != nil {

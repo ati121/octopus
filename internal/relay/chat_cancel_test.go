@@ -3,6 +3,7 @@ package relay
 import (
 	"testing"
 
+	openaiInbound "github.com/bestruirui/octopus/internal/transformer/inbound/openai"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 )
 
@@ -46,5 +47,14 @@ func TestChatResponseProtocolCompleted(t *testing.T) {
 				t.Fatalf("chatResponseProtocolCompleted() = %t, want %t", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestInboundStreamTerminalEventsForOpenAIResponses(t *testing.T) {
+	events := inboundStreamTerminalEvents(&openaiInbound.ResponseInbound{})
+	for _, eventType := range []string{"response.completed", "response.incomplete", "response.failed"} {
+		if _, ok := events[eventType]; !ok {
+			t.Fatalf("missing Responses terminal event %q", eventType)
+		}
 	}
 }

@@ -220,6 +220,38 @@ func TestStreamProcessor_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestStreamProcessor_ContextCancellationAfterTransformedTerminalEvent(t *testing.T) {
+	source := &cancelTestSource{first: []byte(`upstream terminal`)}
+	writer := newMockStreamWriter()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	firstTokenSeen := make(chan struct{})
+	processor := NewStreamProcessor(StreamConfig{
+		Source:  source,
+		Writer:  writer,
+		Context: ctx,
+		Transform: func(context.Context, []byte) ([]byte, error) {
+			return []byte("event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n"), nil
+		},
+		TerminalEvents: map[string]struct{}{"response.completed": {}},
+		OnFirstToken: func() {
+			close(firstTokenSeen)
+		},
+	})
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- processor.Run()
+	}()
+
+	<-firstTokenSeen
+	cancel()
+
+	if err := <-errChan; err != nil {
+		t.Fatalf("disconnect after response.completed should succeed, got: %v", err)
+	}
+}
+
 // cancelTestSource emits one chunk then blocks until context is cancelled.
 type cancelTestSource struct {
 	first  []byte

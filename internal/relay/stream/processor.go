@@ -70,9 +70,10 @@ type StreamProcessor struct {
 	config StreamConfig
 
 	// State
-	rawBuffer      bytes.Buffer
-	payloadWritten bool
-	firstToken     bool
+	rawBuffer       bytes.Buffer
+	payloadWritten  bool
+	firstToken      bool
+	terminalReached bool
 }
 
 // NewStreamProcessor creates a processor from config.
@@ -223,6 +224,9 @@ func (p *StreamProcessor) processEvent(data []byte) error {
 	}
 
 	p.payloadWritten = true
+	if !p.terminalReached && len(p.config.TerminalEvents) > 0 {
+		p.terminalReached = streamContainsTerminal(output, p.config.TerminalEvents)
+	}
 	p.config.Writer.Flush()
 	return nil
 }
@@ -238,12 +242,11 @@ func (p *StreamProcessor) writeHeartbeat() error {
 
 // handleDisconnect handles context cancellation or timeout.
 func (p *StreamProcessor) handleDisconnect() error {
-	// Check for terminal events in buffered stream
-	if p.config.BufferRawStream && len(p.config.TerminalEvents) > 0 {
-		if p.streamReachedTerminal() {
-			log.Debugf("client disconnected but stream reached terminal event, treating as success")
-			return p.finalize()
-		}
+	// Transformed streams are checked after a successful client write. Raw
+	// passthrough streams retain the buffered fallback for split SSE events.
+	if p.terminalReached || (p.config.BufferRawStream && p.streamReachedTerminal()) {
+		log.Debugf("client disconnected but stream reached terminal event, treating as success")
+		return p.finalize()
 	}
 
 	err := p.config.Context.Err()
@@ -294,9 +297,16 @@ func (p *StreamProcessor) streamReachedTerminal() bool {
 	if p.rawBuffer.Len() == 0 {
 		return false
 	}
+	return streamContainsTerminal(p.rawBuffer.Bytes(), p.config.TerminalEvents)
+}
+
+func streamContainsTerminal(data []byte, terminalEvents map[string]struct{}) bool {
+	if len(data) == 0 || len(terminalEvents) == 0 {
+		return false
+	}
 
 	readCfg := &sse.ReadConfig{MaxEventSize: 32 * 1024 * 1024}
-	for ev, err := range sse.Read(bytes.NewReader(p.rawBuffer.Bytes()), readCfg) {
+	for ev, err := range sse.Read(bytes.NewReader(data), readCfg) {
 		if err != nil {
 			break
 		}
@@ -310,7 +320,7 @@ func (p *StreamProcessor) streamReachedTerminal() bool {
 			}
 		}
 
-		if _, ok := p.config.TerminalEvents[typ]; ok {
+		if _, ok := terminalEvents[typ]; ok {
 			return true
 		}
 	}

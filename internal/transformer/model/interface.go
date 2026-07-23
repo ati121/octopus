@@ -43,6 +43,13 @@ type InboundStreamEventTransformer interface {
 	TransformStreamEvents(ctx context.Context, events []StreamEvent) ([]byte, error)
 }
 
+// InboundStreamTerminalProvider optionally describes terminal SSE events emitted
+// by an inbound transformer. The relay uses these events to distinguish a client
+// closing an already-complete stream from a premature disconnect.
+type InboundStreamTerminalProvider interface {
+	StreamTerminalEvents() map[string]struct{}
+}
+
 /*
 请求流程
 非流式
