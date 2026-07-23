@@ -1372,9 +1372,35 @@ func convertInputToMessages(input *ResponsesInput) ([]model.Message, error) {
 		}, nil
 	}
 
-	// Array of items
+	// Array of items. Responses represents parallel tool calls as consecutive
+	// function_call items, while Chat Completions requires them in one assistant
+	// message. Keep a pending assistant message until the sequence ends.
 	messages := make([]model.Message, 0, len(input.Items))
+	toolCallIDs := make(map[string]string)
+	var pendingToolCalls []model.ToolCall
+	flushToolCalls := func() {
+		if len(pendingToolCalls) == 0 {
+			return
+		}
+		messages = append(messages, model.Message{
+			Role:      "assistant",
+			ToolCalls: pendingToolCalls,
+		})
+		pendingToolCalls = nil
+	}
+
 	for _, item := range input.Items {
+		if item.Type == "function_call" {
+			toolCall := convertFunctionCallItem(&item, toolCallIDs)
+			pendingToolCalls = append(pendingToolCalls, toolCall)
+			continue
+		}
+		flushToolCalls()
+		if item.Type == "function_call_output" {
+			messages = append(messages, *convertFunctionCallOutputItem(&item, toolCallIDs))
+			continue
+		}
+
 		msg, err := convertItemToMessage(&item)
 		if err != nil {
 			return nil, err
@@ -1383,8 +1409,53 @@ func convertInputToMessages(input *ResponsesInput) ([]model.Message, error) {
 			messages = append(messages, *msg)
 		}
 	}
+	flushToolCalls()
 
 	return messages, nil
+}
+
+func convertFunctionCallItem(item *ResponsesItem, toolCallIDs map[string]string) model.ToolCall {
+	callID := item.CallID
+	if callID == "" {
+		callID = item.ID
+	}
+	if toolCallIDs != nil {
+		if item.ID != "" {
+			toolCallIDs[item.ID] = callID
+		}
+		if item.CallID != "" {
+			toolCallIDs[item.CallID] = callID
+		}
+	}
+	return model.ToolCall{
+		ID:   callID,
+		Type: "function",
+		Function: model.FunctionCall{
+			Name:      item.Name,
+			Arguments: item.Arguments,
+		},
+	}
+}
+
+func convertFunctionCallOutputItem(item *ResponsesItem, toolCallIDs map[string]string) *model.Message {
+	callID := item.CallID
+	if callID == "" && item.ItemReference != nil {
+		callID = toolCallIDs[*item.ItemReference]
+		if callID == "" {
+			// Some Responses-compatible clients use item_reference as the
+			// tool call id directly when no separate call_id is available.
+			callID = *item.ItemReference
+		}
+	}
+	content := model.MessageContent{Content: lo.ToPtr("")}
+	if item.Output != nil {
+		content = convertInputToMessageContent(*item.Output)
+	}
+	return &model.Message{
+		Role:       "tool",
+		ToolCallID: lo.ToPtr(callID),
+		Content:    content,
+	}
 }
 
 func convertItemToMessage(item *ResponsesItem) (*model.Message, error) {
@@ -1426,25 +1497,12 @@ func convertItemToMessage(item *ResponsesItem) (*model.Message, error) {
 
 	case "function_call":
 		return &model.Message{
-			Role: "assistant",
-			ToolCalls: []model.ToolCall{
-				{
-					ID:   item.CallID,
-					Type: "function",
-					Function: model.FunctionCall{
-						Name:      item.Name,
-						Arguments: item.Arguments,
-					},
-				},
-			},
+			Role:      "assistant",
+			ToolCalls: []model.ToolCall{convertFunctionCallItem(item, nil)},
 		}, nil
 
 	case "function_call_output":
-		return &model.Message{
-			Role:       "tool",
-			ToolCallID: lo.ToPtr(item.CallID),
-			Content:    convertInputToMessageContent(*item.Output),
-		}, nil
+		return convertFunctionCallOutputItem(item, nil), nil
 
 	case "reasoning":
 		msg := &model.Message{

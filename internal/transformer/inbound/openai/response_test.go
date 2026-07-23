@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -30,6 +31,115 @@ func TestConvertToInternalRequestPreservesRawInputItems(t *testing.T) {
 	}
 	if internalReq.TransformOptions.ArrayInputs == nil || !*internalReq.TransformOptions.ArrayInputs {
 		t.Fatalf("expected array input flag to stay true")
+	}
+}
+
+func TestConvertInputToMessagesMergesParallelFunctionCallsAndMapsOutputs(t *testing.T) {
+	outputA := ResponsesInput{Text: stringPtr("result-a")}
+	outputB := ResponsesInput{Text: stringPtr("result-b")}
+	itemReference := "fc_item_b"
+	input := &ResponsesInput{Items: []ResponsesItem{
+		{Type: "message", Role: "user", Content: &ResponsesInput{Text: stringPtr("find both")}},
+		{ID: "fc_item_a", Type: "function_call", CallID: "call_a", Name: "search_files", Arguments: `{"q":"a"}`},
+		{ID: "fc_item_b", Type: "function_call", CallID: "call_b", Name: "terminal", Arguments: `{"cmd":"pwd"}`},
+		{Type: "function_call_output", CallID: "call_a", Output: &outputA},
+		{Type: "function_call_output", ItemReference: &itemReference, Output: &outputB},
+	}}
+
+	messages, err := convertInputToMessages(input)
+	if err != nil {
+		t.Fatalf("convertInputToMessages failed: %v", err)
+	}
+	if len(messages) != 4 {
+		t.Fatalf("expected user, one assistant tool message, and two tool outputs, got %#v", messages)
+	}
+	if messages[0].Role != "user" || messages[0].Content.Content == nil || *messages[0].Content.Content != "find both" {
+		t.Fatalf("unexpected user message: %#v", messages[0])
+	}
+	if messages[1].Role != "assistant" || len(messages[1].ToolCalls) != 2 {
+		t.Fatalf("expected parallel calls in one assistant message, got %#v", messages[1])
+	}
+	if messages[1].ToolCalls[0].ID != "call_a" || messages[1].ToolCalls[0].Function.Name != "search_files" || messages[1].ToolCalls[1].ID != "call_b" || messages[1].ToolCalls[1].Function.Name != "terminal" {
+		t.Fatalf("parallel tool call order or ids changed: %#v", messages[1].ToolCalls)
+	}
+	if messages[2].Role != "tool" || messages[2].ToolCallID == nil || *messages[2].ToolCallID != "call_a" {
+		t.Fatalf("unexpected first tool output: %#v", messages[2])
+	}
+	if messages[3].Role != "tool" || messages[3].ToolCallID == nil || *messages[3].ToolCallID != "call_b" {
+		t.Fatalf("item_reference was not mapped to call_b: %#v", messages[3])
+	}
+}
+
+func TestResponseInboundTransformRequestMergesParallelToolCalls(t *testing.T) {
+	body := []byte(`{
+		"model":"MiniMax-M2.7",
+		"parallel_tool_calls":true,
+		"input":[
+			{"id":"fc_a","type":"function_call","call_id":"call_a","name":"search_files","arguments":"{\"q\":\"a\"}"},
+			{"id":"fc_b","type":"function_call","call_id":"call_b","name":"terminal","arguments":"{\"cmd\":\"pwd\"}"},
+			{"type":"function_call_output","call_id":"call_a","output":"result-a"},
+			{"type":"function_call_output","call_id":"call_b","output":"result-b"}
+		]
+	}`)
+
+	req, err := (&ResponseInbound{}).TransformRequest(context.Background(), body)
+	if err != nil {
+		t.Fatalf("TransformRequest failed: %v", err)
+	}
+	if req.ParallelToolCalls == nil || !*req.ParallelToolCalls {
+		t.Fatalf("parallel_tool_calls was not preserved: %#v", req.ParallelToolCalls)
+	}
+	if len(req.Messages) != 3 || req.Messages[0].Role != "assistant" || len(req.Messages[0].ToolCalls) != 2 || req.Messages[1].Role != "tool" || req.Messages[2].Role != "tool" {
+		t.Fatalf("unexpected transformed protocol order: %#v", req.Messages)
+	}
+}
+
+func TestConvertInputToMessagesKeepsSingleToolCallAndNormalMessages(t *testing.T) {
+	output := ResponsesInput{Text: stringPtr("done")}
+	input := &ResponsesInput{Items: []ResponsesItem{
+		{Type: "message", Role: "user", Content: &ResponsesInput{Text: stringPtr("hello")}},
+		{ID: "fc_item", Type: "function_call", CallID: "call_1", Name: "lookup", Arguments: `{}`},
+		{Type: "function_call_output", CallID: "call_1", Output: &output},
+		{Type: "message", Role: "user", Content: &ResponsesInput{Text: stringPtr("continue")}},
+	}}
+
+	messages, err := convertInputToMessages(input)
+	if err != nil {
+		t.Fatalf("convertInputToMessages failed: %v", err)
+	}
+	if len(messages) != 4 || messages[1].Role != "assistant" || len(messages[1].ToolCalls) != 1 || messages[2].Role != "tool" || messages[3].Role != "user" {
+		t.Fatalf("single tool call or normal message order changed: %#v", messages)
+	}
+	if messages[1].ToolCalls[0].ID != "call_1" || messages[2].ToolCallID == nil || *messages[2].ToolCallID != "call_1" {
+		t.Fatalf("single tool call id was not preserved: %#v", messages)
+	}
+}
+
+func TestConvertFunctionCallOutputWithoutOutputDoesNotPanic(t *testing.T) {
+	msg, err := convertItemToMessage(&ResponsesItem{Type: "function_call_output", CallID: "call_empty"})
+	if err != nil {
+		t.Fatalf("convertItemToMessage failed: %v", err)
+	}
+	if msg == nil || msg.Role != "tool" || msg.ToolCallID == nil || *msg.ToolCallID != "call_empty" {
+		t.Fatalf("unexpected empty tool output message: %#v", msg)
+	}
+	if msg.Content.Content == nil || *msg.Content.Content != "" {
+		t.Fatalf("expected empty content for missing output, got %#v", msg.Content)
+	}
+}
+
+func TestConvertInputToMessagesUsesInternalToolCallShape(t *testing.T) {
+	messages, err := convertInputToMessages(&ResponsesInput{Items: []ResponsesItem{
+		{ID: "fc_id", Type: "function_call", Name: "lookup", Arguments: `{}`},
+	}})
+	if err != nil {
+		t.Fatalf("convertInputToMessages failed: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Role != "assistant" || len(messages[0].ToolCalls) != 1 {
+		t.Fatalf("expected one assistant tool message, got %#v", messages)
+	}
+	if messages[0].ToolCalls[0].Type != "function" || messages[0].ToolCalls[0].ID != "fc_id" {
+		t.Fatalf("expected function call id fallback to item id, got %#v", messages[0].ToolCalls[0])
 	}
 }
 

@@ -182,6 +182,34 @@ func TestMarshalResponsesInputItemsBuildsArrayInput(t *testing.T) {
 	}
 }
 
+func TestConvertInputFromMessagesRoundTripsParallelToolCallsAndOutputs(t *testing.T) {
+	messages := []model.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []model.ToolCall{
+				{ID: "call_a", Type: "function", Function: model.FunctionCall{Name: "search_files", Arguments: `{"q":"a"}`}},
+				{ID: "call_b", Type: "function", Function: model.FunctionCall{Name: "terminal", Arguments: `{"cmd":"pwd"}`}},
+			},
+		},
+		{Role: "tool", ToolCallID: stringPtr("call_a"), Content: model.MessageContent{Content: stringPtr("result-a")}},
+		{Role: "tool", ToolCallID: stringPtr("call_b"), Content: model.MessageContent{Content: stringPtr("result-b")}},
+	}
+	arrayInputs := true
+	input := convertInputFromMessages(messages, model.TransformOptions{ArrayInputs: &arrayInputs})
+	if len(input.Items) != 4 {
+		t.Fatalf("expected two function calls followed by two outputs, got %#v", input.Items)
+	}
+	if input.Items[0].Type != "function_call" || input.Items[1].Type != "function_call" || input.Items[2].Type != "function_call_output" || input.Items[3].Type != "function_call_output" {
+		t.Fatalf("unexpected Responses item order: %#v", input.Items)
+	}
+	if input.Items[2].CallID != "call_a" || input.Items[3].CallID != "call_b" {
+		t.Fatalf("tool output call ids changed: %#v", input.Items)
+	}
+	if input.Items[2].ItemReference == nil || *input.Items[2].ItemReference != input.Items[0].ID || input.Items[3].ItemReference == nil || *input.Items[3].ItemReference != input.Items[1].ID {
+		t.Fatalf("tool output item references do not match function calls: %#v", input.Items)
+	}
+}
+
 func TestConvertToResponsesRequestOmitsDeprecatedUser(t *testing.T) {
 	user := "legacy-user"
 	req := &model.InternalLLMRequest{

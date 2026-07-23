@@ -66,6 +66,43 @@ func TestWSRequestExplicitlyRequestsContinuation(t *testing.T) {
 	}
 }
 
+func TestBuildReplayRawInputItemsPreservesParallelToolCallOrder(t *testing.T) {
+	transcript := []transformerModel.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []transformerModel.ToolCall{
+				{ID: "call_a", Type: "function", Function: transformerModel.FunctionCall{Name: "search_files", Arguments: `{}`}},
+				{ID: "call_b", Type: "function", Function: transformerModel.FunctionCall{Name: "terminal", Arguments: `{}`}},
+			},
+		},
+		{Role: "tool", ToolCallID: stringPtr("call_a"), Content: transformerModel.MessageContent{Content: stringPtr("result-a")}},
+		{Role: "tool", ToolCallID: stringPtr("call_b"), Content: transformerModel.MessageContent{Content: stringPtr("result-b")}},
+	}
+	current := json.RawMessage(`[{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]`)
+
+	replayed, ok := buildReplayRawInputItems(nil, transcript, current, nil)
+	if !ok {
+		t.Fatal("expected replay input construction to succeed")
+	}
+	var items []struct {
+		Type          string  `json:"type"`
+		CallID        string  `json:"call_id"`
+		ItemReference *string `json:"item_reference"`
+	}
+	if err := json.Unmarshal(replayed, &items); err != nil {
+		t.Fatalf("unmarshal replay items failed: %v", err)
+	}
+	if len(items) != 5 {
+		t.Fatalf("expected two calls, two outputs, and current user message, got %s", replayed)
+	}
+	if items[0].Type != "function_call" || items[1].Type != "function_call" || items[2].Type != "function_call_output" || items[3].Type != "function_call_output" || items[4].Type != "message" {
+		t.Fatalf("parallel tool replay order changed: %s", replayed)
+	}
+	if items[2].CallID != "call_a" || items[3].CallID != "call_b" || items[2].ItemReference == nil || items[3].ItemReference == nil {
+		t.Fatalf("parallel tool replay references were lost: %s", replayed)
+	}
+}
+
 func TestClassifyWSPublicErrorRecognizesConversationRestart(t *testing.T) {
 	err := fmt.Errorf("ws stream read error: ws read error: failed to get reader: received close frame: status = StatusPolicyViolation and reason = \"upstream continuation connection is unavailable; please restart the conversation\"")
 	publicErr, ok := classifyWSPublicError(err, http.StatusConflict)
