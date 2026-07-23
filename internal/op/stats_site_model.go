@@ -130,18 +130,45 @@ func StatsSiteModelHourlySaveDB(ctx context.Context) error {
 		Columns: []clause.Column{
 			{Name: "hour"}, {Name: "site_account_id"}, {Name: "group_key"}, {Name: "model_name"},
 		},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"date":            clause.Column{Name: "date"},
-			"input_token":     gorm.Expr("stats_site_model_hourlies.input_token + EXCLUDED.input_token"),
-			"output_token":    gorm.Expr("stats_site_model_hourlies.output_token + EXCLUDED.output_token"),
-			"input_cost":      gorm.Expr("stats_site_model_hourlies.input_cost + EXCLUDED.input_cost"),
-			"output_cost":     gorm.Expr("stats_site_model_hourlies.output_cost + EXCLUDED.output_cost"),
-			"wait_time":       gorm.Expr("stats_site_model_hourlies.wait_time + EXCLUDED.wait_time"),
-			"request_success": gorm.Expr("stats_site_model_hourlies.request_success + EXCLUDED.request_success"),
-			"request_failed":  gorm.Expr("stats_site_model_hourlies.request_failed + EXCLUDED.request_failed"),
-			"last_request_at": gorm.Expr("MAX(stats_site_model_hourlies.last_request_at, EXCLUDED.last_request_at)"),
-		}),
+		DoUpdates: clause.Assignments(siteModelHourlyConflictUpdates(dbConn)),
 	}).Create(&rows).Error
+}
+
+func siteModelHourlyConflictUpdates(dbConn *gorm.DB) map[string]interface{} {
+	dialect := ""
+	if dbConn != nil && dbConn.Dialector != nil {
+		dialect = dbConn.Dialector.Name()
+	}
+	return siteModelHourlyConflictUpdatesForDialect(dialect)
+}
+
+func siteModelHourlyConflictUpdatesForDialect(dialect string) map[string]interface{} {
+	excluded := func(column string) string {
+		if dialect == "mysql" {
+			return "VALUES(" + column + ")"
+		}
+		return "EXCLUDED." + column
+	}
+	table := "stats_site_model_hourlies."
+	maxExpr := func(column string) clause.Expr {
+		left := table + column
+		right := excluded(column)
+		if dialect == "postgres" || dialect == "mysql" {
+			return gorm.Expr("GREATEST(" + left + ", " + right + ")")
+		}
+		return gorm.Expr("MAX(" + left + ", " + right + ")")
+	}
+	return map[string]interface{}{
+		"date":            gorm.Expr(excluded("date")),
+		"input_token":     gorm.Expr(table + "input_token + " + excluded("input_token")),
+		"output_token":    gorm.Expr(table + "output_token + " + excluded("output_token")),
+		"input_cost":      gorm.Expr(table + "input_cost + " + excluded("input_cost")),
+		"output_cost":     gorm.Expr(table + "output_cost + " + excluded("output_cost")),
+		"wait_time":       gorm.Expr(table + "wait_time + " + excluded("wait_time")),
+		"request_success": gorm.Expr(table + "request_success + " + excluded("request_success")),
+		"request_failed":  gorm.Expr(table + "request_failed + " + excluded("request_failed")),
+		"last_request_at": maxExpr("last_request_at"),
+	}
 }
 
 const siteChannelModelHistoryWindow = 90 * 24 * time.Hour

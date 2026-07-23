@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/relay/stream"
 	"github.com/bestruirui/octopus/internal/transformer/inbound"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
@@ -123,5 +124,22 @@ func TestPassthroughAnthropicEmptyStreamFails(t *testing.T) {
 	err := ra.handleStreamResponsePassthroughV2(context.Background(), sseTestResponse(""), cfg)
 	if !errors.Is(err, stream.ErrEmptyUpstreamStream) {
 		t.Fatalf("expected stream.ErrEmptyUpstreamStream for empty passthrough stream, got %v", err)
+	}
+}
+
+func TestHandleResponseRejectsHollowUpstreamBody(t *testing.T) {
+	ra, recorder := newEmptyStreamTestAttempt(t, inbound.InboundTypeOpenAIChat, transformerModel.APIFormatOpenAIChatCompletion, outbound.OutboundTypeOpenAIChat)
+	ra.channel = &model.Channel{Name: "empty-channel", Type: outbound.OutboundTypeOpenAIChat}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"","object":"chat.completion","choices":[]}`)),
+	}
+	err := ra.handleResponse(context.Background(), resp)
+	if !errors.Is(err, ErrEmptyUpstreamResponse) {
+		t.Fatalf("expected ErrEmptyUpstreamResponse, got %v", err)
+	}
+	if recorder.Body.Len() != 0 {
+		t.Fatalf("hollow response must not reach client, got %q", recorder.Body.String())
 	}
 }

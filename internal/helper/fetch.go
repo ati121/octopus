@@ -23,7 +23,7 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 	fetchModel := make([]string, 0)
 	switch request.Type {
 	case outbound.OutboundTypeAnthropic:
-		fetchModel, err = fetchAnthropicModels(client, ctx, request)
+		fetchModel, err = fetchAnthropicModelsOrOpenAI(client, ctx, request)
 	case outbound.OutboundTypeGemini:
 		fetchModel, err = fetchGeminiModels(client, ctx, request)
 	default:
@@ -54,12 +54,35 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 
 // refer: https://platform.openai.com/docs/api-reference/models/list
 func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
-	req, _ := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		request.GetBaseUrl()+"/models",
-		nil,
-	)
+	base := strings.TrimRight(strings.TrimSpace(request.GetBaseUrl()), "/")
+	urls := openAIModelListURLs(base)
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("empty channel base url")
+	}
+	var lastErr error
+	for _, modelsURL := range urls {
+		models, err := fetchOpenAIModelsAt(client, ctx, request, modelsURL)
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", modelsURL, err)
+			continue
+		}
+		if len(models) == 0 {
+			lastErr = fmt.Errorf("%s: empty model list", modelsURL)
+			continue
+		}
+		return models, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("no model list endpoint succeeded for %s", base)
+}
+
+func fetchOpenAIModelsAt(client *http.Client, ctx context.Context, request model.Channel, modelsURL string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
+	if err != nil {
+		return nil, err
+	}
 	applyDefaultModelRequestHeaders(req, request)
 	req.Header.Set("Authorization", "Bearer "+request.GetChannelKey().ChannelKey)
 
@@ -76,9 +99,46 @@ func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.C
 
 	models := make([]string, 0, len(result.Data))
 	for _, m := range result.Data {
-		models = append(models, m.ID)
+		if id := strings.TrimSpace(m.ID); id != "" {
+			models = append(models, id)
+		}
 	}
 	return models, nil
+}
+
+func openAIModelListURLs(baseURL string) []string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return nil
+	}
+	lower := strings.ToLower(baseURL)
+	urls := make([]string, 0, 4)
+	add := func(url string) {
+		for _, existing := range urls {
+			if strings.EqualFold(existing, url) {
+				return
+			}
+		}
+		urls = append(urls, url)
+	}
+	if hasOpenAIVersionSuffix(lower) {
+		add(baseURL + "/models")
+		return urls
+	}
+	add(baseURL + "/models")
+	add(baseURL + "/v1/models")
+	add(baseURL + "/api/v1/models")
+	add(baseURL + "/v1beta/models")
+	return urls
+}
+
+func hasOpenAIVersionSuffix(baseURL string) bool {
+	for _, suffix := range []string{"/v1", "/v1beta", "/api/v1", "/openai/v1", "/openai/v1beta"} {
+		if strings.HasSuffix(baseURL, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // refer: https://ai.google.dev/api/models
@@ -175,6 +235,21 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 		return fetchOpenAIModels(client, ctx, request)
 	}
 	return allModels, nil
+}
+
+func fetchAnthropicModelsOrOpenAI(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
+	models, err := fetchAnthropicModels(client, ctx, request)
+	if err == nil && len(models) > 0 {
+		return models, nil
+	}
+	if err != nil {
+		if fallback, fallbackErr := fetchOpenAIModels(client, ctx, request); fallbackErr == nil && len(fallback) > 0 {
+			return fallback, nil
+		} else if fallbackErr != nil {
+			return nil, fmt.Errorf("anthropic models: %v; openai fallback: %w", err, fallbackErr)
+		}
+	}
+	return models, err
 }
 
 func applyDefaultModelRequestHeaders(req *http.Request, request model.Channel) {

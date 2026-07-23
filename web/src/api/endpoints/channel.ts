@@ -71,6 +71,7 @@ export type Channel = {
     proxy_mode: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
     auto_sync: boolean;
+    skip_health_probe: boolean;
     auto_group: AutoGroupType;
     custom_header: CustomHeader[];
     ws_mode: ChannelWSMode;
@@ -102,6 +103,7 @@ export type CreateChannelRequest = {
     proxy_mode?: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
     auto_sync?: boolean;
+    skip_health_probe?: boolean;
     auto_group?: AutoGroupType;
     custom_header?: CustomHeader[];
     ws_mode?: ChannelWSMode;
@@ -123,6 +125,7 @@ export type UpdateChannelRequest = {
     proxy_mode?: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
     auto_sync?: boolean;
+    skip_health_probe?: boolean;
     auto_group?: AutoGroupType;
     custom_header?: CustomHeader[];
     ws_mode?: ChannelWSMode;
@@ -172,6 +175,7 @@ export function useChannelList() {
                 keys: item.keys ?? [],
                 proxy_mode: item.proxy_mode ?? 'direct',
                 proxy_config_id: item.proxy_config_id ?? null,
+                skip_health_probe: item.skip_health_probe ?? false,
             }) satisfies Channel,
             formatted: {
                 input_token: formatCount(item.stats.input_token),

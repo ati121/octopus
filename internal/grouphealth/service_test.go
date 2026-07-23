@@ -254,3 +254,33 @@ func TestRunGroupHealthFullProbeDoesNotSkipRemainingFailoverCandidates(t *testin
 		t.Fatalf("expected second attempt http status %d, got %d", http.StatusServiceUnavailable, view.Latest.Attempts[1].HTTPStatus)
 	}
 }
+
+func TestRunGroupHealthHonorsChannelSkipProbe(t *testing.T) {
+	ctx := setupGroupHealthTestDB(t)
+	skipped := &model.Channel{
+		Name: "skip-probe-channel", Type: outbound.OutboundTypeOpenAIChat, Enabled: true,
+		SkipHealthProbe: true, BaseUrls: []model.BaseUrl{{URL: "http://127.0.0.1:1/v1"}},
+		Model: "probe-model", Keys: []model.ChannelKey{{Enabled: true, ChannelKey: "sk-skip"}},
+	}
+	if err := op.ChannelCreate(skipped, ctx); err != nil {
+		t.Fatalf("ChannelCreate skipped: %v", err)
+	}
+	group := &model.Group{Name: "skip-probe-group", Mode: model.GroupModeFailover}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: skipped.ID, ModelName: "probe-model", Priority: 1, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd: %v", err)
+	}
+	service := NewService(op.NewGroupHealthRepository(), &Prober{CandidateTimeout: time.Second})
+	if err := service.RunGroupHealth(ctx, group.ID); err != nil {
+		t.Fatalf("RunGroupHealth: %v", err)
+	}
+	view, err := service.GetGroupHealthViewByID(ctx, group.ID)
+	if err != nil || view.Latest == nil || len(view.Latest.Attempts) != 1 {
+		t.Fatalf("unexpected view=%#v err=%v", view, err)
+	}
+	if attempt := view.Latest.Attempts[0]; attempt.Status != model.GroupHealthAttemptStatusSkipped || attempt.ErrorMessage != "channel health probe disabled" {
+		t.Fatalf("unexpected attempt: %#v", attempt)
+	}
+}

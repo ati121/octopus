@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -813,7 +814,7 @@ func (i *ResponseInbound) closeCurrentOutputItem() [][]byte {
 				Status:    lo.ToPtr("completed"),
 				CallID:    tc.ID,
 				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
+				Arguments: FlexibleJSONString(tc.Function.Arguments),
 			}
 
 			events = append(events, i.enqueueEvent(&ResponsesStreamEvent{
@@ -919,6 +920,11 @@ func (i ResponsesInput) MarshalJSON() ([]byte, error) {
 }
 
 func (i *ResponsesInput) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		*i = ResponsesInput{}
+		return nil
+	}
 	var text string
 	if err := json.Unmarshal(data, &text); err == nil {
 		i.Text = &text
@@ -930,6 +936,52 @@ func (i *ResponsesInput) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	return fmt.Errorf("invalid input format")
+}
+
+// FlexibleJSONString accepts either a JSON string or a JSON value while
+// preserving the value as compact JSON for internal tool-call handling.
+type FlexibleJSONString string
+
+const flexibleJSONRawPrefix = "\x00"
+
+func (s *FlexibleJSONString) UnmarshalJSON(data []byte) error {
+	if s == nil {
+		return fmt.Errorf("FlexibleJSONString: nil receiver")
+	}
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		*s = ""
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err == nil {
+		*s = FlexibleJSONString(value)
+		return nil
+	}
+	if !json.Valid(data) {
+		return fmt.Errorf("invalid JSON value")
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, data); err != nil {
+		return err
+	}
+	*s = FlexibleJSONString(flexibleJSONRawPrefix + compact.String())
+	return nil
+}
+
+func (s FlexibleJSONString) MarshalJSON() ([]byte, error) {
+	stored := string(s)
+	if strings.HasPrefix(stored, flexibleJSONRawPrefix) {
+		raw := strings.TrimPrefix(stored, flexibleJSONRawPrefix)
+		if json.Valid([]byte(raw)) {
+			return []byte(raw), nil
+		}
+	}
+	return json.Marshal(stored)
+}
+
+func (s FlexibleJSONString) String() string {
+	return strings.TrimPrefix(string(s), flexibleJSONRawPrefix)
 }
 
 type ResponsesItem struct {
@@ -947,9 +999,9 @@ type ResponsesItem struct {
 	Annotations *[]ResponsesAnnotation `json:"annotations,omitempty"`
 
 	// Function call fields
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
+	CallID    string             `json:"call_id,omitempty"`
+	Name      string             `json:"name,omitempty"`
+	Arguments FlexibleJSONString `json:"arguments,omitempty"`
 
 	// Function call output
 	Output        *ResponsesInput `json:"output,omitempty"`
@@ -1432,7 +1484,7 @@ func convertFunctionCallItem(item *ResponsesItem, toolCallIDs map[string]string)
 		Type: "function",
 		Function: model.FunctionCall{
 			Name:      item.Name,
-			Arguments: item.Arguments,
+			Arguments: item.Arguments.String(),
 		},
 	}
 }
@@ -1707,7 +1759,7 @@ func convertToResponsesAPIResponse(resp *model.InternalLLMResponse) *ResponsesRe
 					Type:      "function_call",
 					CallID:    toolCall.ID,
 					Name:      toolCall.Function.Name,
-					Arguments: toolCall.Function.Arguments,
+					Arguments: FlexibleJSONString(toolCall.Function.Arguments),
 					Status:    lo.ToPtr("completed"),
 				})
 			}

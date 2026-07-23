@@ -27,6 +27,20 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestParseRequestReturnsBadRequestForInvalidPayload(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":`))
+	_, _, _, err := parseRequest(inbound.InboundTypeOpenAIResponse, c)
+	if err == nil {
+		t.Fatal("expected invalid payload error")
+	}
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestHandleStreamResponsePassthroughAnthropicPreservesRawSSE(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -11,6 +11,47 @@ import (
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
 )
 
+func TestOpenAIModelListURLs(t *testing.T) {
+	got := openAIModelListURLs("https://example.com")
+	want := []string{"https://example.com/models", "https://example.com/v1/models", "https://example.com/api/v1/models", "https://example.com/v1beta/models"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("candidate %d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+	if got = openAIModelListURLs("https://example.com/v1/"); len(got) != 1 || got[0] != "https://example.com/v1/models" {
+		t.Fatalf("versioned base candidates: %v", got)
+	}
+}
+
+func TestFetchModelsFallsBackFromRootToV1(t *testing.T) {
+	var hits []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
+		if r.URL.Path == "/v1/models" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"gpt-4o"}]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	models, err := FetchModels(context.Background(), model.Channel{
+		Type:     outbound.OutboundTypeOpenAIChat,
+		BaseUrls: []model.BaseUrl{{URL: server.URL}},
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "sk-test"}},
+	})
+	if err != nil || len(models) != 1 || models[0] != "gpt-4o" {
+		t.Fatalf("models=%v err=%v", models, err)
+	}
+	if len(hits) < 2 || hits[0] != "/models" || hits[1] != "/v1/models" {
+		t.Fatalf("probe order: %v", hits)
+	}
+}
+
 func TestFetchModelsUsesBrowserHeadersAndSummarizesHTMLError(t *testing.T) {
 	observedUserAgent := ""
 	observedAccept := ""

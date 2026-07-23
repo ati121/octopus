@@ -508,7 +508,9 @@ func parseRequest(inboundType inbound.InboundType, c *gin.Context) ([]byte, *mod
 	inAdapter := inbound.Get(inboundType)
 	internalRequest, err := inAdapter.TransformRequest(c.Request.Context(), body)
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		// Malformed or unsupported client payloads are client errors. Returning
+		// 500 makes SDKs retry a request that cannot succeed.
+		resp.Error(c, http.StatusBadRequest, err.Error())
 		return nil, nil, nil, err
 	}
 
@@ -1332,6 +1334,10 @@ func (ra *relayAttempt) handleResponse(ctx context.Context, response *http.Respo
 		log.Warnf("failed to transform response: %v", err)
 		return fmt.Errorf("failed to transform outbound response: %w", err)
 	}
+	if isEmptyUpstreamResponse(internalResponse) {
+		log.Warnf("empty upstream response from channel %s", ra.channel.Name)
+		return ErrEmptyUpstreamResponse
+	}
 
 	inResponse, err := ra.inAdapter.TransformResponse(ctx, internalResponse)
 	if err != nil {
@@ -1341,6 +1347,16 @@ func (ra *relayAttempt) handleResponse(ctx context.Context, response *http.Respo
 
 	ra.c.Data(http.StatusOK, "application/json", inResponse)
 	return nil
+}
+
+func isEmptyUpstreamResponse(resp *model.InternalLLMResponse) bool {
+	if resp == nil || resp.Error != nil {
+		return resp == nil
+	}
+	if len(resp.Choices) > 0 || len(resp.EmbeddingData) > 0 || len(resp.RawResponsesOutputItems) > 0 {
+		return false
+	}
+	return true
 }
 
 // collectResponse 收集响应信息

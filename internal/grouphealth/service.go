@@ -141,6 +141,18 @@ func (s *Service) RunGroupHealth(ctx context.Context, groupID int, probeModes ..
 			continue
 		}
 
+		if channel.SkipHealthProbe {
+			if appendErr := s.repo.AppendAttempt(ctx, snapshot.ID, model.GroupHealthAttempt{
+				GroupItemID: item.ID, ChannelID: item.ChannelID, ChannelName: channel.Name,
+				ModelName: item.ModelName, Priority: item.Priority, Weight: item.Weight,
+				Status:       model.GroupHealthAttemptStatusSkipped,
+				ErrorMessage: "channel health probe disabled",
+			}); appendErr != nil {
+				return appendErr
+			}
+			continue
+		}
+
 		usedKey := channel.GetChannelKey()
 		if usedKey.ID == 0 || strings.TrimSpace(usedKey.ChannelKey) == "" {
 			attemptedCount++

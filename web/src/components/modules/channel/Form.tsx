@@ -40,6 +40,7 @@ export interface ChannelFormData {
     custom_model: string;
     enabled: boolean;
     auto_sync: boolean;
+    skip_health_probe: boolean;
     auto_group: AutoGroupType;
     match_regex: string;
 }
@@ -595,6 +596,13 @@ export function ChannelForm({
                             onCheckedChange={(checked) => onFormDataChange({ ...formData, auto_sync: checked })}
                         />
                         <span className="text-sm text-card-foreground">{t('autoSync')}</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                        <Switch
+                            checked={formData.skip_health_probe}
+                            onCheckedChange={(checked) => onFormDataChange({ ...formData, skip_health_probe: checked })}
+                        />
+                        <span className="text-sm text-card-foreground">{t('skipHealthProbe')}</span>
                     </label>
                 </div>
             </div>

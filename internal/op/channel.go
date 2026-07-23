@@ -254,6 +254,10 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		selectFields = append(selectFields, "auto_sync")
 		updates.AutoSync = *req.AutoSync
 	}
+	if req.SkipHealthProbe != nil {
+		selectFields = append(selectFields, "skip_health_probe")
+		updates.SkipHealthProbe = *req.SkipHealthProbe
+	}
 	if req.AutoGroup != nil {
 		selectFields = append(selectFields, "auto_group")
 		updates.AutoGroup = *req.AutoGroup

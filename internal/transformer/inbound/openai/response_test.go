@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -75,7 +76,7 @@ func TestResponseInboundTransformRequestMergesParallelToolCalls(t *testing.T) {
 		"model":"MiniMax-M2.7",
 		"parallel_tool_calls":true,
 		"input":[
-			{"id":"fc_a","type":"function_call","call_id":"call_a","name":"search_files","arguments":"{\"q\":\"a\"}"},
+				{"id":"fc_a","type":"function_call","call_id":"call_a","name":"search_files","arguments":{"q":"a"}},
 			{"id":"fc_b","type":"function_call","call_id":"call_b","name":"terminal","arguments":"{\"cmd\":\"pwd\"}"},
 			{"type":"function_call_output","call_id":"call_a","output":"result-a"},
 			{"type":"function_call_output","call_id":"call_b","output":"result-b"}
@@ -91,6 +92,9 @@ func TestResponseInboundTransformRequestMergesParallelToolCalls(t *testing.T) {
 	}
 	if len(req.Messages) != 3 || req.Messages[0].Role != "assistant" || len(req.Messages[0].ToolCalls) != 2 || req.Messages[1].Role != "tool" || req.Messages[2].Role != "tool" {
 		t.Fatalf("unexpected transformed protocol order: %#v", req.Messages)
+	}
+	if req.Messages[0].ToolCalls[0].Function.Arguments != `{"q":"a"}` {
+		t.Fatalf("object arguments were not preserved as JSON: %q", req.Messages[0].ToolCalls[0].Function.Arguments)
 	}
 }
 
@@ -140,6 +144,66 @@ func TestConvertInputToMessagesUsesInternalToolCallShape(t *testing.T) {
 	}
 	if messages[0].ToolCalls[0].Type != "function" || messages[0].ToolCalls[0].ID != "fc_id" {
 		t.Fatalf("expected function call id fallback to item id, got %#v", messages[0].ToolCalls[0])
+	}
+}
+
+func TestFlexibleJSONStringAcceptsStringObjectAndNull(t *testing.T) {
+	var value FlexibleJSONString
+	if err := json.Unmarshal([]byte(`"hello"`), &value); err != nil || value.String() != "hello" {
+		t.Fatalf("string: err=%v value=%q", err, value)
+	}
+	if err := json.Unmarshal([]byte(`{ "query": "test" }`), &value); err != nil || !strings.Contains(value.String(), `"query"`) {
+		t.Fatalf("object: err=%v value=%q", err, value)
+	}
+	raw, err := json.Marshal(value)
+	if err != nil || len(raw) == 0 || raw[0] != '{' {
+		t.Fatalf("object representation was not preserved: raw=%s err=%v", raw, err)
+	}
+	standard := FlexibleJSONString(`{"query":"test"}`)
+	raw, err = json.Marshal(standard)
+	if err != nil || string(raw) != `"{\"query\":\"test\"}"` {
+		t.Fatalf("internally-created function arguments must remain a JSON string: raw=%s err=%v", raw, err)
+	}
+	if err := json.Unmarshal([]byte(`null`), &value); err != nil || value.String() != "" {
+		t.Fatalf("null: err=%v value=%q", err, value)
+	}
+}
+
+func TestResponsesInputAcceptsNull(t *testing.T) {
+	var input ResponsesInput
+	if err := json.Unmarshal([]byte(`null`), &input); err != nil {
+		t.Fatalf("null content: %v", err)
+	}
+	if input.Text != nil || len(input.Items) != 0 {
+		t.Fatalf("expected empty input, got %#v", input)
+	}
+}
+
+func TestTransformRequestPreservesObjectArgumentsForResponsesPassthrough(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.5",
+		"input":[
+			{"type":"reasoning","content":null,"summary":[]},
+			{"type":"tool_search_call","call_id":"call_search","arguments":{"query":"review","limit":5}}
+		]
+	}`)
+	req, err := (&ResponseInbound{}).TransformRequest(context.Background(), body)
+	if err != nil {
+		t.Fatalf("TransformRequest failed: %v", err)
+	}
+	if !req.HasOpenAIResponsesPassthrough() {
+		t.Fatal("expected unsupported tool_search_call to require passthrough")
+	}
+	var items []map[string]any
+	if err := json.Unmarshal(req.OpenAIRawInputItems(), &items); err != nil {
+		t.Fatalf("raw input items: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("raw items: %#v", items)
+	}
+	arguments, ok := items[1]["arguments"].(map[string]any)
+	if !ok || arguments["query"] != "review" {
+		t.Fatalf("object arguments were not preserved: %#v", items[1]["arguments"])
 	}
 }
 
