@@ -156,7 +156,9 @@
             "sortByCount": "次數",
             "sortByTokens": "Tokens",
             "noData": "暫無排行數據",
-            "successRate": "成功率"
+            "successRate": "成功率",
+            "dimensionChannel": "按渠道",
+            "dimensionModel": "按模型"
         },
         "groupHealth": {
             "title": "分組健康",
@@ -350,6 +352,9 @@
                 "supportedModels": "支援的模型",
                 "noModels": "暫無可選模型",
                 "modelsHint": "不選擇則為無限制",
+                "modelListAllow": "白名單",
+                "modelListDeny": "黑名單",
+                "modelsHintDeny": "選中的模型將被禁止；不選則不限制",
                 "enabled": "是否啟用",
                 "cancel": "取消",
                 "create": "建立",
@@ -673,6 +678,14 @@
                 "title": "全域預設模式",
                 "description": "啟用後，所有站點投影供應源會統一使用所選匹配方式；下方單獨供應源設定會保留，並在全域關閉後生效。"
             },
+            "createMissing": {
+                "title": "精確匹配時自動建立缺失分組",
+                "description": "開啟後，當供應源使用精確匹配且模型尚無同名對外分組時，會自動建立 RoundRobin 分組並掛載該模型。模糊/正則匹配不會建立。"
+            },
+            "normalize": {
+                "title": "精確匹配時正規化模型名",
+                "description": "開啟後，精確匹配會忽略供應商前綴與日期後綴，例如 openai/gpt-4o-2024-08-06 可匹配對外分組 gpt-4o；自動建立缺失分組時也使用正規化後的名稱。"
+            },
             "sections": {
                 "channels": "供應源列表"
             },
@@ -774,6 +787,7 @@
             "failed": "失敗",
             "skipped": "跳過",
             "circuitBreak": "熔斷",
+            "routeReason": "選路",
             "disableModel": "停用模型",
             "disabling": "停用中",
             "disabled": "已停用",

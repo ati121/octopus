@@ -122,6 +122,8 @@ type GroupPinRequest struct {
 
 type GroupAutoGroupConfig struct {
 	ProjectedGlobalAutoGroup AutoGroupType          `json:"projected_global_auto_group"`
+	CreateMissingGroups      bool                   `json:"create_missing_groups"`
+	NormalizeModelNames      bool                   `json:"normalize_model_names"`
 	Sources                  []GroupAutoGroupSource `json:"sources"`
 }
 
@@ -151,6 +153,8 @@ type GroupAutoGroupSourceUpdateRequest struct {
 
 type GroupAutoGroupConfigUpdateRequest struct {
 	ProjectedGlobalAutoGroup *AutoGroupType                      `json:"projected_global_auto_group,omitempty"`
+	CreateMissingGroups      *bool                               `json:"create_missing_groups,omitempty"`
+	NormalizeModelNames      *bool                               `json:"normalize_model_names,omitempty"`
 	Items                    []GroupAutoGroupSourceUpdateRequest `json:"items,omitempty"`
 	RunNow                   bool                                `json:"run_now"`
 }

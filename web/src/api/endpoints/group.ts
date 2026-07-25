@@ -143,6 +143,8 @@ export interface GroupAutoGroupSource {
 
 export interface GroupAutoGroupConfig {
     projected_global_auto_group: AutoGroupType;
+    create_missing_groups: boolean;
+    normalize_model_names: boolean;
     sources: GroupAutoGroupSource[];
 }
 
@@ -153,6 +155,8 @@ export interface GroupAutoGroupSourceUpdateRequest {
 
 export interface GroupAutoGroupConfigUpdateRequest {
     projected_global_auto_group?: AutoGroupType;
+    create_missing_groups?: boolean;
+    normalize_model_names?: boolean;
     items?: GroupAutoGroupSourceUpdateRequest[];
     run_now?: boolean;
 }
@@ -536,4 +540,3 @@ export function useToggleGroupPin() {
         onError: (error) => logger.error('置顶切换失败:', error),
     });
 }
-

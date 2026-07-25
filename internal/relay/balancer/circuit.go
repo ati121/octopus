@@ -149,6 +149,71 @@ func IsTripped(channelID, keyID int, modelName string) (tripped bool, remaining 
 	}
 }
 
+type CircuitSnapshot struct {
+	ChannelID           int    `json:"channel_id"`
+	ChannelKeyID        int    `json:"channel_key_id"`
+	ModelName           string `json:"model_name"`
+	State               string `json:"state"`
+	ConsecutiveFailures int64  `json:"consecutive_failures"`
+	TripCount           int    `json:"trip_count"`
+	RemainingCooldownMS int64  `json:"remaining_cooldown_ms"`
+}
+
+func ListCircuitSnapshots() []CircuitSnapshot {
+	result := make([]CircuitSnapshot, 0)
+	globalBreaker.Range(func(key, value any) bool {
+		keyString, ok := key.(string)
+		if !ok {
+			return true
+		}
+		entry, ok := value.(*circuitEntry)
+		if !ok || entry == nil {
+			return true
+		}
+		parts := strings.SplitN(keyString, ":", 3)
+		if len(parts) != 3 {
+			return true
+		}
+		var channelID, keyID int
+		_, _ = fmt.Sscanf(parts[0], "%d", &channelID)
+		_, _ = fmt.Sscanf(parts[1], "%d", &keyID)
+
+		entry.mu.Lock()
+		state := entry.State
+		failures := entry.ConsecutiveFailures
+		tripCount := entry.TripCount
+		lastFailure := entry.LastFailureTime
+		entry.mu.Unlock()
+		if state == StateClosed && failures == 0 && tripCount == 0 {
+			return true
+		}
+
+		snapshot := CircuitSnapshot{
+			ChannelID:           channelID,
+			ChannelKeyID:        keyID,
+			ModelName:           parts[2],
+			ConsecutiveFailures: failures,
+			TripCount:           tripCount,
+		}
+		switch state {
+		case StateOpen:
+			snapshot.State = "open"
+			remaining := GetCooldown(tripCount) - time.Since(lastFailure)
+			if remaining < 0 {
+				remaining = 0
+			}
+			snapshot.RemainingCooldownMS = remaining.Milliseconds()
+		case StateHalfOpen:
+			snapshot.State = "half_open"
+		default:
+			snapshot.State = "closed"
+		}
+		result = append(result, snapshot)
+		return true
+	})
+	return result
+}
+
 // RecordSuccess 记录成功，重置熔断器状态
 func RecordSuccess(channelID, keyID int, modelName string) {
 	key := circuitKey(channelID, keyID, modelName)

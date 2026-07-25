@@ -156,7 +156,9 @@
             "sortByCount": "Count",
             "sortByTokens": "Tokens",
             "noData": "No ranking data",
-            "successRate": "Success Rate"
+            "successRate": "Success Rate",
+            "dimensionChannel": "By channel",
+            "dimensionModel": "By model"
         },
         "groupHealth": {
             "title": "Group Health",
@@ -350,6 +352,9 @@
                 "supportedModels": "Supported Models",
                 "noModels": "No models available",
                 "modelsHint": "Leave empty for unlimited",
+                "modelListAllow": "Allow list",
+                "modelListDeny": "Deny list",
+                "modelsHintDeny": "Selected models are blocked; leave empty for no restriction",
                 "enabled": "Enabled",
                 "cancel": "Cancel",
                 "create": "Create",
@@ -673,6 +678,14 @@
                 "title": "Global default mode",
                 "description": "When enabled, all site-projected channels use the selected match mode. Per-channel settings below are kept and take effect after the global mode is disabled."
             },
+            "createMissing": {
+                "title": "Create missing groups on exact match",
+                "description": "When enabled, exact-match auto-group creates a RoundRobin group for each channel model that has no same-named public group, and attaches it. Fuzzy/regex modes never create groups."
+            },
+            "normalize": {
+                "title": "Normalize model names on exact match",
+                "description": "When enabled, exact match ignores provider prefixes and date suffixes (for example, openai/gpt-4o-2024-08-06 matches public group gpt-4o). Missing groups also use the normalized public name."
+            },
             "sections": {
                 "channels": "Channels"
             },
@@ -774,6 +787,7 @@
             "failed": "Failed",
             "skipped": "Skipped",
             "circuitBreak": "Circuit Break",
+            "routeReason": "Route",
             "disableModel": "Disable Model",
             "disabling": "Disabling",
             "disabled": "Disabled",

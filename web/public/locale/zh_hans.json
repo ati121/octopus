@@ -156,7 +156,9 @@
             "sortByCount": "次数",
             "sortByTokens": "Tokens",
             "noData": "暂无排行数据",
-            "successRate": "成功率"
+            "successRate": "成功率",
+            "dimensionChannel": "按渠道",
+            "dimensionModel": "按模型"
         },
         "groupHealth": {
             "title": "分组健康",
@@ -350,6 +352,9 @@
                 "supportedModels": "支持的模型",
                 "noModels": "暂无可选模型",
                 "modelsHint": "不选择则为无限制",
+                "modelListAllow": "白名单",
+                "modelListDeny": "黑名单",
+                "modelsHintDeny": "选中的模型将被禁止；不选则不限制",
                 "enabled": "是否启用",
                 "cancel": "取消",
                 "create": "创建",
@@ -673,6 +678,14 @@
                 "title": "全局默认模式",
                 "description": "开启后，所有站点投影渠道会统一使用所选匹配方式；下方单独渠道设置会保留，并在全局关闭后生效。"
             },
+            "createMissing": {
+                "title": "精确匹配时自动创建缺失分组",
+                "description": "开启后，当渠道使用精确匹配且模型尚无同名对外分组时，会自动创建 RoundRobin 分组并挂载该模型。模糊/正则匹配不会创建。"
+            },
+            "normalize": {
+                "title": "精确匹配时归一化模型名",
+                "description": "开启后，精确匹配会忽略供应商前缀与日期后缀，例如 openai/gpt-4o-2024-08-06 可匹配对外分组 gpt-4o；自动创建缺失分组时也使用归一化后的名称。"
+            },
             "sections": {
                 "channels": "渠道列表"
             },
@@ -774,6 +787,7 @@
             "failed": "失败",
             "skipped": "跳过",
             "circuitBreak": "熔断",
+            "routeReason": "选路",
             "disableModel": "禁用模型",
             "disabling": "禁用中",
             "disabled": "已禁用",

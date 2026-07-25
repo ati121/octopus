@@ -2,19 +2,30 @@ package balancer
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
 )
 
+type stickySource string
+
+const (
+	stickySourceNone        stickySource = ""
+	stickySourcePreferred   stickySource = "preferred"
+	stickySourceSessionKeep stickySource = "session_keep"
+)
+
 // Iterator 统一的负载均衡迭代器
 // 内部编排：策略排序 + 粘性优先 + 决策追踪
 type Iterator struct {
-	candidates  []model.GroupItem
-	index       int
-	stickyIdx   int // 粘性通道在 candidates 中的位置，-1 表示无
-	stickyKeyID int
-	modelName   string // 请求模型名（用于熔断检查）
+	candidates   []model.GroupItem
+	index        int
+	stickyIdx    int // 粘性通道在 candidates 中的位置，-1 表示无
+	stickyKeyID  int
+	stickySource stickySource
+	mode         model.GroupMode
+	modelName    string // 请求模型名（用于熔断检查）
 
 	// 内嵌追踪
 	attempts []model.ChannelAttempt
@@ -35,6 +46,7 @@ func NewIteratorWithPreference(group model.Group, apiKeyID int, requestModel str
 
 	stickyIdx := -1
 	stickyKeyID := 0
+	source := stickySourceNone
 	if preferred != nil && preferred.ChannelID > 0 {
 		for i, item := range candidates {
 			if item.ChannelID == preferred.ChannelID {
@@ -45,6 +57,7 @@ func NewIteratorWithPreference(group model.Group, apiKeyID int, requestModel str
 				}
 				stickyIdx = 0
 				stickyKeyID = preferred.ChannelKeyID
+				source = stickySourcePreferred
 				break
 			}
 		}
@@ -62,6 +75,7 @@ func NewIteratorWithPreference(group model.Group, apiKeyID int, requestModel str
 					}
 					stickyIdx = 0
 					stickyKeyID = sticky.ChannelKeyID
+					source = stickySourceSessionKeep
 					break
 				}
 			}
@@ -69,11 +83,13 @@ func NewIteratorWithPreference(group model.Group, apiKeyID int, requestModel str
 	}
 
 	return &Iterator{
-		candidates:  candidates,
-		index:       -1,
-		stickyIdx:   stickyIdx,
-		stickyKeyID: stickyKeyID,
-		modelName:   requestModel,
+		candidates:   candidates,
+		index:        -1,
+		stickyIdx:    stickyIdx,
+		stickyKeyID:  stickyKeyID,
+		stickySource: source,
+		mode:         group.Mode,
+		modelName:    requestModel,
 	}
 }
 
@@ -110,19 +126,79 @@ func (it *Iterator) Index() int {
 	return it.index
 }
 
-// Skip 记录当前通道被跳过（通道禁用、无Key、类型不兼容等）
-func (it *Iterator) Skip(channelID, channelKeyID int, channelName, msg string) {
-	it.count++
-	it.attempts = append(it.attempts, model.ChannelAttempt{
+func (it *Iterator) Mode() model.GroupMode {
+	return it.mode
+}
+
+func (it *Iterator) currentReason() string {
+	if it.index < 0 || it.index >= len(it.candidates) {
+		return ""
+	}
+	item := it.candidates[it.index]
+	parts := []string{
+		fmt.Sprintf("mode=%s", groupModeLabel(it.mode)),
+		fmt.Sprintf("order=%d/%d", it.index+1, len(it.candidates)),
+	}
+	switch it.mode {
+	case model.GroupModeFailover:
+		parts = append(parts, fmt.Sprintf("priority=%d", item.Priority))
+	case model.GroupModeWeighted:
+		weight := item.Weight
+		if weight <= 0 {
+			weight = 1
+		}
+		parts = append(parts, fmt.Sprintf("weight=%d", weight))
+	}
+	if it.IsSticky() {
+		switch it.stickySource {
+		case stickySourcePreferred:
+			parts = append(parts, "sticky=replay_or_preference")
+		case stickySourceSessionKeep:
+			parts = append(parts, "sticky=session_keep")
+		default:
+			parts = append(parts, "sticky=true")
+		}
+		if it.stickyKeyID > 0 {
+			parts = append(parts, fmt.Sprintf("sticky_key=%d", it.stickyKeyID))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func groupModeLabel(mode model.GroupMode) string {
+	switch mode {
+	case model.GroupModeRoundRobin:
+		return "round_robin"
+	case model.GroupModeRandom:
+		return "random"
+	case model.GroupModeFailover:
+		return "failover"
+	case model.GroupModeWeighted:
+		return "weighted"
+	default:
+		return fmt.Sprintf("mode_%d", int(mode))
+	}
+}
+
+func (it *Iterator) baseAttempt(channelID, channelKeyID int, channelName string) model.ChannelAttempt {
+	return model.ChannelAttempt{
 		ChannelID:    channelID,
 		ChannelKeyID: channelKeyID,
 		ChannelName:  channelName,
 		ModelName:    it.candidates[it.index].ModelName,
 		AttemptNum:   it.count,
-		Status:       model.AttemptSkipped,
 		Sticky:       it.IsSticky(),
-		Msg:          msg,
-	})
+		Reason:       it.currentReason(),
+	}
+}
+
+// Skip 记录当前通道被跳过（通道禁用、无Key、类型不兼容等）
+func (it *Iterator) Skip(channelID, channelKeyID int, channelName, msg string) {
+	it.count++
+	attempt := it.baseAttempt(channelID, channelKeyID, channelName)
+	attempt.Status = model.AttemptSkipped
+	attempt.Msg = msg
+	it.attempts = append(it.attempts, attempt)
 }
 
 // SkipCircuitBreak 检查熔断状态，若已熔断自动记录（含剩余冷却时间）并返回 true
@@ -137,16 +213,10 @@ func (it *Iterator) SkipCircuitBreak(channelID, channelKeyID int, channelName st
 		msg = fmt.Sprintf("circuit breaker tripped, remaining cooldown: %ds", int(remaining.Seconds()))
 	}
 	it.count++
-	it.attempts = append(it.attempts, model.ChannelAttempt{
-		ChannelID:    channelID,
-		ChannelKeyID: channelKeyID,
-		ChannelName:  channelName,
-		ModelName:    modelName,
-		AttemptNum:   it.count,
-		Status:       model.AttemptCircuitBreak,
-		Sticky:       it.IsSticky(),
-		Msg:          msg,
-	})
+	attempt := it.baseAttempt(channelID, channelKeyID, channelName)
+	attempt.Status = model.AttemptCircuitBreak
+	attempt.Msg = msg
+	it.attempts = append(it.attempts, attempt)
 	return true
 }
 
@@ -154,14 +224,7 @@ func (it *Iterator) SkipCircuitBreak(channelID, channelKeyID int, channelName st
 func (it *Iterator) StartAttempt(channelID, channelKeyID int, channelName string) *AttemptSpan {
 	it.count++
 	return &AttemptSpan{
-		attempt: model.ChannelAttempt{
-			ChannelID:    channelID,
-			ChannelKeyID: channelKeyID,
-			ChannelName:  channelName,
-			ModelName:    it.candidates[it.index].ModelName,
-			AttemptNum:   it.count,
-			Sticky:       it.IsSticky(),
-		},
+		attempt:   it.baseAttempt(channelID, channelKeyID, channelName),
 		startTime: time.Now(),
 		iter:      it,
 	}

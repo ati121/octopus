@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"strings"
 	"sync"
 	"time"
 
@@ -342,6 +344,12 @@ func StatsChannelUpdate(channelID int, metrics model.StatsMetrics) error {
 	statsChannelCacheNeedUpdateLock.Lock()
 	statsChannelCacheNeedUpdate[channelID] = struct{}{}
 	statsChannelCacheNeedUpdateLock.Unlock()
+	for count := int64(0); count < metrics.RequestSuccess; count++ {
+		StatsChannelRecentRecord(channelID, true)
+	}
+	for count := int64(0); count < metrics.RequestFailed; count++ {
+		StatsChannelRecentRecord(channelID, false)
+	}
 	return nil
 }
 
@@ -368,8 +376,16 @@ func StatsModelUpdate(stats model.StatsModel) error {
 	modelCache, ok := statsModelCache.Get(stats.ID)
 	if !ok {
 		modelCache = model.StatsModel{
-			ID: stats.ID,
+			ID:        stats.ID,
+			Name:      stats.Name,
+			ChannelID: stats.ChannelID,
 		}
+	}
+	if modelCache.Name == "" && stats.Name != "" {
+		modelCache.Name = stats.Name
+	}
+	if modelCache.ChannelID == 0 && stats.ChannelID != 0 {
+		modelCache.ChannelID = stats.ChannelID
 	}
 	modelCache.StatsMetrics.Add(stats.StatsMetrics)
 	statsModelCache.Set(stats.ID, modelCache)
@@ -377,6 +393,37 @@ func StatsModelUpdate(stats model.StatsModel) error {
 	statsModelCacheNeedUpdate[stats.ID] = struct{}{}
 	statsModelCacheNeedUpdateLock.Unlock()
 	return nil
+}
+
+func StatsModelNameUpdate(modelName string, channelID int, metrics model.StatsMetrics) error {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return nil
+	}
+	return StatsModelUpdate(model.StatsModel{
+		ID:           statsModelNameID(modelName),
+		Name:         modelName,
+		ChannelID:    channelID,
+		StatsMetrics: metrics,
+	})
+}
+
+func statsModelNameID(modelName string) int {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(strings.ToLower(strings.TrimSpace(modelName))))
+	id := int(hash.Sum32() & 0x7fffffff)
+	if id == 0 {
+		return 1
+	}
+	return id
+}
+
+func StatsModelList() []model.StatsModel {
+	models := make([]model.StatsModel, 0, statsModelCache.Len())
+	for _, value := range statsModelCache.GetAll() {
+		models = append(models, value)
+	}
+	return models
 }
 
 func StatsAPIKeyUpdate(apiKeyID int, metrics model.StatsMetrics) error {
@@ -633,6 +680,19 @@ func statsRefreshCache(ctx context.Context) error {
 		}
 	}
 	statsHourlyCacheLock.Unlock()
+
+	var loadedModels []model.StatsModel
+	result = dbConn.Find(&loadedModels)
+	if result.Error != nil {
+		return fmt.Errorf("failed to get model stats: %v", result.Error)
+	}
+	statsModelCache.Clear()
+	statsModelCacheNeedUpdateLock.Lock()
+	statsModelCacheNeedUpdate = make(map[int]struct{})
+	statsModelCacheNeedUpdateLock.Unlock()
+	for _, value := range loadedModels {
+		statsModelCache.Set(value.ID, value)
+	}
 
 	return nil
 }

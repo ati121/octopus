@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
@@ -379,6 +380,46 @@ func GroupItemDel(id int, ctx context.Context) error {
 		return err
 	}
 	resetBalancerStateForChannel(item.ChannelID)
+	return nil
+}
+
+// GroupItemBatchDelInGroup removes stale model mappings for one channel in a
+// single group without affecting the channel's membership in other groups.
+func GroupItemBatchDelInGroup(groupID, channelID int, modelNames []string, ctx context.Context) error {
+	if groupID == 0 || channelID == 0 || len(modelNames) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(modelNames))
+	unique := make([]string, 0, len(modelNames))
+	for _, name := range modelNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		unique = append(unique, name)
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+
+	result := db.GetDB().WithContext(ctx).
+		Where("group_id = ? AND channel_id = ? AND model_name IN ?", groupID, channelID, unique).
+		Delete(&model.GroupItem{})
+	if result.Error != nil {
+		return fmt.Errorf("failed to delete group items: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return nil
+	}
+	if err := groupRefreshCacheByID(groupID, ctx); err != nil {
+		return fmt.Errorf("failed to refresh group cache: %w", err)
+	}
+	resetBalancerStateForChannel(channelID)
 	return nil
 }
 

@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/conf"
@@ -18,6 +19,7 @@ import (
 type RelayMetrics struct {
 	APIKeyID     int
 	RequestModel string
+	ClientIP     string
 	StartTime    time.Time
 	LogID        int64
 
@@ -50,8 +52,16 @@ func (m *RelayMetrics) StartLog() {
 	m.LogID = op.RelayLogStart(model.RelayLog{
 		Time:             m.StartTime.Unix(),
 		RequestModelName: m.RequestModel,
+		ClientIP:         m.ClientIP,
 		ActualModelName:  m.RequestModel,
 	})
+}
+
+func (m *RelayMetrics) SetClientIP(ip string) {
+	if m == nil {
+		return
+	}
+	m.ClientIP = strings.TrimSpace(ip)
 }
 
 func NewRelayMetrics(apiKeyID int, requestModel string, rawBody []byte, req *transformerModel.InternalLLMRequest) *RelayMetrics {
@@ -119,6 +129,7 @@ func (m *RelayMetrics) SetInternalResponse(resp *transformerModel.InternalLLMRes
 		m.Stats.InputToken = usage.EffectiveInputTokens()
 		m.Stats.OutputToken = usage.CompletionTokens
 		m.Stats.CacheReadToken = cacheReadTokens
+		m.Stats.CacheWriteToken = cacheWriteTokens
 		inputReported = usage.EffectiveInputTokens() > 0
 
 		if modelPrice := resolveModelPrice(actualModel); modelPrice != nil {
@@ -150,12 +161,13 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 	duration := time.Since(m.StartTime)
 
 	globalStats := model.StatsMetrics{
-		WaitTime:       duration.Milliseconds(),
-		InputToken:     m.Stats.InputToken,
-		OutputToken:    m.Stats.OutputToken,
-		CacheReadToken: m.Stats.CacheReadToken,
-		InputCost:      m.Stats.InputCost,
-		OutputCost:     m.Stats.OutputCost,
+		WaitTime:        duration.Milliseconds(),
+		InputToken:      m.Stats.InputToken,
+		OutputToken:     m.Stats.OutputToken,
+		CacheReadToken:  m.Stats.CacheReadToken,
+		CacheWriteToken: m.Stats.CacheWriteToken,
+		InputCost:       m.Stats.InputCost,
+		OutputCost:      m.Stats.OutputCost,
 	}
 	if success {
 		globalStats.RequestSuccess = 1
@@ -172,6 +184,13 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 		op.StatsChannelUpdate(channelID, globalStats)
 	} else {
 		updateFinalChannelUsageStats(channelID, globalStats)
+	}
+	modelName := strings.TrimSpace(m.ActualModel)
+	if modelName == "" {
+		modelName = strings.TrimSpace(m.RequestModel)
+	}
+	if modelName != "" {
+		_ = op.StatsModelNameUpdate(modelName, channelID, globalStats)
 	}
 	op.StatsSiteModelHourlyRecordAttempts(attempts, m.ActualModel)
 
@@ -243,6 +262,7 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 		ID:               m.LogID,
 		Time:             m.StartTime.Unix(),
 		RequestModelName: m.RequestModel,
+		ClientIP:         m.ClientIP,
 		ChannelName:      channelName,
 		ChannelId:        channelID,
 		ActualModelName:  actualModel,
@@ -317,13 +337,14 @@ func updateFinalChannelUsageStats(channelID int, metrics model.StatsMetrics) {
 		return
 	}
 	usageStats := model.StatsMetrics{
-		InputToken:     metrics.InputToken,
-		OutputToken:    metrics.OutputToken,
-		CacheReadToken: metrics.CacheReadToken,
-		InputCost:      metrics.InputCost,
-		OutputCost:     metrics.OutputCost,
+		InputToken:      metrics.InputToken,
+		OutputToken:     metrics.OutputToken,
+		CacheReadToken:  metrics.CacheReadToken,
+		CacheWriteToken: metrics.CacheWriteToken,
+		InputCost:       metrics.InputCost,
+		OutputCost:      metrics.OutputCost,
 	}
-	if usageStats.InputToken == 0 && usageStats.OutputToken == 0 && usageStats.CacheReadToken == 0 && usageStats.InputCost == 0 && usageStats.OutputCost == 0 {
+	if usageStats.InputToken == 0 && usageStats.OutputToken == 0 && usageStats.CacheReadToken == 0 && usageStats.CacheWriteToken == 0 && usageStats.InputCost == 0 && usageStats.OutputCost == 0 {
 		return
 	}
 	op.StatsChannelUpdate(channelID, usageStats)

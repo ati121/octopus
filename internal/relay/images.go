@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -95,14 +94,10 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 		stream = s
 	}
 
-	// supported_models 校验（复用 APIKeyAuth 注入）
-	supportedModels := strings.TrimSpace(c.GetString("supported_models"))
-	if supportedModels != "" {
-		supportedModelsArray := strings.Split(supportedModels, ",")
-		if !slices.Contains(supportedModelsArray, requestModel) {
-			resp.ErrorWithCode(c, http.StatusBadRequest, CodeRelayModelNotSupported, "model not supported")
-			return
-		}
+	// supported_models 校验（复用 APIKeyAuth 注入，支持白名单和黑名单）。
+	if !apiKeyAllowsModel(c.GetString("supported_models"), c.GetString("model_list_mode"), requestModel) {
+		resp.ErrorWithCode(c, http.StatusBadRequest, CodeRelayModelNotSupported, "model not supported")
+		return
 	}
 
 	// 获取通道分组

@@ -20,6 +20,7 @@ type ChannelAttempt struct {
 	Status       AttemptStatus `json:"status"`
 	Duration     int           `json:"duration"`
 	Sticky       bool          `json:"sticky,omitempty"`
+	Reason       string        `json:"reason,omitempty"`
 	Msg          string        `json:"msg,omitempty"`
 }
 
@@ -54,6 +55,7 @@ type RelayLog struct {
 	Time                 int64               `json:"time"`                                     // 时间戳（秒）
 	RequestModelName     string              `json:"request_model_name"`                       // 请求模型名称
 	RequestAPIKeyName    string              `json:"request_api_key_name"`                     // 请求使用的 API Key 名称
+	ClientIP             string              `json:"client_ip" gorm:"type:varchar(64)"`        // 调用方 IP
 	ChannelId            int                 `json:"channel" gorm:"index"`                     // 实际使用的渠道ID
 	ChannelName          string              `json:"channel_name"`                             // 渠道名称
 	ActualModelName      string              `json:"actual_model_name"`                        // 实际使用模型名称

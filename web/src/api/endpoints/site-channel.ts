@@ -489,6 +489,35 @@ export function useCreateSiteChannelKey(siteId: number, accountId: number) {
     });
 }
 
+export type EnsurePublicGroupsResult = {
+    account_id: number;
+    site_id: number;
+    channels_processed: number;
+    groups_created: number;
+    items_added: number;
+    created_group_names?: string[];
+    normalize: boolean;
+    message: string;
+};
+
+export function useEnsureSitePublicGroups(siteId: number, accountId: number) {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async () => apiClient.post<EnsurePublicGroupsResult>(
+            getAccountPath(siteId, accountId, '/ensure-public-groups'),
+            {},
+        ),
+        onSuccess: () => {
+            invalidateSiteChannelAndRelated(queryClient);
+            queryClient.invalidateQueries({ queryKey: ['groups', 'list'] });
+        },
+        onError: (error) => {
+            logger.error('ensure public groups failed:', error);
+        },
+    });
+}
+
 export function useUpdateSiteChannelModelDisabled() {
     const queryClient = useQueryClient();
 

@@ -86,6 +86,7 @@ import {
     useCreateSiteChannelKey,
     useAddSiteManualModels,
     useDeleteSiteManualModel,
+    useEnsureSitePublicGroups,
     useResetSiteChannelModelRoutes,
     useSiteChannelList,
     useUpdateSiteProjectedChannelSettings,
@@ -1329,6 +1330,7 @@ function SiteAccountPanel({
     const routeMutation = useUpdateSiteChannelModelRoutes(siteId, account.account_id);
     const disabledMutation = useUpdateSiteChannelModelDisabled();
     const resetMutation = useResetSiteChannelModelRoutes(siteId, account.account_id);
+    const ensurePublicGroupsMutation = useEnsureSitePublicGroups(siteId, account.account_id);
     const enableSiteAccount = useEnableSiteAccount();
 
     const translateSiteError = useCallback(
@@ -1824,6 +1826,17 @@ function SiteAccountPanel({
         });
     };
 
+    const handleEnsurePublicGroups = () => {
+        ensurePublicGroupsMutation.mutate(undefined, {
+            onSuccess: (result) => {
+                toast.success(result.message);
+            },
+            onError: (error) => {
+                toast.error(translateSiteError(error, '生成/补齐对外分组失败'));
+            },
+        });
+    };
+
     const toggleQuickFilter = (filter: SiteChannelQuickFilter) => {
         const next = panelPreferences.quickFilters.includes(filter)
             ? panelPreferences.quickFilters.filter((item) => item !== filter)
@@ -2132,6 +2145,16 @@ function SiteAccountPanel({
                                         {panelPreferences.compactMode ? <Check className="size-4 text-primary" /> : null}
                                     </button>
                                 </div>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="mt-2 h-8 w-full justify-start rounded-xl px-3"
+                                    onClick={handleEnsurePublicGroups}
+                                    disabled={ensurePublicGroupsMutation.isPending}
+                                >
+                                    <Waypoints className={cn('size-4', ensurePublicGroupsMutation.isPending && 'animate-pulse')} />
+                                    {ensurePublicGroupsMutation.isPending ? '生成中...' : '生成/补齐对外分组'}
+                                </Button>
                                 <Button
                                     type="button"
                                     variant="outline"

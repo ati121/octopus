@@ -37,7 +37,22 @@ func init() {
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/projected-channel-settings", http.MethodPut).Handle(updateSiteProjectedChannelSettings)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/manual-models", http.MethodPost).Handle(addSiteManualModels)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/manual-models/delete", http.MethodPost).Handle(deleteSiteManualModel)).
-		AddRoute(router.NewRoute("/:siteId/account/:accountId/model-routes/reset", http.MethodPost).Handle(resetSiteChannelModelRoutes))
+		AddRoute(router.NewRoute("/:siteId/account/:accountId/model-routes/reset", http.MethodPost).Handle(resetSiteChannelModelRoutes)).
+		AddRoute(router.NewRoute("/:siteId/account/:accountId/ensure-public-groups", http.MethodPost).Handle(ensureSitePublicGroups))
+}
+
+func ensureSitePublicGroups(c *gin.Context) {
+	siteID, accountID, ok := parseSiteChannelIDs(c)
+	if !ok {
+		return
+	}
+	result, err := op.EnsurePublicGroupsForSiteAccount(siteID, accountID, c.Request.Context())
+	if err != nil {
+		status := siteChannelMutationErrorStatus(err)
+		resp.ErrorWithAppError(c, status, apperror.Wrap(op.CodeSiteChannelProjectedSettingsFailed, "ensure public groups failed", err).WithStatus(status))
+		return
+	}
+	resp.Success(c, result)
 }
 
 func listSiteChannel(c *gin.Context) {

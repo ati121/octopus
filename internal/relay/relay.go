@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -64,13 +63,9 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 	if err != nil {
 		return
 	}
-	supportedModels := c.GetString("supported_models")
-	if supportedModels != "" {
-		supportedModelsArray := strings.Split(supportedModels, ",")
-		if !slices.Contains(supportedModelsArray, internalRequest.Model) {
-			resp.ErrorWithCode(c, http.StatusBadRequest, CodeRelayModelNotSupported, "model not supported")
-			return
-		}
+	if !apiKeyAllowsModel(c.GetString("supported_models"), c.GetString("model_list_mode"), internalRequest.Model) {
+		resp.ErrorWithCode(c, http.StatusBadRequest, CodeRelayModelNotSupported, "model not supported")
+		return
 	}
 
 	requestModel := internalRequest.Model
@@ -126,13 +121,14 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 	}
 
 	metrics := NewRelayMetrics(apiKeyID, requestModel, rawBody, internalRequest)
+	metrics.SetClientIP(c.ClientIP())
 	metrics.StartLog()
 
 	// === 早期心跳 ===
 	// 在所有 forward / 重试 / 退避之前启动早期心跳协程，覆盖前置阶段（连接慢、failover、退避叠加）
 	// 期间向客户端发 SSE 注释字节，避免被 Cloudflare 在 120s 零字节阈值上判 524。
-	// 仅对流式请求生效；非流式无法发送 SSE 注释（破坏 application/json 协议），
-	// 不施加任何本地超时——上游慢响应应让其自然完成或由上游/CF 自身处理。
+	// 仅对流式请求生效；非流式无法发送 SSE 注释（破坏 application/json 协议）。
+	// 非流式默认不限制总时长，可通过 relay_request_timeout 显式配置。
 	isStream := internalRequest.Stream != nil && *internalRequest.Stream
 	hb := startEarlyHeartbeat(c, isStream)
 	defer hb.Stop()
@@ -344,7 +340,12 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			return
 		}
 		if result.Canceled {
-			metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
+			if metricsSuggestCompletedStream(metrics) {
+				log.Debugf("client cancel after completed stream metrics, treating as success")
+				metrics.SaveWithChannelStats(c.Request.Context(), true, nil, iter.Attempts(), false)
+			} else {
+				metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
+			}
 			return
 		}
 		if result.ResetConversation {
@@ -357,7 +358,12 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			return
 		}
 		if result.Written {
-			metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
+			if metricsSuggestCompletedStream(metrics) {
+				log.Debugf("stream written then error but metrics complete, treating as success")
+				metrics.SaveWithChannelStats(c.Request.Context(), true, nil, iter.Attempts(), false)
+			} else {
+				metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
+			}
 			return
 		}
 		lastErr = result.Err
@@ -401,16 +407,6 @@ func (ra *relayAttempt) attempt() attemptResult {
 
 	// 转发请求
 	statusCode, fwdErr := ra.forward()
-	if fwdErr != nil && isClientCancellation(ra.requestContext(), fwdErr) && ra.streamPayloadWritten.Load() {
-		ra.collectResponse()
-		if chatResponseProtocolCompleted(ra.metrics.InternalResponse) {
-			log.Debugf("client disconnected after chat finish_reason, treating stream as success")
-			fwdErr = nil
-			if statusCode == 0 {
-				statusCode = http.StatusOK
-			}
-		}
-	}
 
 	// 更新 channel key 状态
 	ra.usedKey.StatusCode = statusCode
@@ -440,24 +436,67 @@ func (ra *relayAttempt) attempt() attemptResult {
 	}
 
 	// ====== 失败 ======
+	if isFirstTokenTimeout(ra.requestContext(), fwdErr) {
+		op.ChannelKeyUpdate(ra.usedKey)
+		span.End(dbmodel.AttemptFailed, statusCode, "timeout=first_token: "+fwdErr.Error())
+		op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
+			WaitTime:      span.Duration().Milliseconds(),
+			RequestFailed: 1,
+		})
+		return attemptResult{
+			Success:           false,
+			Written:           ra.streamPayloadWritten.Load(),
+			FirstTokenTimeout: true,
+			Err:               fmt.Errorf("channel %s failed: %w", ra.channel.Name, fwdErr),
+			StatusCode:        statusCode,
+			RetryAfter:        ra.retryAfter,
+		}
+	}
+
 	if isClientCancellation(ra.requestContext(), fwdErr) {
 		written := ra.streamPayloadWritten.Load()
 		if written {
 			ra.collectResponse()
 		}
+		if written && streamResponseCompleted(ra.metrics.InternalResponse) {
+			if statusCode == 0 {
+				statusCode = http.StatusOK
+			}
+			ra.usedKey.StatusCode = statusCode
+			ra.usedKey.TotalCost += ra.metrics.Stats.InputCost + ra.metrics.Stats.OutputCost
+			op.ChannelKeyUpdate(ra.usedKey)
+			span.End(dbmodel.AttemptSuccess, statusCode, "")
+			op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
+				WaitTime:       span.Duration().Milliseconds(),
+				RequestSuccess: 1,
+			})
+			balancer.RecordSuccess(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
+			balancer.SetSticky(ra.apiKeyID, ra.requestModel, ra.channel.ID, ra.usedKey.ID)
+			log.Debugf("client canceled after completed stream, treating as success")
+			return attemptResult{Success: true, StatusCode: statusCode}
+		}
 		op.ChannelKeyUpdate(ra.usedKey)
-		span.End(dbmodel.AttemptFailed, statusCode, fwdErr.Error())
+		msg := "client canceled request"
+		if written {
+			msg = "client canceled after partial stream"
+		}
+		span.End(dbmodel.AttemptSkipped, statusCode, msg)
 		return attemptResult{
 			Success:    false,
 			Written:    written,
 			Canceled:   true,
-			Err:        fwdErr,
+			Err:        fmt.Errorf("%s: %w", msg, fwdErr),
 			StatusCode: statusCode,
 		}
 	}
 
+	failMsg := fwdErr.Error()
+	requestTimeout := isRequestTimeout(ra.requestContext(), fwdErr)
+	if requestTimeout {
+		failMsg = "timeout=request: " + failMsg
+	}
 	op.ChannelKeyUpdate(ra.usedKey)
-	span.End(dbmodel.AttemptFailed, statusCode, fwdErr.Error())
+	span.End(dbmodel.AttemptFailed, statusCode, failMsg)
 
 	// Channel 维度统计
 	op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
@@ -472,12 +511,11 @@ func (ra *relayAttempt) attempt() attemptResult {
 	if written {
 		ra.collectResponse()
 	}
-	firstTokenTimeout := isFirstTokenTimeout(nil, fwdErr)
 	return attemptResult{
 		Success:           false,
 		Written:           written,
 		ResetConversation: statusCode == http.StatusConflict && needsConversationRestart(relayErrorMessage(fwdErr)),
-		FirstTokenTimeout: firstTokenTimeout,
+		FirstTokenTimeout: false,
 		Err:               fmt.Errorf("channel %s failed: %w", ra.channel.Name, fwdErr),
 		StatusCode:        statusCode,
 		RetryAfter:        ra.retryAfter,
@@ -486,18 +524,6 @@ func (ra *relayAttempt) attempt() attemptResult {
 
 // parseRequest 解析并验证入站请求
 // 返回值中的 rawBody 为客户端原始请求字节，供同格式直通路径重用。
-func chatResponseProtocolCompleted(response *model.InternalLLMResponse) bool {
-	if response == nil || len(response.Choices) == 0 {
-		return false
-	}
-	for _, choice := range response.Choices {
-		if choice.FinishReason == nil || strings.TrimSpace(*choice.FinishReason) == "" {
-			return false
-		}
-	}
-	return true
-}
-
 func parseRequest(inboundType inbound.InboundType, c *gin.Context) ([]byte, *model.InternalLLMRequest, model.Inbound, error) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -1048,6 +1074,7 @@ func (ra *relayAttempt) sendRequest(req *http.Request) (*http.Response, error) {
 	}
 
 	req = ra.attachFirstTokenBudget(req)
+	req = ra.attachRequestTimeout(req)
 
 	response, err := httpClient.Do(req)
 	if err != nil {

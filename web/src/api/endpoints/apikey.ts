@@ -2,8 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../client';
 import { logger } from '@/lib/logger';
 import { useAuthStore } from './user';
-import { formatCacheHitRate, StatsAPIKey, StatsAPIKeyFormatted } from './stats';
-import { formatCount, formatMoney, formatTime } from '@/lib/utils';
+import { formatStatsMetrics, StatsAPIKey, StatsAPIKeyFormatted } from './stats';
 
 /**
  * API Key 数据
@@ -17,6 +16,7 @@ export interface APIKey {
     max_cost?: number; // 不传表示无限制
     max_rpm?: number; // 不传表示无限制
     supported_models?: string; // 不传表示支持所有模型
+    model_list_mode?: 'allow' | 'deny' | '';
 }
 
 /**
@@ -64,18 +64,7 @@ export function useAPIKeyDashboardStats() {
         select: (data): APIKeyStatsResponseFormatted => ({
             stats: {
                 api_key_id: data.stats.api_key_id,
-                input_token: formatCount(data.stats.input_token),
-                output_token: formatCount(data.stats.output_token),
-                cache_read_token: formatCount(data.stats.cache_read_token),
-                cache_hit_rate: formatCacheHitRate(data.stats.input_token, data.stats.cache_read_token),
-                total_token: formatCount(data.stats.input_token + data.stats.output_token),
-                input_cost: formatMoney(data.stats.input_cost),
-                output_cost: formatMoney(data.stats.output_cost),
-                total_cost: formatMoney(data.stats.input_cost + data.stats.output_cost),
-                wait_time: formatTime(data.stats.wait_time),
-                request_success: formatCount(data.stats.request_success),
-                request_failed: formatCount(data.stats.request_failed),
-                request_count: formatCount(data.stats.request_success + data.stats.request_failed),
+                ...formatStatsMetrics(data.stats),
             },
             info: data.info,
         }),
@@ -212,18 +201,7 @@ export function useAPIKeyStats() {
         },
         select: (data): StatsAPIKeyFormatted => ({
             api_key_id: data.api_key_id,
-            input_token: formatCount(data.input_token),
-            output_token: formatCount(data.output_token),
-            cache_read_token: formatCount(data.cache_read_token),
-            cache_hit_rate: formatCacheHitRate(data.input_token, data.cache_read_token),
-            total_token: formatCount(data.input_token + data.output_token),
-            input_cost: formatMoney(data.input_cost),
-            output_cost: formatMoney(data.output_cost),
-            total_cost: formatMoney(data.input_cost + data.output_cost),
-            wait_time: formatTime(data.wait_time),
-            request_success: formatCount(data.request_success),
-            request_failed: formatCount(data.request_failed),
-            request_count: formatCount(data.request_success + data.request_failed),
+            ...formatStatsMetrics(data),
         }),
         refetchInterval: 30000,
     });

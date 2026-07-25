@@ -52,6 +52,7 @@ func HandleWSResponse(c *gin.Context) {
 
 	apiKeyID := c.GetInt("api_key_id")
 	supportedModels := c.GetString("supported_models")
+	modelListMode := c.GetString("model_list_mode")
 
 	log.Debugf("ws client connected (apikey=%d)", apiKeyID)
 
@@ -98,7 +99,7 @@ func HandleWSResponse(c *gin.Context) {
 			continue
 		}
 
-		conversationState = processWSResponseCreate(ctx, conn, data, apiKeyID, supportedModels, downstreamSessionID, conversationState)
+		conversationState = processWSResponseCreate(ctx, conn, data, apiKeyID, supportedModels, modelListMode, downstreamSessionID, conversationState)
 	}
 }
 
@@ -108,6 +109,7 @@ func processWSResponseCreate(
 	data []byte,
 	apiKeyID int,
 	supportedModels string,
+	modelListMode string,
 	downstreamSessionID string,
 	conversationState *wsConversationState,
 ) *wsConversationState {
@@ -158,7 +160,7 @@ func processWSResponseCreate(
 	if genRaw, ok := reqBody["generate"]; ok {
 		var generate bool
 		if json.Unmarshal(genRaw, &generate) == nil && !generate {
-			if err := bestEffortWarmupUpstreamWS(ctx, apiKeyID, supportedModels, reqBody); err != nil {
+			if err := bestEffortWarmupUpstreamWS(ctx, apiKeyID, supportedModels, modelListMode, reqBody); err != nil {
 				log.Warnf("ws warmup failed (apikey=%d): %v", apiKeyID, err)
 			} else {
 				log.Debugf("ws warmup ready (apikey=%d)", apiKeyID)
@@ -205,20 +207,9 @@ func processWSResponseCreate(
 		}
 	}
 
-	// Check supported models
-	if supportedModels != "" {
-		supportedModelsArray := strings.Split(supportedModels, ",")
-		found := false
-		for _, m := range supportedModelsArray {
-			if m == executionRequest.Model {
-				found = true
-				break
-			}
-		}
-		if !found {
-			writeWSError(ctx, conn, 400, "invalid_request", "model not supported")
-			return conversationState
-		}
+	if !apiKeyAllowsModel(supportedModels, modelListMode, executionRequest.Model) {
+		writeWSError(ctx, conn, 400, "invalid_request", "model not supported")
+		return conversationState
 	}
 
 	requestModel = executionRequest.Model
@@ -302,6 +293,7 @@ func bestEffortWarmupUpstreamWS(
 	ctx context.Context,
 	apiKeyID int,
 	supportedModels string,
+	modelListMode string,
 	reqBody map[string]json.RawMessage,
 ) error {
 	requestModel := strings.TrimSpace(extractWSRequestModel(reqBody))
@@ -309,18 +301,8 @@ func bestEffortWarmupUpstreamWS(
 		return fmt.Errorf("warmup request missing model")
 	}
 
-	if supportedModels != "" {
-		supportedModelsArray := strings.Split(supportedModels, ",")
-		found := false
-		for _, modelName := range supportedModelsArray {
-			if modelName == requestModel {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("model not supported")
-		}
+	if !apiKeyAllowsModel(supportedModels, modelListMode, requestModel) {
+		return fmt.Errorf("model not supported")
 	}
 
 	group, err := op.GroupGetEnabledMap(requestModel, ctx)

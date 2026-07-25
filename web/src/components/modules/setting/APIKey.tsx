@@ -93,6 +93,7 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
         max_cost: apiKey?.max_cost,
         max_rpm: apiKey?.max_rpm,
         supported_models: apiKey?.supported_models,
+        model_list_mode: apiKey?.model_list_mode === 'deny' ? 'deny' : 'allow',
     }));
     const [maxCostInput, setMaxCostInput] = useState(() =>
         apiKey?.max_cost != null ? String(apiKey.max_cost) : ''
@@ -331,7 +332,37 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
             </div>
 
             <div className="grid gap-1">
-                <div className="text-xs text-muted-foreground">{t('apiKey.form.supportedModels')}</div>
+                <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs text-muted-foreground">{t('apiKey.form.supportedModels')}</div>
+                    <div className="flex items-center gap-1 rounded-lg border border-border/60 p-0.5">
+                        <button
+                            type="button"
+                            disabled={isPending}
+                            onClick={() => updateForm({ model_list_mode: 'allow' })}
+                            className={cn(
+                                'rounded-md px-2 py-0.5 text-[11px] transition-colors',
+                                form.model_list_mode !== 'deny'
+                                    ? 'bg-primary text-primary-foreground'
+                                    : 'text-muted-foreground hover:bg-muted/40'
+                            )}
+                        >
+                            {t('apiKey.form.modelListAllow')}
+                        </button>
+                        <button
+                            type="button"
+                            disabled={isPending}
+                            onClick={() => updateForm({ model_list_mode: 'deny' })}
+                            className={cn(
+                                'rounded-md px-2 py-0.5 text-[11px] transition-colors',
+                                form.model_list_mode === 'deny'
+                                    ? 'bg-primary text-primary-foreground'
+                                    : 'text-muted-foreground hover:bg-muted/40'
+                            )}
+                        >
+                            {t('apiKey.form.modelListDeny')}
+                        </button>
+                    </div>
+                </div>
                 <div className="max-h-40 overflow-auto rounded-xl p-2">
                     {availableModels.length === 0 ? (
                         <div className="text-xs text-muted-foreground py-2 text-center">
@@ -364,7 +395,9 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
                         </div>
                     )}
                 </div>
-                <div className="text-[11px] text-muted-foreground/80">{t('apiKey.form.modelsHint')}</div>
+                <div className="text-[11px] text-muted-foreground/80">
+                    {form.model_list_mode === 'deny' ? t('apiKey.form.modelsHintDeny') : t('apiKey.form.modelsHint')}
+                </div>
             </div>
 
             <div className="flex items-center justify-between pt-1">

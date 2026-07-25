@@ -7,7 +7,7 @@ import (
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 )
 
-func TestChatResponseProtocolCompleted(t *testing.T) {
+func TestChatStreamResponseCompleted(t *testing.T) {
 	stop := "stop"
 	empty := ""
 
@@ -43,8 +43,8 @@ func TestChatResponseProtocolCompleted(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := chatResponseProtocolCompleted(tt.response); got != tt.want {
-				t.Fatalf("chatResponseProtocolCompleted() = %t, want %t", got, tt.want)
+			if got := streamResponseCompleted(tt.response); got != tt.want {
+				t.Fatalf("streamResponseCompleted() = %t, want %t", got, tt.want)
 			}
 		})
 	}

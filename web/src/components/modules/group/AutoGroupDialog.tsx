@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/morphing-dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import {
     Select,
     SelectContent,
@@ -241,6 +242,8 @@ export function GroupAutoGroupDialogContent() {
     const [keyword, setKeyword] = useState('');
     const [modes, setModes] = useState<Record<number, AutoGroupType>>({});
     const [projectedGlobalMode, setProjectedGlobalMode] = useState<AutoGroupType>(AutoGroupType.None);
+    const [createMissingGroups, setCreateMissingGroups] = useState(false);
+    const [normalizeModelNames, setNormalizeModelNames] = useState(false);
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
     const [selection, setSelection] = useState<Set<number>>(new Set());
 
@@ -253,6 +256,8 @@ export function GroupAutoGroupDialogContent() {
         queueMicrotask(() => {
             setModes(next);
             setProjectedGlobalMode(config.projected_global_auto_group);
+            setCreateMissingGroups(!!config.create_missing_groups);
+            setNormalizeModelNames(!!config.normalize_model_names);
         });
     }, [config]);
 
@@ -311,13 +316,17 @@ export function GroupAutoGroupDialogContent() {
     }, [config, modes, sources]);
 
     const globalDirty = !!config && projectedGlobalMode !== config.projected_global_auto_group;
+    const createMissingDirty = !!config && createMissingGroups !== !!config.create_missing_groups;
+    const normalizeDirty = !!config && normalizeModelNames !== !!config.normalize_model_names;
     const globalModeEnabled = projectedGlobalMode !== AutoGroupType.None;
     const shouldRunAfterSave = useMemo(() => {
         if (!config) return false;
         if (globalDirty && projectedGlobalMode !== AutoGroupType.None) return true;
+        if (createMissingDirty && createMissingGroups) return true;
+        if (normalizeDirty && normalizeModelNames) return true;
         return dirtyItems.some((item) => item.auto_group !== AutoGroupType.None);
-    }, [config, dirtyItems, globalDirty, projectedGlobalMode]);
-    const hasChanges = globalDirty || dirtyItems.length > 0;
+    }, [config, createMissingDirty, createMissingGroups, dirtyItems, globalDirty, normalizeDirty, normalizeModelNames, projectedGlobalMode]);
+    const hasChanges = globalDirty || createMissingDirty || normalizeDirty || dirtyItems.length > 0;
     const isPending = updateConfig.isPending;
 
     const toggleCollapsed = (key: string) => {
@@ -366,6 +375,8 @@ export function GroupAutoGroupDialogContent() {
         updateConfig.mutate(
             {
                 projected_global_auto_group: globalDirty ? projectedGlobalMode : undefined,
+                create_missing_groups: createMissingDirty ? createMissingGroups : undefined,
+                normalize_model_names: normalizeDirty ? normalizeModelNames : undefined,
                 items: dirtyItems,
                 run_now: shouldRunAfterSave,
             },
@@ -398,7 +409,7 @@ export function GroupAutoGroupDialogContent() {
                     </div>
                 ) : (
                     <>
-                        <div className="mb-3 shrink-0 rounded-xl border border-border/50 bg-muted/30 px-3 py-2">
+                        <div className="mb-3 shrink-0 space-y-2 rounded-xl border border-border/50 bg-muted/30 px-3 py-2">
                             <div className="flex flex-wrap items-center justify-between gap-3">
                                 <div className="flex min-w-0 items-center gap-2">
                                     <Globe2 className="size-4 shrink-0 text-muted-foreground" />
@@ -430,6 +441,42 @@ export function GroupAutoGroupDialogContent() {
                                         ))}
                                     </SelectContent>
                                 </Select>
+                            </div>
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 pt-2">
+                                <div className="flex min-w-0 items-center gap-2">
+                                    <span className="text-sm font-medium text-foreground">{t('createMissing.title')}</span>
+                                    <TooltipProvider>
+                                        <Tooltip>
+                                            <TooltipTrigger asChild>
+                                                <HelpCircle className="size-4 cursor-help text-muted-foreground" />
+                                            </TooltipTrigger>
+                                            <TooltipContent className="max-w-xs">{t('createMissing.description')}</TooltipContent>
+                                        </Tooltip>
+                                    </TooltipProvider>
+                                </div>
+                                <Switch
+                                    checked={createMissingGroups}
+                                    onCheckedChange={setCreateMissingGroups}
+                                    disabled={isLoading || isPending}
+                                />
+                            </div>
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 pt-2">
+                                <div className="flex min-w-0 items-center gap-2">
+                                    <span className="text-sm font-medium text-foreground">{t('normalize.title')}</span>
+                                    <TooltipProvider>
+                                        <Tooltip>
+                                            <TooltipTrigger asChild>
+                                                <HelpCircle className="size-4 cursor-help text-muted-foreground" />
+                                            </TooltipTrigger>
+                                            <TooltipContent className="max-w-xs">{t('normalize.description')}</TooltipContent>
+                                        </Tooltip>
+                                    </TooltipProvider>
+                                </div>
+                                <Switch
+                                    checked={normalizeModelNames}
+                                    onCheckedChange={setNormalizeModelNames}
+                                    disabled={isLoading || isPending}
+                                />
                             </div>
                         </div>
 

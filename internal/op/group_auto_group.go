@@ -66,6 +66,8 @@ func GroupAutoGroupConfigGet(ctx context.Context) (*model.GroupAutoGroupConfig, 
 
 	return &model.GroupAutoGroupConfig{
 		ProjectedGlobalAutoGroup: globalMode,
+		CreateMissingGroups:      AutoGroupCreateMissingEnabled(),
+		NormalizeModelNames:      AutoGroupNormalizeEnabled(),
 		Sources:                  sources,
 	}, nil
 }
@@ -111,6 +113,24 @@ func GroupAutoGroupConfigUpdate(req *model.GroupAutoGroupConfigUpdateRequest, ct
 			if err := AutoGroupAllProjectedChannels(ctx); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if req.CreateMissingGroups != nil {
+		value := "false"
+		if *req.CreateMissingGroups {
+			value = "true"
+		}
+		if err := SettingSetString(model.SettingKeyAutoGroupCreateMissingEnabled, value); err != nil {
+			return nil, err
+		}
+	}
+	if req.NormalizeModelNames != nil {
+		value := "false"
+		if *req.NormalizeModelNames {
+			value = "true"
+		}
+		if err := SettingSetString(model.SettingKeyAutoGroupNormalizeEnabled, value); err != nil {
+			return nil, err
 		}
 	}
 	for _, item := range req.Items {
