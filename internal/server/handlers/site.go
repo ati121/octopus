@@ -2,10 +2,11 @@ package handlers
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/apperror"
@@ -16,10 +17,16 @@ import (
 	"github.com/bestruirui/octopus/internal/server/router"
 	sitesvc "github.com/bestruirui/octopus/internal/site"
 	"github.com/bestruirui/octopus/internal/sitesync"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/safe"
 	"github.com/gin-gonic/gin"
 )
+
+var syncAllSiteAccountsRunning atomic.Bool
+var checkinAllSiteAccountsRunning atomic.Bool
+
+const siteProjectionWorkers = 4
 
 func refreshAccountRandomCheckinScheduleBestEffort(ctx context.Context, accountID int) {
 	if err := sitesvc.RefreshAccountRandomCheckinSchedule(ctx, accountID); err != nil {
@@ -114,10 +121,22 @@ func importMetAPI(c *gin.Context) {
 }
 
 func readImportPayload(c *gin.Context) ([]byte, error) {
+	limit := iolimit.ImportBodyMaxBytes()
+	tooLarge := func(err error) error {
+		return apperror.Wrap(op.CodeSiteImportEmptyPayload, "site import payload too large", err).WithStatus(http.StatusRequestEntityTooLarge)
+	}
+	if c.Request.ContentLength > limit {
+		return nil, tooLarge(&iolimit.TooLargeError{Limit: limit})
+	}
+
 	contentType := c.GetHeader("Content-Type")
 	if strings.Contains(contentType, "multipart/form-data") {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 		fileHeader, err := c.FormFile("file")
 		if err != nil {
+			if iolimit.IsTooLarge(err) {
+				return nil, tooLarge(err)
+			}
 			return nil, apperror.Wrap(op.CodeSiteImportEmptyPayload, "site import empty payload", err).WithStatus(http.StatusBadRequest)
 		}
 		file, err := fileHeader.Open()
@@ -125,9 +144,17 @@ func readImportPayload(c *gin.Context) ([]byte, error) {
 			return nil, apperror.Wrap(op.CodeSiteImportEmptyPayload, "site import empty payload", err).WithStatus(http.StatusBadRequest)
 		}
 		defer file.Close()
-		return io.ReadAll(file)
+		body, err := iolimit.ReadAll(file, limit)
+		if iolimit.IsTooLarge(err) {
+			return nil, tooLarge(err)
+		}
+		return body, err
 	}
-	return io.ReadAll(c.Request.Body)
+	body, err := iolimit.ReadRequestBody(c.Writer, c.Request, limit)
+	if iolimit.IsTooLarge(err) {
+		return nil, tooLarge(err)
+	}
+	return body, err
 }
 
 func createSite(c *gin.Context) {
@@ -379,15 +406,29 @@ func checkinSiteAccount(c *gin.Context) {
 }
 
 func syncAllSiteAccounts(c *gin.Context) {
+	if !syncAllSiteAccountsRunning.CompareAndSwap(false, true) {
+		resp.Error(c, http.StatusConflict, "site sync is already running")
+		return
+	}
 	safe.Go("site-sync-all", func() {
-		sitesvc.SyncAllWithOptions(context.Background(), sitesync.SiteBatchOptions{Trigger: sitesync.SiteBatchTriggerManual})
+		defer syncAllSiteAccountsRunning.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		sitesvc.SyncAllWithOptions(ctx, sitesync.SiteBatchOptions{Trigger: sitesync.SiteBatchTriggerManual})
 	})
 	resp.Success(c, nil)
 }
 
 func checkinAllSiteAccounts(c *gin.Context) {
+	if !checkinAllSiteAccountsRunning.CompareAndSwap(false, true) {
+		resp.Error(c, http.StatusConflict, "site check-in is already running")
+		return
+	}
 	safe.Go("site-checkin-all", func() {
-		sitesvc.CheckinAllWithOptions(context.Background(), sitesync.SiteBatchOptions{Trigger: sitesync.SiteBatchTriggerManual})
+		defer checkinAllSiteAccountsRunning.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		sitesvc.CheckinAllWithOptions(ctx, sitesync.SiteBatchOptions{Trigger: sitesync.SiteBatchTriggerManual})
 	})
 	resp.Success(c, nil)
 }
@@ -451,16 +492,50 @@ func batchSite(c *gin.Context) {
 
 // projectSitesAsync 在后台逐个刷新站点投影，供批量操作成功后调用。
 func projectSitesAsync(ids []int) {
-	for _, id := range ids {
-		siteID := id
-		safe.Go("site-batch-project", func() {
+	if len(ids) == 0 {
+		return
+	}
+	siteIDs := append([]int(nil), ids...)
+	safe.Go("site-batch-project", func() {
+		runSiteProjectionJobs(siteIDs, siteProjectionWorkers, func(siteID int) {
 			projCtx, projCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer projCancel()
 			if err := sitesvc.ProjectSite(projCtx, siteID); err != nil {
 				log.Warnf("background ProjectSite failed (site=%d): %v", siteID, err)
 			}
 		})
+	})
+}
+
+func runSiteProjectionJobs(ids []int, maxConcurrency int, project func(int)) {
+	if len(ids) == 0 || project == nil {
+		return
 	}
+	if maxConcurrency <= 0 || maxConcurrency > siteProjectionWorkers {
+		maxConcurrency = siteProjectionWorkers
+	}
+	if maxConcurrency > len(ids) {
+		maxConcurrency = len(ids)
+	}
+
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(maxConcurrency)
+	for range maxConcurrency {
+		safe.Go("site-batch-project-worker", func() {
+			defer wg.Done()
+			for siteID := range jobs {
+				safe.Run("site-batch-project-item", func() {
+					project(siteID)
+				})
+			}
+		})
+	}
+	for _, siteID := range ids {
+		jobs <- siteID
+	}
+	close(jobs)
+	wg.Wait()
 }
 
 func batchEditSite(c *gin.Context) {

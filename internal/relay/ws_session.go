@@ -10,6 +10,12 @@ import (
 	openaiOutbound "github.com/bestruirui/octopus/internal/transformer/outbound/openai"
 )
 
+const (
+	wsConversationMaxReplayBytes        = 8 * 1024 * 1024
+	wsConversationMaxTranscriptBytes    = 8 * 1024 * 1024
+	wsConversationMaxTranscriptMessages = 128
+)
+
 type wsConversationState struct {
 	DownstreamSessionID string
 	RequestModel        string
@@ -205,6 +211,48 @@ func (s *wsConversationState) ApplySuccessfulTurn(req *transformerModel.Internal
 	if respID := strings.TrimSpace(resp.ID); respID != "" {
 		s.LastResponseID = respID
 	}
+	s.limitRetainedHistory()
+}
+
+// limitRetainedHistory keeps replay state best-effort and bounded. Native
+// previous_response_id continuation remains available even when a very large
+// turn cannot safely be retained for local replay.
+func (s *wsConversationState) limitRetainedHistory() {
+	if s == nil {
+		return
+	}
+	if len(s.ReplayWindowItems) > wsConversationMaxReplayBytes {
+		s.ReplayWindowItems = nil
+	}
+	if len(s.Transcript) == 0 {
+		return
+	}
+
+	start := len(s.Transcript)
+	retainedBytes := 0
+	retainedMessages := 0
+	for i := len(s.Transcript) - 1; i >= 0; i-- {
+		if retainedMessages >= wsConversationMaxTranscriptMessages {
+			break
+		}
+		encoded, err := json.Marshal(s.Transcript[i])
+		if err != nil || len(encoded) > wsConversationMaxTranscriptBytes-retainedBytes {
+			break
+		}
+		retainedBytes += len(encoded)
+		retainedMessages++
+		start = i
+	}
+	if start == 0 {
+		return
+	}
+	if start >= len(s.Transcript) {
+		s.Transcript = nil
+		return
+	}
+	trimmed := make([]transformerModel.Message, len(s.Transcript)-start)
+	copy(trimmed, s.Transcript[start:])
+	s.Transcript = trimmed
 }
 
 func cloneWSConversationState(state *wsConversationState) *wsConversationState {

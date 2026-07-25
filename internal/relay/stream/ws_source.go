@@ -35,3 +35,11 @@ func (s *WSSource) Close() error {
 	}
 	return nil
 }
+
+// CloseWithError removes a failed upstream WebSocket instead of returning it
+// to the reusable pool.
+func (s *WSSource) CloseWithError() {
+	if s.reader != nil {
+		s.reader.CloseWithError()
+	}
+}

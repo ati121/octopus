@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync/atomic"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/grouphealth"
 	"github.com/bestruirui/octopus/internal/model"
@@ -19,6 +21,7 @@ import (
 )
 
 var defaultGroupHealthService = grouphealth.NewService(nil, nil)
+var groupHealthRunAllRunning atomic.Bool
 
 type groupHealthRunRequest struct {
 	ProbeMode model.GroupHealthProbeMode `json:"probe_mode"`
@@ -140,7 +143,8 @@ func runGroupHealth(c *gin.Context) {
 	}
 
 	safe.Go("group-health-run", func() {
-		runCtx := context.Background()
+		runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
 		_ = defaultGroupHealthService.RunGroupHealth(runCtx, groupID, probeMode)
 	})
 
@@ -164,8 +168,14 @@ func runAllGroupHealth(c *gin.Context) {
 		resp.InvalidParam(c)
 		return
 	}
+	if !groupHealthRunAllRunning.CompareAndSwap(false, true) {
+		resp.Error(c, http.StatusConflict, "group health run-all is already running")
+		return
+	}
 	safe.Go("group-health-run-all", func() {
-		runCtx := context.Background()
+		defer groupHealthRunAllRunning.Store(false)
+		runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
 		defaultGroupHealthService.RunAllGroupHealth(runCtx, 2, probeMode)
 	})
 

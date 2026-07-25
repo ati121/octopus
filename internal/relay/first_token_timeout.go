@@ -13,6 +13,8 @@ import (
 	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
+const defaultRelayRequestTimeoutSeconds = 300
+
 type firstTokenBudget struct {
 	ctx     context.Context
 	timer   *time.Timer
@@ -59,10 +61,7 @@ func (ra *relayAttempt) attachRequestTimeout(req *http.Request) *http.Request {
 	if ra.internalRequest != nil && ra.internalRequest.Stream != nil && *ra.internalRequest.Stream {
 		return req
 	}
-	seconds, err := op.SettingGetInt(dbmodel.SettingKeyRelayRequestTimeout)
-	if err != nil || seconds <= 0 {
-		return req
-	}
+	seconds := relayRequestTimeoutSeconds()
 	ctx, cancel := context.WithTimeoutCause(req.Context(), time.Duration(seconds)*time.Second, errRequestTimeout)
 	ra.firstTokenBudget = &firstTokenBudget{
 		ctx: ctx,
@@ -135,14 +134,19 @@ func (ra *relayAttempt) firstTokenTimeoutIfNeeded(ctx context.Context, err error
 	}
 	if isRequestTimeout(ctx, err) || isRequestTimeout(ctx, contextError(ctx)) ||
 		isRequestTimeout(budgetCtx, err) || isRequestTimeout(budgetCtx, contextError(budgetCtx)) {
-		seconds, _ := op.SettingGetInt(dbmodel.SettingKeyRelayRequestTimeout)
-		if seconds > 0 {
-			log.Warnf("non-stream request timeout (%ds), failing attempt", seconds)
-			return fmt.Errorf("%w (%ds)", errRequestTimeout, seconds)
-		}
-		return errRequestTimeout
+		seconds := relayRequestTimeoutSeconds()
+		log.Warnf("non-stream request timeout (%ds), failing attempt", seconds)
+		return fmt.Errorf("%w (%ds)", errRequestTimeout, seconds)
 	}
 	return nil
+}
+
+func relayRequestTimeoutSeconds() int {
+	seconds, err := op.SettingGetInt(dbmodel.SettingKeyRelayRequestTimeout)
+	if err != nil || seconds <= 0 {
+		return defaultRelayRequestTimeoutSeconds
+	}
+	return seconds
 }
 
 type closeWithFuncReadCloser struct {

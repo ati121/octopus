@@ -27,7 +27,6 @@ export interface ChannelAttempt {
     status: AttemptStatus;
     duration: number;       // 耗时(毫秒)
     sticky?: boolean;
-    reason?: string;
     msg?: string;
 }
 
@@ -58,7 +57,6 @@ export interface RelayLog {
     time: number;                // 时间戳
     request_model_name: string;  // 请求模型名称
     request_api_key_name?: string; // 请求使用的 API Key 名称
-    client_ip?: string;          // 调用方 IP
     channel: number;             // 实际使用的渠道ID
     channel_name: string;        // 渠道名称
     actual_model_name: string;   // 实际使用模型名称
@@ -298,6 +296,7 @@ export function useLogs(options: UseLogsOptions = {}) {
             if (!lastPage?.has_more) return undefined;
             return lastPage.next_cursor ?? undefined;
         },
+        maxPages: 50,
         staleTime: 0,
         refetchOnMount: 'always',
         refetchOnWindowFocus: streamEnabled,

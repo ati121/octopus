@@ -19,7 +19,6 @@ import (
 type RelayMetrics struct {
 	APIKeyID     int
 	RequestModel string
-	ClientIP     string
 	StartTime    time.Time
 	LogID        int64
 
@@ -52,16 +51,8 @@ func (m *RelayMetrics) StartLog() {
 	m.LogID = op.RelayLogStart(model.RelayLog{
 		Time:             m.StartTime.Unix(),
 		RequestModelName: m.RequestModel,
-		ClientIP:         m.ClientIP,
 		ActualModelName:  m.RequestModel,
 	})
-}
-
-func (m *RelayMetrics) SetClientIP(ip string) {
-	if m == nil {
-		return
-	}
-	m.ClientIP = strings.TrimSpace(ip)
 }
 
 func NewRelayMetrics(apiKeyID int, requestModel string, rawBody []byte, req *transformerModel.InternalLLMRequest) *RelayMetrics {
@@ -262,7 +253,6 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 		ID:               m.LogID,
 		Time:             m.StartTime.Unix(),
 		RequestModelName: m.RequestModel,
-		ClientIP:         m.ClientIP,
 		ChannelName:      channelName,
 		ChannelId:        channelID,
 		ActualModelName:  actualModel,

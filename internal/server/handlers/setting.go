@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
 	"github.com/bestruirui/octopus/internal/task"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/safe"
 	"github.com/gin-gonic/gin"
@@ -160,11 +160,21 @@ func exportDB(c *gin.Context) {
 
 func importDB(c *gin.Context) {
 	var dump model.DBDump
+	limit := iolimit.ImportBodyMaxBytes()
+	if c.Request.ContentLength > limit {
+		resp.Error(c, http.StatusRequestEntityTooLarge, "import body too large")
+		return
+	}
 
 	contentType := c.GetHeader("Content-Type")
 	if strings.Contains(contentType, "multipart/form-data") {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 		fh, err := c.FormFile("file")
 		if err != nil {
+			if iolimit.IsTooLarge(err) {
+				resp.Error(c, http.StatusRequestEntityTooLarge, "import body too large")
+				return
+			}
 			resp.Error(c, http.StatusBadRequest, "missing upload file field 'file'")
 			return
 		}
@@ -174,8 +184,12 @@ func importDB(c *gin.Context) {
 			return
 		}
 		defer f.Close()
-		body, err := io.ReadAll(f)
+		body, err := iolimit.ReadAll(f, limit)
 		if err != nil {
+			if iolimit.IsTooLarge(err) {
+				resp.Error(c, http.StatusRequestEntityTooLarge, "import body too large")
+				return
+			}
 			resp.Error(c, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -184,8 +198,12 @@ func importDB(c *gin.Context) {
 			return
 		}
 	} else {
-		body, err := io.ReadAll(c.Request.Body)
+		body, err := iolimit.ReadRequestBody(c.Writer, c.Request, limit)
 		if err != nil {
+			if iolimit.IsTooLarge(err) {
+				resp.Error(c, http.StatusRequestEntityTooLarge, "import body too large")
+				return
+			}
 			resp.Error(c, http.StatusBadRequest, err.Error())
 			return
 		}

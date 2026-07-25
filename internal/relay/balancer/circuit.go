@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,11 +33,29 @@ type circuitEntry struct {
 	LastFailureTime     time.Time
 	TripCount           int // 累计熔断触发次数（用于指数退避）
 	HalfOpenSince       time.Time
+	LastActivityTime    time.Time
 	mu                  sync.Mutex
 }
 
 // 全局熔断器存储
 var globalBreaker sync.Map // key: string -> value: *circuitEntry
+var circuitBreakerStoreMu sync.Mutex
+var circuitBreakerEntryCount int
+
+const (
+	maxCircuitBreakerEntries = 10000
+	circuitBreakerIdleTTL    = time.Hour
+)
+
+func init() {
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for now := range ticker.C {
+			pruneCircuitBreakers(now)
+		}
+	}()
+}
 
 // circuitKey 生成熔断器键：channelID:channelKeyID:modelName
 func circuitKey(channelID, keyID int, modelName string) string {
@@ -45,9 +64,9 @@ func circuitKey(channelID, keyID int, modelName string) string {
 
 func resetCircuitBreakerByChannel(channelID int) {
 	prefix := fmt.Sprintf("%d:", channelID)
-	globalBreaker.Range(func(key, _ any) bool {
+	globalBreaker.Range(func(key, value any) bool {
 		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) {
-			globalBreaker.Delete(k)
+			deleteCircuitBreakerEntry(k, value)
 		}
 		return true
 	})
@@ -58,9 +77,52 @@ func getOrCreateEntry(key string) *circuitEntry {
 	if v, ok := globalBreaker.Load(key); ok {
 		return v.(*circuitEntry)
 	}
-	entry := &circuitEntry{State: StateClosed}
-	actual, _ := globalBreaker.LoadOrStore(key, entry)
-	return actual.(*circuitEntry)
+	circuitBreakerStoreMu.Lock()
+	defer circuitBreakerStoreMu.Unlock()
+	if v, ok := globalBreaker.Load(key); ok {
+		return v.(*circuitEntry)
+	}
+	if circuitBreakerEntryCount >= maxCircuitBreakerEntries {
+		return nil
+	}
+	entry := &circuitEntry{State: StateClosed, LastActivityTime: time.Now()}
+	globalBreaker.Store(key, entry)
+	circuitBreakerEntryCount++
+	return entry
+}
+
+func deleteCircuitBreakerEntry(key, expected any) bool {
+	circuitBreakerStoreMu.Lock()
+	defer circuitBreakerStoreMu.Unlock()
+	if expected != nil {
+		current, ok := globalBreaker.Load(key)
+		if !ok || current != expected {
+			return false
+		}
+	}
+	if _, loaded := globalBreaker.LoadAndDelete(key); !loaded {
+		return false
+	}
+	if circuitBreakerEntryCount > 0 {
+		circuitBreakerEntryCount--
+	}
+	return true
+}
+
+func resetCircuitBreakers() {
+	circuitBreakerStoreMu.Lock()
+	defer circuitBreakerStoreMu.Unlock()
+	globalBreaker.Range(func(key, _ any) bool {
+		globalBreaker.Delete(key)
+		return true
+	})
+	circuitBreakerEntryCount = 0
+}
+
+func circuitBreakerCount() int {
+	circuitBreakerStoreMu.Lock()
+	defer circuitBreakerStoreMu.Unlock()
+	return circuitBreakerEntryCount
 }
 
 // getThreshold 获取熔断阈值配置
@@ -235,6 +297,7 @@ func RecordSuccess(channelID, keyID int, modelName string) {
 	entry.ConsecutiveFailures = 0
 	entry.TripCount = 0
 	entry.HalfOpenSince = time.Time{}
+	entry.LastActivityTime = time.Now()
 }
 
 // RecordFailure 记录失败，可能触发熔断。
@@ -242,12 +305,28 @@ func RecordSuccess(channelID, keyID int, modelName string) {
 // HalfOpen 状态下重新进入 Open，但不放大 TripCount。
 func RecordFailure(channelID, keyID int, modelName string, kind FailureKind) {
 	key := circuitKey(channelID, keyID, modelName)
-	entry := getOrCreateEntry(key)
+	var entry *circuitEntry
+	if kind == FailureSoftRateLimit {
+		value, ok := globalBreaker.Load(key)
+		if !ok {
+			return
+		}
+		entry, ok = value.(*circuitEntry)
+		if !ok || entry == nil {
+			return
+		}
+	} else {
+		entry = getOrCreateEntry(key)
+		if entry == nil {
+			return
+		}
+	}
 
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 
 	entry.LastFailureTime = time.Now()
+	entry.LastActivityTime = entry.LastFailureTime
 	entry.HalfOpenSince = time.Time{}
 
 	switch entry.State {
@@ -281,5 +360,47 @@ func RecordFailure(channelID, keyID int, modelName string, kind FailureKind) {
 	case StateOpen:
 		// 理论上不应该在 Open 状态下接收到失败记录（请求应被拒绝），
 		// 但为安全起见仍更新失败时间
+	}
+}
+
+func pruneCircuitBreakers(now time.Time) {
+	type candidate struct {
+		key          any
+		entry        *circuitEntry
+		lastActivity time.Time
+		closed       bool
+	}
+	entries := make([]candidate, 0)
+	globalBreaker.Range(func(key, value any) bool {
+		entry, ok := value.(*circuitEntry)
+		if !ok || entry == nil {
+			deleteCircuitBreakerEntry(key, value)
+			return true
+		}
+		entry.mu.Lock()
+		lastActivity := entry.LastActivityTime
+		if lastActivity.IsZero() {
+			lastActivity = entry.LastFailureTime
+		}
+		closed := entry.State == StateClosed
+		entry.mu.Unlock()
+		if closed && !lastActivity.IsZero() && now.Sub(lastActivity) > circuitBreakerIdleTTL {
+			deleteCircuitBreakerEntry(key, entry)
+			return true
+		}
+		entries = append(entries, candidate{key: key, entry: entry, lastActivity: lastActivity, closed: closed})
+		return true
+	})
+	if len(entries) <= maxCircuitBreakerEntries {
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].closed != entries[j].closed {
+			return entries[i].closed
+		}
+		return entries[i].lastActivity.Before(entries[j].lastActivity)
+	})
+	for _, item := range entries[:len(entries)-maxCircuitBreakerEntries] {
+		deleteCircuitBreakerEntry(item.key, item.entry)
 	}
 }

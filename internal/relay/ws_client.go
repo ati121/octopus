@@ -129,7 +129,11 @@ func processWSResponseCreate(
 		requestedPreviousResponseID = strings.TrimSpace(requestedPreviousResponseID)
 	}
 	hadLocalState := conversationState != nil
-	conversationState = resolveWSConversationState(apiKeyID, requestModel, conversationState, allowStoredRestore, downstreamSessionID)
+	stateLookupID := downstreamSessionID
+	if requestedPreviousResponseID != "" {
+		stateLookupID = requestedPreviousResponseID
+	}
+	conversationState = resolveWSConversationState(apiKeyID, requestModel, conversationState, allowStoredRestore, stateLookupID)
 	hasResolvedState := conversationState != nil
 	resolvedLastResponseID := ""
 	if conversationState != nil {

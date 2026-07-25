@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
 	openaiOutbound "github.com/bestruirui/octopus/internal/transformer/outbound/openai"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
 )
@@ -41,9 +41,13 @@ type responsesCompactResponse struct {
 
 // HandleResponsesCompact proxies OpenAI-compatible /responses/compact requests upstream.
 func HandleResponsesCompact(c *gin.Context) {
-	body, err := io.ReadAll(c.Request.Body)
+	body, err := iolimit.ReadRequestBody(c.Writer, c.Request, iolimit.RequestBodyMaxBytes())
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		if iolimit.IsTooLarge(err) {
+			resp.Error(c, http.StatusRequestEntityTooLarge, "request body too large")
+		} else {
+			resp.Error(c, http.StatusBadRequest, err.Error())
+		}
 		return
 	}
 
@@ -83,7 +87,6 @@ func HandleResponsesCompact(c *gin.Context) {
 
 	metricsReq := &transformerModel.InternalLLMRequest{Model: requestModel, RawRequest: body}
 	metrics := NewRelayMetrics(apiKeyID, requestModel, body, metricsReq)
-	metrics.SetClientIP(c.ClientIP())
 
 	var lastErr error
 	var lastStatusCode int
@@ -238,17 +241,25 @@ func forwardResponsesCompact(c *gin.Context, metrics *RelayMetrics, iter *balanc
 	}
 	defer response.Body.Close()
 
-	body, readErr := io.ReadAll(response.Body)
-	if readErr != nil {
-		span.End(dbmodel.AttemptFailed, response.StatusCode, readErr.Error())
-		return response.StatusCode, 0, fmt.Errorf("failed to read compact response body: %w", readErr)
-	}
-
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		body, truncated, readErr := iolimit.ReadAtMost(response.Body, iolimit.DefaultErrorBodyMaxBytes)
+		if readErr != nil {
+			span.End(dbmodel.AttemptFailed, response.StatusCode, readErr.Error())
+			return response.StatusCode, 0, fmt.Errorf("failed to read compact response body: %w", readErr)
+		}
+		if truncated {
+			body = append(body, []byte("\n[upstream error body truncated]")...)
+		}
 		retryAfter := parseRetryAfter(response.Header.Get("Retry-After"))
 		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
 		span.End(dbmodel.AttemptFailed, statusCode, string(body))
 		return statusCode, retryAfter, fmt.Errorf("upstream error: %d: %s", response.StatusCode, string(body))
+	}
+
+	body, readErr := iolimit.ReadAll(response.Body, iolimit.UpstreamResponseMaxBytes())
+	if readErr != nil {
+		span.End(dbmodel.AttemptFailed, response.StatusCode, readErr.Error())
+		return response.StatusCode, 0, fmt.Errorf("failed to read compact response body: %w", readErr)
 	}
 
 	copyProxyResponseHeaders(c.Writer.Header(), response.Header)

@@ -109,6 +109,7 @@ func llmRefreshCache(ctx context.Context) error {
 	if err := db.GetDB().WithContext(ctx).Find(&models).Error; err != nil {
 		return err
 	}
+	llmModelCache.Clear()
 	for _, model := range models {
 		llmModelCache.Set(model.Name, model.LLMPrice)
 	}

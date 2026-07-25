@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/bestruirui/octopus/internal/server/resp"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/gin-gonic/gin"
 )
 
@@ -23,6 +24,14 @@ func RequireJSON() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+
+		limit := iolimit.RequestBodyMaxBytes()
+		if c.Request.ContentLength > limit {
+			resp.Error(c, http.StatusRequestEntityTooLarge, "request body too large")
+			c.Abort()
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 
 		c.Next()
 	}

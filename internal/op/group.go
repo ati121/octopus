@@ -79,9 +79,13 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 	affectedChannelIDs := groupUpdateAffectedChannelIDs(oldGroup, req)
 
 	tx := db.GetDB().WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", tx.Error)
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			panic(r)
 		}
 	}()
 
@@ -237,9 +241,13 @@ func GroupDel(id int, ctx context.Context) error {
 	}
 
 	tx := db.GetDB().WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return fmt.Errorf("failed to begin transaction: %w", tx.Error)
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			panic(r)
 		}
 	}()
 
@@ -483,6 +491,8 @@ func groupRefreshCache(ctx context.Context) error {
 		Find(&groups).Error; err != nil {
 		return err
 	}
+	groupCache.Clear()
+	groupMap.Clear()
 	for _, group := range groups {
 		groupCache.Set(group.ID, group)
 		groupMap.Set(group.Name, group)

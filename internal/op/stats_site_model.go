@@ -126,12 +126,45 @@ func StatsSiteModelHourlySaveDB(ctx context.Context) error {
 	siteModelHourlyCacheLock.Unlock()
 
 	dbConn := db.GetDB().WithContext(ctx)
-	return dbConn.Clauses(clause.OnConflict{
+	err := dbConn.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "hour"}, {Name: "site_account_id"}, {Name: "group_key"}, {Name: "model_name"},
 		},
 		DoUpdates: clause.Assignments(siteModelHourlyConflictUpdates(dbConn)),
 	}).Create(&rows).Error
+	if err != nil {
+		restoreSiteModelHourlyRows(rows)
+	}
+	return err
+}
+
+func restoreSiteModelHourlyRows(rows []model.StatsSiteModelHourly) {
+	if len(rows) == 0 {
+		return
+	}
+	siteModelHourlyCacheLock.Lock()
+	defer siteModelHourlyCacheLock.Unlock()
+	for i := range rows {
+		row := rows[i]
+		key := siteModelHourlyKey{
+			Hour:          row.Hour,
+			SiteAccountID: row.SiteAccountID,
+			GroupKey:      row.GroupKey,
+			ModelName:     row.ModelName,
+		}
+		if current, ok := siteModelHourlyCache[key]; ok {
+			current.StatsMetrics.Add(row.StatsMetrics)
+			if row.LastRequestAt > current.LastRequestAt {
+				current.LastRequestAt = row.LastRequestAt
+			}
+			if current.Date == "" {
+				current.Date = row.Date
+			}
+			continue
+		}
+		cloned := row
+		siteModelHourlyCache[key] = &cloned
+	}
 }
 
 func siteModelHourlyConflictUpdates(dbConn *gorm.DB) map[string]interface{} {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/client"
 	"github.com/bestruirui/octopus/internal/conf"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
@@ -68,7 +69,7 @@ func doRequest(url string, useProxy bool) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := iolimit.ReadAll(resp.Body, iolimit.MetadataResponseMaxBytes())
 	if err != nil {
 		log.Debugf("read body failed: %v", err)
 		return nil, err

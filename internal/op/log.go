@@ -46,7 +46,12 @@ var relayLogLastDropWarn atomic.Int64
 var relayLogSubscribers = make(map[chan model.RelayLog]struct{})
 var relayLogSubscribersLock sync.RWMutex
 
-var relayLogStreamTokens = make(map[string]struct{})
+const (
+	relayLogStreamTokenTTL        = 5 * time.Minute
+	relayLogStreamTokenMaxEntries = 1024
+)
+
+var relayLogStreamTokens = make(map[string]time.Time)
 var relayLogStreamTokensLock sync.RWMutex
 
 func RelayLogStreamTokenCreate() (string, error) {
@@ -57,16 +62,36 @@ func RelayLogStreamTokenCreate() (string, error) {
 	token := hex.EncodeToString(bytes)
 
 	relayLogStreamTokensLock.Lock()
-	relayLogStreamTokens[token] = struct{}{}
+	now := time.Now()
+	pruneRelayLogStreamTokensLocked(now)
+	for len(relayLogStreamTokens) >= relayLogStreamTokenMaxEntries {
+		oldestToken := ""
+		var oldestExpiry time.Time
+		for candidate, expiresAt := range relayLogStreamTokens {
+			if oldestToken == "" || expiresAt.Before(oldestExpiry) {
+				oldestToken = candidate
+				oldestExpiry = expiresAt
+			}
+		}
+		if oldestToken == "" {
+			break
+		}
+		delete(relayLogStreamTokens, oldestToken)
+	}
+	relayLogStreamTokens[token] = now.Add(relayLogStreamTokenTTL)
 	relayLogStreamTokensLock.Unlock()
 
 	return token, nil
 }
 
 func RelayLogStreamTokenVerify(token string) bool {
-	relayLogStreamTokensLock.RLock()
-	_, ok := relayLogStreamTokens[token]
-	relayLogStreamTokensLock.RUnlock()
+	relayLogStreamTokensLock.Lock()
+	expiresAt, ok := relayLogStreamTokens[token]
+	if ok && !time.Now().Before(expiresAt) {
+		delete(relayLogStreamTokens, token)
+		ok = false
+	}
+	relayLogStreamTokensLock.Unlock()
 	return ok
 }
 
@@ -74,6 +99,14 @@ func RelayLogStreamTokenRevoke(token string) {
 	relayLogStreamTokensLock.Lock()
 	delete(relayLogStreamTokens, token)
 	relayLogStreamTokensLock.Unlock()
+}
+
+func pruneRelayLogStreamTokensLocked(now time.Time) {
+	for token, expiresAt := range relayLogStreamTokens {
+		if !now.Before(expiresAt) {
+			delete(relayLogStreamTokens, token)
+		}
+	}
 }
 
 func RelayLogSubscribe() chan model.RelayLog {

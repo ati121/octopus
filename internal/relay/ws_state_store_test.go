@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -15,10 +16,10 @@ func TestResolveWSConversationStateFallsBackToStoredState(t *testing.T) {
 
 	stored := &wsConversationState{
 		DownstreamSessionID: "ws_a",
-		RequestModel:   "gpt-5.4",
-		ChannelID:      11,
-		ChannelKeyID:   22,
-		LastResponseID: "resp_saved",
+		RequestModel:        "gpt-5.4",
+		ChannelID:           11,
+		ChannelKeyID:        22,
+		LastResponseID:      "resp_saved",
 	}
 	storeWSConversationState(7, "gpt-5.4", stored, time.Minute)
 
@@ -53,9 +54,9 @@ func TestResolveWSConversationStateDoesNotRestoreStoredStateForFreshConnection(t
 
 	storeWSConversationState(7, "gpt-5.4", &wsConversationState{
 		DownstreamSessionID: "ws_a",
-		RequestModel:   "gpt-5.4",
-		LastResponseID: "resp_saved",
-		Transcript:     []transformerModel.Message{{Role: "assistant"}},
+		RequestModel:        "gpt-5.4",
+		LastResponseID:      "resp_saved",
+		Transcript:          []transformerModel.Message{{Role: "assistant"}},
 	}, time.Minute)
 
 	resolved := resolveWSConversationState(7, "gpt-5.4", nil, false, "ws_b")
@@ -70,9 +71,9 @@ func TestResolveWSConversationStateRestoresStoredStateForContinuation(t *testing
 
 	storeWSConversationState(7, "gpt-5.4", &wsConversationState{
 		DownstreamSessionID: "ws_a",
-		RequestModel:   "gpt-5.4",
-		LastResponseID: "resp_saved",
-		Transcript:     []transformerModel.Message{{Role: "assistant"}},
+		RequestModel:        "gpt-5.4",
+		LastResponseID:      "resp_saved",
+		Transcript:          []transformerModel.Message{{Role: "assistant"}},
 	}, time.Minute)
 
 	local := &wsConversationState{RequestModel: "other-model"}
@@ -97,12 +98,46 @@ func TestResolveWSConversationStateIsSessionScoped(t *testing.T) {
 
 	storeWSConversationState(7, "gpt-5.4", &wsConversationState{
 		DownstreamSessionID: "ws_a",
-		RequestModel:       "gpt-5.4",
-		LastResponseID:     "resp_saved",
+		RequestModel:        "gpt-5.4",
+		LastResponseID:      "resp_saved",
 	}, time.Minute)
 
 	if resolved := resolveWSConversationState(7, "gpt-5.4", nil, true, "ws_b"); resolved != nil {
 		t.Fatalf("expected different downstream session to not restore state, got %#v", resolved)
+	}
+}
+
+func TestResolveWSConversationStateByPreviousResponseIDAcrossReconnect(t *testing.T) {
+	resetWSConversationStateStore()
+	t.Cleanup(resetWSConversationStateStore)
+	storeWSConversationState(7, "gpt-5.4", &wsConversationState{
+		DownstreamSessionID: "ws_old",
+		RequestModel:        "gpt-5.4",
+		LastResponseID:      "resp_saved",
+	}, time.Minute)
+
+	resolved := resolveWSConversationState(7, "gpt-5.4", nil, true, "resp_saved")
+	if resolved == nil || resolved.DownstreamSessionID != "ws_old" {
+		t.Fatalf("expected response-scoped restore, got %#v", resolved)
+	}
+}
+
+func TestWSConversationStateStoreIsBounded(t *testing.T) {
+	resetWSConversationStateStore()
+	t.Cleanup(resetWSConversationStateStore)
+	for i := range wsConversationStoreMaxEntries + 20 {
+		storeWSConversationState(7, "gpt-5.4", &wsConversationState{
+			DownstreamSessionID: fmt.Sprintf("ws_%d", i),
+			RequestModel:        "gpt-5.4",
+			LastResponseID:      fmt.Sprintf("resp_%d", i),
+		}, time.Minute)
+	}
+
+	wsConversationStore.mu.Lock()
+	count := len(wsConversationStore.entries)
+	wsConversationStore.mu.Unlock()
+	if count > wsConversationStoreMaxEntries {
+		t.Fatalf("conversation store exceeded entry limit: %d", count)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/bestruirui/octopus/internal/client"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 )
 
 func siteHTTPClient(ctx context.Context, siteRecord *model.Site, accounts ...*model.SiteAccount) (*http.Client, error) {
@@ -89,7 +90,7 @@ func requestJSON(ctx context.Context, siteRecord *model.Site, method string, req
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := iolimit.ReadAll(resp.Body, iolimit.MetadataResponseMaxBytes())
 	if err != nil {
 		return nil, err
 	}

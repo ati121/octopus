@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/client"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
@@ -31,6 +32,7 @@ var Provider = []string{
 }
 
 var lastUpdateTime time.Time
+var lastUpdateTimeLock sync.RWMutex
 
 func UpdateLLMPrice(ctx context.Context) error {
 	log.Debugf("update LLM price task started")
@@ -61,7 +63,7 @@ func UpdateLLMPrice(ctx context.Context) error {
 			Cost model.LLMPrice `json:"cost"`
 		} `json:"models"`
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := iolimit.ReadAll(resp.Body, iolimit.MetadataResponseMaxBytes())
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -76,12 +78,17 @@ func UpdateLLMPrice(ctx context.Context) error {
 		}
 	}
 	llmPriceLock.Unlock()
+	lastUpdateTimeLock.Lock()
 	lastUpdateTime = time.Now()
+	lastUpdateTimeLock.Unlock()
 	return nil
 }
 
 func GetLastUpdateTime() time.Time {
-	return lastUpdateTime
+	lastUpdateTimeLock.RLock()
+	value := lastUpdateTime
+	lastUpdateTimeLock.RUnlock()
+	return value
 }
 
 func GetLLMPrice(modelName string) *model.LLMPrice {

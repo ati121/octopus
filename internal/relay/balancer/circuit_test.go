@@ -7,21 +7,9 @@ import (
 
 func TestResetCircuitBreakerByChannelRemovesOnlyTargetChannel(t *testing.T) {
 	Reset()
-	globalBreaker.Store(circuitKey(1, 10, "gpt-4o"), &circuitEntry{
-		State:           StateOpen,
-		LastFailureTime: time.Now(),
-		TripCount:       1,
-	})
-	globalBreaker.Store(circuitKey(10, 10, "gpt-4o"), &circuitEntry{
-		State:           StateOpen,
-		LastFailureTime: time.Now(),
-		TripCount:       1,
-	})
-	globalBreaker.Store(circuitKey(2, 20, "gpt-4o"), &circuitEntry{
-		State:           StateOpen,
-		LastFailureTime: time.Now(),
-		TripCount:       1,
-	})
+	setCircuitEntryStateForTest(t, circuitKey(1, 10, "gpt-4o"), StateOpen, time.Now(), 1)
+	setCircuitEntryStateForTest(t, circuitKey(10, 10, "gpt-4o"), StateOpen, time.Now(), 1)
+	setCircuitEntryStateForTest(t, circuitKey(2, 20, "gpt-4o"), StateOpen, time.Now(), 1)
 
 	ResetStateByChannel(1)
 
@@ -33,6 +21,24 @@ func TestResetCircuitBreakerByChannelRemovesOnlyTargetChannel(t *testing.T) {
 	}
 	if tripped, _ := IsTripped(2, 20, "gpt-4o"); !tripped {
 		t.Fatal("expected unrelated channel circuit breaker to remain tripped")
+	}
+}
+
+func TestPruneCircuitBreakersRemovesIdleClosedEntry(t *testing.T) {
+	Reset()
+	t.Cleanup(Reset)
+	key := circuitKey(99, 100, "idle-model")
+	entry := &circuitEntry{
+		State:            StateClosed,
+		LastActivityTime: time.Now().Add(-2 * circuitBreakerIdleTTL),
+	}
+	circuitBreakerStoreMu.Lock()
+	globalBreaker.Store(key, entry)
+	circuitBreakerEntryCount++
+	circuitBreakerStoreMu.Unlock()
+	pruneCircuitBreakers(time.Now())
+	if _, ok := globalBreaker.Load(key); ok {
+		t.Fatal("idle closed circuit entry was not pruned")
 	}
 }
 
@@ -58,11 +64,15 @@ func TestResetStickyByChannelRemovesOnlyTargetChannel(t *testing.T) {
 func TestHalfOpenDoesNotRemainTrippedForeverWithoutResult(t *testing.T) {
 	Reset()
 	key := circuitKey(7, 8, "gpt-4o")
-	globalBreaker.Store(key, &circuitEntry{
-		State:         StateHalfOpen,
-		TripCount:     1,
-		HalfOpenSince: time.Now().Add(-61 * time.Second),
-	})
+	entry := getOrCreateEntry(key)
+	if entry == nil {
+		t.Fatal("expected circuit entry")
+	}
+	entry.mu.Lock()
+	entry.State = StateHalfOpen
+	entry.TripCount = 1
+	entry.HalfOpenSince = time.Now().Add(-61 * time.Second)
+	entry.mu.Unlock()
 
 	tripped, remaining := IsTripped(7, 8, "gpt-4o")
 	if !tripped {
@@ -76,13 +86,51 @@ func TestHalfOpenDoesNotRemainTrippedForeverWithoutResult(t *testing.T) {
 	if !ok {
 		t.Fatal("expected circuit entry to remain after half-open timeout")
 	}
-	entry := value.(*circuitEntry)
+	storedEntry := value.(*circuitEntry)
+	storedEntry.mu.Lock()
+	defer storedEntry.mu.Unlock()
+	if storedEntry.State != StateOpen {
+		t.Fatalf("expected expired half-open entry to return to open, got %v", storedEntry.State)
+	}
+	if !storedEntry.HalfOpenSince.IsZero() {
+		t.Fatalf("expected half-open timestamp to be cleared, got %v", storedEntry.HalfOpenSince)
+	}
+}
+
+func TestCircuitBreakerRejectsNewEntriesAtCapacity(t *testing.T) {
+	Reset()
+	t.Cleanup(Reset)
+	for i := 0; i < maxCircuitBreakerEntries; i++ {
+		if entry := getOrCreateEntry(circuitKey(1, i+1, "model")); entry == nil {
+			t.Fatalf("entry %d was rejected before reaching capacity", i)
+		}
+	}
+	if entry := getOrCreateEntry(circuitKey(2, 1, "overflow")); entry != nil {
+		t.Fatal("expected entry above capacity to be rejected")
+	}
+	if got := circuitBreakerCount(); got != maxCircuitBreakerEntries {
+		t.Fatalf("expected %d entries, got %d", maxCircuitBreakerEntries, got)
+	}
+}
+
+func TestSoftFailureDoesNotCreateCircuitEntry(t *testing.T) {
+	Reset()
+	RecordFailure(1, 1, "rate-limited-model", FailureSoftRateLimit)
+	if got := circuitBreakerCount(); got != 0 {
+		t.Fatalf("expected no entry for a new soft failure, got %d", got)
+	}
+}
+
+func setCircuitEntryStateForTest(t *testing.T, key string, state CircuitState, lastFailure time.Time, tripCount int) {
+	t.Helper()
+	entry := getOrCreateEntry(key)
+	if entry == nil {
+		t.Fatalf("failed to create circuit entry %q", key)
+	}
 	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	if entry.State != StateOpen {
-		t.Fatalf("expected expired half-open entry to return to open, got %v", entry.State)
-	}
-	if !entry.HalfOpenSince.IsZero() {
-		t.Fatalf("expected half-open timestamp to be cleared, got %v", entry.HalfOpenSince)
-	}
+	entry.State = state
+	entry.LastFailureTime = lastFailure
+	entry.LastActivityTime = lastFailure
+	entry.TripCount = tripCount
+	entry.mu.Unlock()
 }

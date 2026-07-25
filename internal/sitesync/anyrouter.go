@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 )
 
 const anyRouterUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
@@ -809,7 +810,7 @@ func anyRouterRequestJSONWithCookies(ctx context.Context, siteRecord *model.Site
 			return nil, cookieHeader, err
 		}
 
-		bodyBytes, readErr := io.ReadAll(resp.Body)
+		bodyBytes, readErr := iolimit.ReadAll(resp.Body, iolimit.MetadataResponseMaxBytes())
 		resp.Body.Close()
 		if readErr != nil {
 			return nil, cookieHeader, readErr

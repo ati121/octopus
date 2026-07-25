@@ -48,6 +48,24 @@ type mockStreamSource struct {
 	closed bool
 }
 
+type errorAwareStreamSource struct {
+	normalClosed bool
+	errorClosed  bool
+}
+
+func (s *errorAwareStreamSource) ReadEvent(context.Context) ([]byte, error) {
+	return nil, errors.New("broken upstream")
+}
+
+func (s *errorAwareStreamSource) Close() error {
+	s.normalClosed = true
+	return nil
+}
+
+func (s *errorAwareStreamSource) CloseWithError() {
+	s.errorClosed = true
+}
+
 func newMockStreamSource(events [][]byte) *mockStreamSource {
 	return &mockStreamSource{events: events}
 }
@@ -97,6 +115,25 @@ func TestStreamProcessor_BasicFlow(t *testing.T) {
 		if !strings.Contains(output, string(event)) {
 			t.Errorf("output missing event: %s", event)
 		}
+	}
+}
+
+func TestStreamProcessor_UsesErrorCloseOnReadFailure(t *testing.T) {
+	source := &errorAwareStreamSource{}
+	processor := NewStreamProcessor(StreamConfig{
+		Source:  source,
+		Writer:  newMockStreamWriter(),
+		Context: context.Background(),
+	})
+
+	if err := processor.Run(); err == nil {
+		t.Fatal("expected stream failure")
+	}
+	if !source.errorClosed {
+		t.Fatal("expected failed source to be closed with error")
+	}
+	if source.normalClosed {
+		t.Fatal("failed source must not be returned through normal close")
 	}
 }
 
@@ -303,6 +340,26 @@ func TestStreamProcessor_BufferRawStream(t *testing.T) {
 	expected := "chunk1chunk2"
 	if string(bufferedData) != expected {
 		t.Errorf("unexpected buffered data:\ngot:  %q\nwant: %q", bufferedData, expected)
+	}
+}
+
+func TestStreamProcessor_RejectsOversizedRawStream(t *testing.T) {
+	source := newMockStreamSource([][]byte{[]byte("1234"), []byte("5")})
+	writer := newMockStreamWriter()
+	processor := NewStreamProcessor(StreamConfig{
+		Source:            source,
+		Writer:            writer,
+		Context:           context.Background(),
+		BufferRawStream:   true,
+		MaxRawBufferBytes: 4,
+	})
+
+	err := processor.Run()
+	if !errors.Is(err, ErrRawStreamTooLarge) {
+		t.Fatalf("expected ErrRawStreamTooLarge, got %v", err)
+	}
+	if got := writer.buffer.String(); got != "1234" {
+		t.Fatalf("expected only bounded data to be written, got %q", got)
 	}
 }
 

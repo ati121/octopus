@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/studio-b12/gowebdav"
 )
@@ -35,9 +38,25 @@ func RunBackup(ctx context.Context) error {
 		return fmt.Errorf("failed to export database: %w", err)
 	}
 
-	data, err := json.Marshal(dump)
+	tmp, err := os.CreateTemp("", "octopus-webdav-backup-*.json")
 	if err != nil {
-		return fmt.Errorf("failed to marshal backup: %w", err)
+		return fmt.Errorf("failed to create temporary backup: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}()
+	if err := json.NewEncoder(tmp).Encode(dump); err != nil {
+		return fmt.Errorf("failed to encode backup: %w", err)
+	}
+	dump = nil
+	info, err := tmp.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat temporary backup: %w", err)
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("failed to rewind temporary backup: %w", err)
 	}
 
 	c, err := NewClient(cfg)
@@ -49,11 +68,11 @@ func RunBackup(ctx context.Context) error {
 	filename := backupPrefix + time.Now().Format("20060102150405") + backupSuffix
 	remotePath := path.Join(cfg.BackupPath, filename)
 
-	if err := c.Write(remotePath, data, 0644); err != nil {
+	if err := c.WriteStreamWithLength(remotePath, tmp, info.Size(), 0644); err != nil {
 		return fmt.Errorf("failed to upload backup: %w", err)
 	}
 
-	log.Infof("webdav backup uploaded: %s (%d bytes)", filename, len(data))
+	log.Infof("webdav backup uploaded: %s (%d bytes)", filename, info.Size())
 
 	enforceRetention(c, cfg.BackupPath, cfg.RetentionCount)
 	return nil
@@ -108,13 +127,30 @@ func RestoreFromBackup(ctx context.Context, filename string) (*model.DBImportRes
 	}
 	remotePath := path.Join(cfg.BackupPath, filename)
 
-	data, err := c.Read(remotePath)
+	stream, err := c.ReadStream(remotePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download backup: %w", err)
 	}
+	defer stream.Close()
 
 	var dump model.DBDump
-	if err := json.Unmarshal(data, &dump); err != nil {
+	limited := &io.LimitedReader{R: stream, N: iolimit.ImportBodyMaxBytes() + 1}
+	decoder := json.NewDecoder(limited)
+	if err := decoder.Decode(&dump); err != nil {
+		if limited.N <= 0 {
+			return nil, fmt.Errorf("failed to parse backup: %w", &iolimit.TooLargeError{Limit: iolimit.ImportBodyMaxBytes()})
+		}
+		return nil, fmt.Errorf("failed to parse backup: %w", err)
+	}
+	trailingErr := decoder.Decode(&struct{}{})
+	if limited.N <= 0 {
+		return nil, fmt.Errorf("failed to parse backup: %w", &iolimit.TooLargeError{Limit: iolimit.ImportBodyMaxBytes()})
+	}
+	if trailingErr != io.EOF {
+		err := trailingErr
+		if err == nil {
+			return nil, fmt.Errorf("failed to parse backup: trailing JSON data")
+		}
 		return nil, fmt.Errorf("failed to parse backup: %w", err)
 	}
 

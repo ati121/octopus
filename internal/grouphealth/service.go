@@ -31,7 +31,14 @@ type Service struct {
 	prober *Prober
 }
 
-var runLocks sync.Map
+const (
+	defaultGroupHealthWorkers  = 2
+	maxGroupHealthWorkers      = 32
+	groupHealthFinalizeTimeout = 5 * time.Second
+)
+
+var runLocks = make(map[int]struct{})
+var runLocksMu sync.Mutex
 
 func NewService(repo Repository, prober *Prober) *Service {
 	if repo == nil {
@@ -46,13 +53,23 @@ func NewService(repo Repository, prober *Prober) *Service {
 	}
 }
 
-func lockGroup(groupID int) func() {
-	value, _ := runLocks.LoadOrStore(groupID, &sync.Mutex{})
-	lock := value.(*sync.Mutex)
-	lock.Lock()
-	return func() {
-		lock.Unlock()
+func tryLockGroup(groupID int) (func(), bool) {
+	runLocksMu.Lock()
+	if _, exists := runLocks[groupID]; exists {
+		runLocksMu.Unlock()
+		return nil, false
 	}
+	runLocks[groupID] = struct{}{}
+	runLocksMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			runLocksMu.Lock()
+			delete(runLocks, groupID)
+			runLocksMu.Unlock()
+		})
+	}, true
 }
 
 // normalizeProbeMode returns the effective probe mode from a prioritized list.
@@ -77,8 +94,14 @@ func resolveChannelName(ctx context.Context, channelID int) string {
 	return channel.Name
 }
 
-func (s *Service) RunGroupHealth(ctx context.Context, groupID int, probeModes ...model.GroupHealthProbeMode) error {
-	unlock := lockGroup(groupID)
+func (s *Service) RunGroupHealth(ctx context.Context, groupID int, probeModes ...model.GroupHealthProbeMode) (runErr error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	unlock, acquired := tryLockGroup(groupID)
+	if !acquired {
+		return ErrGroupHealthAlreadyRunning
+	}
 	defer unlock()
 
 	if _, err := s.repo.GetRunningSnapshotByGroupID(ctx, groupID); err == nil {
@@ -98,6 +121,36 @@ func (s *Service) RunGroupHealth(ctx context.Context, groupID int, probeModes ..
 	if err != nil {
 		return err
 	}
+	snapshotFinished := false
+	fallbackStatus := model.GroupHealthStatusFailed
+	var fallbackSuccessfulChannelID *int
+	fallbackMessage := ""
+	defer func() {
+		if snapshotFinished {
+			return
+		}
+		finishedAt := time.Now()
+		message := fallbackMessage
+		if message == "" {
+			message = "health check aborted"
+		}
+		if runErr != nil && fallbackMessage == "" {
+			message = fmt.Sprintf("health check aborted: %v", runErr)
+		}
+		finishCtx, cancel := context.WithTimeout(context.Background(), groupHealthFinalizeTimeout)
+		defer cancel()
+		if finishErr := s.repo.FinishSnapshot(
+			finishCtx,
+			snapshot.ID,
+			fallbackStatus,
+			fallbackSuccessfulChannelID,
+			finishedAt.Sub(snapshot.StartedAt).Milliseconds(),
+			message,
+			finishedAt,
+		); finishErr != nil && runErr == nil {
+			runErr = finishErr
+		}
+	}()
 
 	items := append([]model.GroupItem(nil), group.Items...)
 	sort.Slice(items, func(i, j int) bool {
@@ -249,30 +302,69 @@ func (s *Service) RunGroupHealth(ctx context.Context, groupID int, probeModes ..
 
 	finishedAt := time.Now()
 	durationMS := finishedAt.Sub(snapshot.StartedAt).Milliseconds()
-	return s.repo.FinishSnapshot(ctx, snapshot.ID, finalStatus, successfulChannelID, durationMS, message, finishedAt)
+	fallbackStatus = finalStatus
+	fallbackSuccessfulChannelID = successfulChannelID
+	fallbackMessage = message
+	if err := s.repo.FinishSnapshot(ctx, snapshot.ID, finalStatus, successfulChannelID, durationMS, message, finishedAt); err != nil {
+		return err
+	}
+	snapshotFinished = true
+	return nil
 }
 
 func (s *Service) RunAllGroupHealth(ctx context.Context, maxConcurrency int, probeModes ...model.GroupHealthProbeMode) {
-	if maxConcurrency <= 0 {
-		maxConcurrency = 2
-	}
 	probeMode := normalizeProbeMode(probeModes)
 	groups, err := op.GroupList(ctx)
 	if err != nil {
 		return
 	}
-	sem := make(chan struct{}, maxConcurrency)
-	var wg sync.WaitGroup
+	groupIDs := make([]int, 0, len(groups))
 	for _, group := range groups {
-		groupID := group.ID
-		wg.Add(1)
+		groupIDs = append(groupIDs, group.ID)
+	}
+	runGroupHealthJobs(ctx, groupIDs, maxConcurrency, func(runCtx context.Context, groupID int) error {
+		return s.RunGroupHealth(runCtx, groupID, probeMode)
+	})
+}
+
+func runGroupHealthJobs(ctx context.Context, groupIDs []int, maxConcurrency int, run func(context.Context, int) error) {
+	if len(groupIDs) == 0 || run == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if maxConcurrency <= 0 {
+		maxConcurrency = defaultGroupHealthWorkers
+	}
+	if maxConcurrency > maxGroupHealthWorkers {
+		maxConcurrency = maxGroupHealthWorkers
+	}
+	if maxConcurrency > len(groupIDs) {
+		maxConcurrency = len(groupIDs)
+	}
+
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(maxConcurrency)
+	for range maxConcurrency {
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			_ = s.RunGroupHealth(ctx, groupID, probeMode)
+			for groupID := range jobs {
+				_ = run(ctx, groupID)
+			}
 		}()
 	}
+
+sendJobs:
+	for _, groupID := range groupIDs {
+		select {
+		case jobs <- groupID:
+		case <-ctx.Done():
+			break sendJobs
+		}
+	}
+	close(jobs)
 	wg.Wait()
 }
 

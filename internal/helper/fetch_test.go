@@ -88,3 +88,44 @@ func TestFetchModelsUsesBrowserHeadersAndSummarizesHTMLError(t *testing.T) {
 		t.Fatalf("expected Accept-Language header to be set")
 	}
 }
+
+func TestFetchGeminiModelsRejectsRepeatedPageToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-test"}],"nextPageToken":"repeat"}`))
+	}))
+	defer server.Close()
+
+	_, err := fetchGeminiModels(server.Client(), context.Background(), model.Channel{
+		Type:     outbound.OutboundTypeGemini,
+		BaseUrls: []model.BaseUrl{{URL: server.URL}},
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "test-key"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "repeated page token") {
+		t.Fatalf("expected repeated page token error, got %v", err)
+	}
+}
+
+func TestFetchAnthropicModelsRejectsRepeatedLastID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"claude-test"}],"has_more":true,"last_id":"repeat"}`))
+	}))
+	defer server.Close()
+
+	_, err := fetchAnthropicModels(server.Client(), context.Background(), model.Channel{
+		Type:     outbound.OutboundTypeAnthropic,
+		BaseUrls: []model.BaseUrl{{URL: server.URL}},
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "test-key"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "repeated last_id") {
+		t.Fatalf("expected repeated last_id error, got %v", err)
+	}
+}
+
+func TestModelFetchAccumulatorBoundsNames(t *testing.T) {
+	accumulator := newModelFetchAccumulator(1)
+	if err := accumulator.Add(strings.Repeat("x", maxFetchedModelNameBytes+1)); err == nil {
+		t.Fatal("expected oversized model name to be rejected")
+	}
+}

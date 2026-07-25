@@ -227,6 +227,28 @@ func TestWSConversationStateCanAutoRestart(t *testing.T) {
 	}
 }
 
+func TestWSConversationStateLimitsRetainedHistory(t *testing.T) {
+	messages := make([]transformerModel.Message, 0, wsConversationMaxTranscriptMessages+20)
+	for i := range wsConversationMaxTranscriptMessages + 20 {
+		content := fmt.Sprintf("message-%d", i)
+		messages = append(messages, transformerModel.Message{
+			Role:    "user",
+			Content: transformerModel.MessageContent{Content: &content},
+		})
+	}
+	state := &wsConversationState{
+		ReplayWindowItems: make([]byte, wsConversationMaxReplayBytes+1),
+		Transcript:        messages,
+	}
+	state.limitRetainedHistory()
+	if state.ReplayWindowItems != nil {
+		t.Fatal("oversized replay window should be discarded")
+	}
+	if len(state.Transcript) != wsConversationMaxTranscriptMessages {
+		t.Fatalf("expected %d retained messages, got %d", wsConversationMaxTranscriptMessages, len(state.Transcript))
+	}
+}
+
 func TestRewriteWSPreviousResponseIDUsesLatestAnchorForReplayAlias(t *testing.T) {
 	reqBody := map[string]json.RawMessage{
 		"previous_response_id": json.RawMessage(`"resp_old"`),

@@ -18,6 +18,7 @@ import (
 	"github.com/samber/lo"
 
 	"github.com/bestruirui/octopus/internal/transformer/model"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 )
 
 // ResponseOutbound implements the Outbound interface for OpenAI Responses API.
@@ -148,7 +149,7 @@ func (o *ResponseOutbound) TransformResponse(ctx context.Context, response *http
 		return nil, fmt.Errorf("response is nil")
 	}
 
-	body, err := io.ReadAll(response.Body)
+	body, err := iolimit.ReadAll(response.Body, iolimit.UpstreamResponseMaxBytes())
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}

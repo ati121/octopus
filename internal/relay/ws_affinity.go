@@ -1,22 +1,23 @@
 package relay
 
 import (
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
-	"github.com/bestruirui/octopus/internal/utils/cache"
 	"gorm.io/gorm/clause"
 )
 
 const (
-	wsAffinityCacheShards = 16
 	wsAffinityMaxTTL      = time.Hour
+	wsAffinityHotMaxItems = 10000
 )
 
 type wsAffinityScope struct {
@@ -39,12 +40,100 @@ type wsAffinityStore interface {
 	Delete(ctx context.Context, scope wsAffinityScope) error
 }
 
+type wsAffinityHotItem struct {
+	key   string
+	entry wsAffinityEntry
+}
+
+type wsAffinityHotCache struct {
+	mu         sync.Mutex
+	maxEntries int
+	items      map[string]*list.Element
+	lru        list.List
+}
+
+func newWSAffinityHotCache(maxEntries int) *wsAffinityHotCache {
+	if maxEntries <= 0 {
+		maxEntries = wsAffinityHotMaxItems
+	}
+	return &wsAffinityHotCache{
+		maxEntries: maxEntries,
+		items:      make(map[string]*list.Element, maxEntries),
+	}
+}
+
+func (c *wsAffinityHotCache) Get(key string, now time.Time) (wsAffinityEntry, bool) {
+	if c == nil {
+		return wsAffinityEntry{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	element, ok := c.items[key]
+	if !ok {
+		return wsAffinityEntry{}, false
+	}
+	item := element.Value.(*wsAffinityHotItem)
+	if !item.entry.ExpiresAt.IsZero() && !now.Before(item.entry.ExpiresAt) {
+		c.removeElement(element)
+		return wsAffinityEntry{}, false
+	}
+	c.lru.MoveToFront(element)
+	return item.entry, true
+}
+
+func (c *wsAffinityHotCache) Set(key string, entry wsAffinityEntry) {
+	if c == nil || key == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if element, ok := c.items[key]; ok {
+		element.Value.(*wsAffinityHotItem).entry = entry
+		c.lru.MoveToFront(element)
+		return
+	}
+	element := c.lru.PushFront(&wsAffinityHotItem{key: key, entry: entry})
+	c.items[key] = element
+	for len(c.items) > c.maxEntries {
+		c.removeElement(c.lru.Back())
+	}
+}
+
+func (c *wsAffinityHotCache) Del(key string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if element, ok := c.items[key]; ok {
+		c.removeElement(element)
+	}
+}
+
+func (c *wsAffinityHotCache) Len() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.items)
+}
+
+func (c *wsAffinityHotCache) removeElement(element *list.Element) {
+	if element == nil {
+		return
+	}
+	item := element.Value.(*wsAffinityHotItem)
+	delete(c.items, item.key)
+	c.lru.Remove(element)
+}
+
 type dbWSAffinityStore struct {
-	hot cache.Cache[string, wsAffinityEntry]
+	hot *wsAffinityHotCache
 }
 
 func newDBWSAffinityStore() wsAffinityStore {
-	return &dbWSAffinityStore{hot: cache.New[string, wsAffinityEntry](wsAffinityCacheShards)}
+	return &dbWSAffinityStore{hot: newWSAffinityHotCache(wsAffinityHotMaxItems)}
 }
 
 var defaultWSAffinityStore wsAffinityStore = newDBWSAffinityStore()
@@ -63,12 +152,9 @@ func (s *dbWSAffinityStore) Get(ctx context.Context, scope wsAffinityScope) (*ws
 	}
 	now := time.Now()
 	if s != nil && s.hot != nil {
-		if entry, found := s.hot.Get(key); found {
-			if entry.ExpiresAt.IsZero() || now.Before(entry.ExpiresAt) {
-				cloned := entry
-				return &cloned, true
-			}
-			s.hot.Del(key)
+		if entry, found := s.hot.Get(key, now); found {
+			cloned := entry
+			return &cloned, true
 		}
 	}
 
@@ -171,7 +257,8 @@ func normalizeWSAffinityScope(scope wsAffinityScope) (cacheKey string, responseH
 		return "", "", false
 	}
 	responseHash = hashWSResponseID(responseID)
-	cacheKey = fmt.Sprintf("%d:%d:%s:%s", scope.APIKeyID, scope.GroupID, requestModel, responseHash)
+	requestModelHash := sha256.Sum256([]byte(requestModel))
+	cacheKey = fmt.Sprintf("%d:%d:%x:%s", scope.APIKeyID, scope.GroupID, requestModelHash, responseHash)
 	return cacheKey, responseHash, true
 }
 

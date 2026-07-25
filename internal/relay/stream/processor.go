@@ -20,6 +20,12 @@ import (
 // Relay should fail over to another channel.
 var ErrEmptyUpstreamStream = errors.New("upstream stream ended without forwarding any payload")
 
+// ErrRawStreamTooLarge prevents passthrough metrics buffering from growing
+// without bound. The stream limit is checked before the next chunk is written.
+var ErrRawStreamTooLarge = errors.New("upstream stream exceeds raw buffer limit")
+
+const defaultRawStreamBufferLimit = 16 * 1024 * 1024
+
 // StreamSource abstracts different event sources (SSE, WebSocket, raw bytes).
 type StreamSource interface {
 	// ReadEvent blocks until the next event is available or returns an error.
@@ -28,6 +34,10 @@ type StreamSource interface {
 
 	// Close releases resources. Must be idempotent.
 	Close() error
+}
+
+type streamErrorCloser interface {
+	CloseWithError()
 }
 
 // StreamTransform converts raw event data to the client's expected format.
@@ -61,8 +71,9 @@ type StreamConfig struct {
 	OnFinish     func(ctx context.Context, rawStream []byte) error // Called on stream end
 
 	// Passthrough-specific
-	BufferRawStream bool                // Enable raw stream buffering for metrics
-	TerminalEvents  map[string]struct{} // Protocol terminal events for early completion
+	BufferRawStream   bool                // Enable raw stream buffering for metrics
+	MaxRawBufferBytes int                 // Maximum buffered stream bytes; 0 uses a safe default
+	TerminalEvents    map[string]struct{} // Protocol terminal events for early completion
 }
 
 // StreamProcessor unifies all stream handling logic.
@@ -78,6 +89,9 @@ type StreamProcessor struct {
 
 // NewStreamProcessor creates a processor from config.
 func NewStreamProcessor(config StreamConfig) *StreamProcessor {
+	if config.BufferRawStream && config.MaxRawBufferBytes <= 0 {
+		config.MaxRawBufferBytes = defaultRawStreamBufferLimit
+	}
 	return &StreamProcessor{
 		config:     config,
 		firstToken: true,
@@ -85,7 +99,7 @@ func NewStreamProcessor(config StreamConfig) *StreamProcessor {
 }
 
 // Run executes the unified stream processing loop.
-func (p *StreamProcessor) Run() error {
+func (p *StreamProcessor) Run() (runErr error) {
 	// Set SSE response headers
 	headers := p.config.Writer.Header()
 	headers.Set("Content-Type", "text/event-stream")
@@ -118,7 +132,15 @@ func (p *StreamProcessor) Run() error {
 	// Async read from source — use a derived context so we can unblock on any exit.
 	readCtx, readCancel := context.WithCancel(p.config.Context)
 	defer readCancel()
-	defer p.config.Source.Close()
+	defer func() {
+		if runErr != nil {
+			if errorCloser, ok := p.config.Source.(streamErrorCloser); ok {
+				errorCloser.CloseWithError()
+				return
+			}
+		}
+		_ = p.config.Source.Close()
+	}()
 
 	type readResult struct {
 		data []byte
@@ -188,6 +210,9 @@ func (p *StreamProcessor) Run() error {
 
 			// Buffer raw data if enabled
 			if p.config.BufferRawStream {
+				if len(r.data) > p.config.MaxRawBufferBytes-p.rawBuffer.Len() {
+					return fmt.Errorf("%w: limit=%d", ErrRawStreamTooLarge, p.config.MaxRawBufferBytes)
+				}
 				p.rawBuffer.Write(r.data)
 			}
 

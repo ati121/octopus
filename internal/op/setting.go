@@ -122,6 +122,7 @@ func settingRefreshCache(ctx context.Context) error {
 		}
 		settings = append(settings, missingSettings...)
 	}
+	settingCache.Clear()
 	for _, setting := range settings {
 		settingCache.Set(setting.Key, setting.Value)
 	}

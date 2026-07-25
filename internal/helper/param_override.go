@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 )
 
 // ApplyParamOverride merges a JSON-object override into an outbound JSON request body.
@@ -16,7 +18,7 @@ func ApplyParamOverride(request *http.Request, paramOverride *string) error {
 		return nil
 	}
 
-	body, err := io.ReadAll(request.Body)
+	body, err := iolimit.ReadAll(request.Body, iolimit.RequestBodyMaxBytes())
 	if err != nil {
 		return fmt.Errorf("failed to read request body: %w", err)
 	}

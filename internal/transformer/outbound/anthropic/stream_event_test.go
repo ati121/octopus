@@ -141,3 +141,67 @@ func TestTransformStreamEventAnthropicNativeMapping(t *testing.T) {
 		t.Fatalf("error detail lost: %+v", events[0].Error)
 	}
 }
+
+func TestTransformStreamEventMessageStopSynthesizesMissingStopReason(t *testing.T) {
+	outbound := &MessageOutbound{}
+	ctx := context.Background()
+
+	if _, err := outbound.TransformStreamEvent(ctx, []byte(`{"type":"message_start","message":{"id":"msg_empty","model":"claude-test","role":"assistant","usage":{"input_tokens":12,"output_tokens":0}}}`)); err != nil {
+		t.Fatalf("message_start: %v", err)
+	}
+
+	events, err := outbound.TransformStreamEvent(ctx, []byte(`{"type":"message_stop"}`))
+	if err != nil {
+		t.Fatalf("message_stop: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected synthesized stop followed by usage, got %+v", events)
+	}
+	if events[0].Kind != model.StreamEventKindMessageStop || events[0].StopReason != model.FinishReasonStop {
+		t.Fatalf("first event must be default MessageStop, got %+v", events[0])
+	}
+	if events[0].ID != "msg_empty" || events[0].Model != "claude-test" {
+		t.Fatalf("synthesized stop lost stream metadata: %+v", events[0])
+	}
+	if events[1].Kind != model.StreamEventKindUsageDelta || events[1].Usage == nil {
+		t.Fatalf("second event must be UsageDelta, got %+v", events[1])
+	}
+	if events[1].Usage.PromptTokens != 12 || events[1].Usage.CompletionTokens != 0 {
+		t.Fatalf("unexpected terminal usage: %+v", events[1].Usage)
+	}
+}
+
+func TestTransformStreamEventMessageStopDoesNotDuplicateKnownStopReason(t *testing.T) {
+	outbound := &MessageOutbound{}
+	ctx := context.Background()
+
+	if _, err := outbound.TransformStreamEvent(ctx, []byte(`{"type":"message_start","message":{"id":"msg_normal","model":"claude-test","role":"assistant","usage":{"input_tokens":8,"output_tokens":0}}}`)); err != nil {
+		t.Fatalf("message_start: %v", err)
+	}
+	deltaEvents, err := outbound.TransformStreamEvent(ctx, []byte(`{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":4}}`))
+	if err != nil {
+		t.Fatalf("message_delta: %v", err)
+	}
+	foundLengthStop := false
+	for _, event := range deltaEvents {
+		if event.Kind == model.StreamEventKindMessageStop && event.StopReason == model.FinishReasonLength {
+			foundLengthStop = true
+		}
+	}
+	if !foundLengthStop {
+		t.Fatalf("message_delta stop reason was not preserved: %+v", deltaEvents)
+	}
+
+	events, err := outbound.TransformStreamEvent(ctx, []byte(`{"type":"message_stop"}`))
+	if err != nil {
+		t.Fatalf("message_stop: %v", err)
+	}
+	for _, event := range events {
+		if event.Kind == model.StreamEventKindMessageStop {
+			t.Fatalf("message_stop duplicated an existing stop reason: %+v", events)
+		}
+	}
+	if len(events) != 1 || events[0].Kind != model.StreamEventKindUsageDelta {
+		t.Fatalf("expected only terminal usage after known stop reason, got %+v", events)
+	}
+}

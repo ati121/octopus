@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Clock, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, DollarSign, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, CircleOff, Link, Globe } from 'lucide-react';
+import { Clock, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, DollarSign, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, CircleOff, Link } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { motion, AnimatePresence } from 'motion/react';
 import JsonView from '@uiw/react-json-view';
@@ -108,7 +108,6 @@ function mergeAdjacentAttempts(attempts: ChannelAttempt[]): MergedAttempt[] {
             && last.model_name === a.model_name
             && last.status === a.status
             && (last.msg ?? '') === (a.msg ?? '')
-            && (last.reason ?? '') === (a.reason ?? '')
         ) {
             last.repeat += 1;
             last.lastAttemptNum = a.attempt_num;
@@ -316,11 +315,6 @@ function RetryBadgeWithTooltip({ channelName, brandColor, attempts }: RetryBadge
                                     <span className="text-[10px] text-muted-foreground">
                                         {attempt.model_name} • {formatDuration(attempt.totalDuration)}
                                     </span>
-                                    {attempt.reason ? (
-                                        <span className="truncate font-mono text-[10px] text-muted-foreground/80">
-                                            {attempt.reason}
-                                        </span>
-                                    ) : null}
                                 </div>
                                 {attempt.repeat > 1 ? (
                                     <Badge variant="outline" className="shrink-0 h-5 px-1.5 text-[10px] font-semibold tabular-nums">
@@ -538,7 +532,6 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
         [displayActualModelName]
     );
     const requestAPIKeyName = useMemo(() => log.request_api_key_name?.trim() ?? '', [log.request_api_key_name]);
-    const clientIP = useMemo(() => log.client_ip?.trim() ?? '', [log.client_ip]);
     const disableMutation = useUpdateSiteChannelModelDisabled();
 
     const hasError = !log.processing && !!log.error;
@@ -697,14 +690,6 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                         <KeyRound className="size-3.5 shrink-0 text-orange-500" />
                                         <span className="truncate" title={requestAPIKeyName}>
                                             {requestAPIKeyName}
-                                        </span>
-                                    </div>
-                                ) : null}
-                                {clientIP ? (
-                                    <div className="flex items-center gap-1.5">
-                                        <Globe className="size-3.5 shrink-0 text-blue-500" />
-                                        <span className="truncate tabular-nums" title={clientIP}>
-                                            {clientIP}
                                         </span>
                                     </div>
                                 ) : null}
@@ -877,7 +862,6 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                                             && last.model_name === a.model_name
                                                                             && last.status === a.status
                                                                             && (last.msg ?? '') === (a.msg ?? '')
-                                                                            && (last.reason ?? '') === (a.reason ?? '')
                                                                         ) {
                                                                             last.repeat += 1;
                                                                             last.lastAttemptNum = a.attempt_num;
@@ -946,11 +930,6 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                                                         ) : null}
                                                                                     </div>
                                                                                 </div>
-                                                                                {attempt.reason ? (
-                                                                                    <div className="break-all border-l-2 border-border/60 pl-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                                                                                        {t('routeReason')}: {attempt.reason}
-                                                                                    </div>
-                                                                                ) : null}
                                                                                 {sanitizedMsg ? (
                                                                                     <div className={cn('pl-2 border-l-2 text-[11px] leading-relaxed whitespace-pre-wrap wrap-break-word', statusMeta.messageClassName)}>
                                                                                         {sanitizedMsg}
@@ -1010,14 +989,6 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                     <KeyRound className="size-3.5 shrink-0 text-orange-500" />
                                     <span className="truncate" title={requestAPIKeyName}>
                                         {requestAPIKeyName}
-                                    </span>
-                                </div>
-                            ) : null}
-                            {clientIP ? (
-                                <div className="flex min-w-0 items-center gap-1.5">
-                                    <Globe className="size-3.5 shrink-0 text-blue-500" />
-                                    <span className="truncate tabular-nums" title={clientIP}>
-                                        {clientIP}
                                     </span>
                                 </div>
                             ) : null}

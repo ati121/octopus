@@ -787,7 +787,6 @@
             "failed": "Failed",
             "skipped": "Skipped",
             "circuitBreak": "Circuit Break",
-            "routeReason": "Route",
             "disableModel": "Disable Model",
             "disabling": "Disabling",
             "disabled": "Disabled",

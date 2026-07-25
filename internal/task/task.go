@@ -10,19 +10,22 @@ import (
 )
 
 type taskEntry struct {
-	name       string
-	interval   time.Duration
-	fn         func()
-	runOnStart bool
-	ticker     *time.Ticker
-	stopCh     chan struct{}
-	updateCh   chan time.Duration
-	running    atomic.Bool
+	name        string
+	interval    time.Duration
+	fn          func()
+	runOnStart  bool
+	ticker      *time.Ticker
+	stopCh      chan struct{}
+	updateCh    chan time.Duration
+	updateMu    sync.Mutex
+	running     atomic.Bool
+	loopStarted atomic.Bool
 }
 
 var (
-	tasks   = make(map[string]*taskEntry)
-	tasksMu sync.RWMutex
+	tasks      = make(map[string]*taskEntry)
+	tasksMu    sync.RWMutex
+	runStarted atomic.Bool
 )
 
 // Register 注册一个定时任务
@@ -34,22 +37,27 @@ func Register(name string, interval time.Duration, runOnStart bool, fn func()) {
 	}
 
 	tasksMu.Lock()
-	defer tasksMu.Unlock()
 
 	if _, exists := tasks[name]; exists {
+		tasksMu.Unlock()
 		log.Warnf("task %s already registered, skipping", name)
 		return
 	}
 
-	tasks[name] = &taskEntry{
+	entry := &taskEntry{
 		name:       name,
 		interval:   interval,
 		fn:         fn,
 		runOnStart: runOnStart,
 		stopCh:     make(chan struct{}),
-		updateCh:   make(chan time.Duration),
+		updateCh:   make(chan time.Duration, 1),
 	}
+	tasks[name] = entry
+	tasksMu.Unlock()
 	log.Debugf("task %s registered with interval %v, runOnStart: %v", name, interval, runOnStart)
+	if runStarted.Load() {
+		startTaskLoop(entry)
+	}
 }
 
 // Update 更新任务的执行间隔
@@ -72,26 +80,46 @@ func Update(name string, interval time.Duration) {
 	}
 	tasksMu.Unlock()
 
+	// Keep only the newest pending interval. A buffered channel avoids losing an
+	// update merely because the task loop is handling a ticker at that instant.
+	entry.updateMu.Lock()
 	select {
 	case entry.updateCh <- interval:
-		log.Infof("task %s interval updated to %v", name, interval)
 	default:
-		log.Warnf("task %s update channel full, skipping", name)
+		select {
+		case <-entry.updateCh:
+		default:
+		}
+		entry.updateCh <- interval
 	}
+	entry.updateMu.Unlock()
+	log.Infof("task %s interval updated to %v", name, interval)
 }
 
 // RUN 启动所有注册的任务
 func RUN() {
+	runStarted.Store(true)
 	tasksMu.RLock()
+	entries := make([]*taskEntry, 0, len(tasks))
 	for _, entry := range tasks {
-		safe.Go("task-loop:"+entry.name, func() {
-			runTask(entry)
-		})
+		entries = append(entries, entry)
 	}
 	tasksMu.RUnlock()
+	for _, entry := range entries {
+		startTaskLoop(entry)
+	}
 
 	// 阻塞主协程
 	select {}
+}
+
+func startTaskLoop(entry *taskEntry) {
+	if entry == nil || !entry.loopStarted.CompareAndSwap(false, true) {
+		return
+	}
+	safe.Go("task-loop:"+entry.name, func() {
+		runTask(entry)
+	})
 }
 
 func runTask(entry *taskEntry) {

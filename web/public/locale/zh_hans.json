@@ -787,7 +787,6 @@
             "failed": "失败",
             "skipped": "跳过",
             "circuitBreak": "熔断",
-            "routeReason": "选路",
             "disableModel": "禁用模型",
             "disabling": "禁用中",
             "disabled": "已禁用",

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
+	"gorm.io/gorm"
 )
 
 func setupGroupHealthTestDB(t *testing.T) context.Context {
@@ -34,6 +37,210 @@ func setupGroupHealthTestDB(t *testing.T) context.Context {
 	})
 
 	return context.Background()
+}
+
+func TestGroupRunLockRejectsConcurrentUseAndIsRemovedAfterUse(t *testing.T) {
+	const groupID = 987654
+	unlock, acquired := tryLockGroup(groupID)
+	if !acquired {
+		t.Fatal("expected first group lock attempt to succeed")
+	}
+	runLocksMu.Lock()
+	_, existsWhileLocked := runLocks[groupID]
+	runLocksMu.Unlock()
+	if !existsWhileLocked {
+		t.Fatal("expected active group lock to be registered")
+	}
+	if secondUnlock, secondAcquired := tryLockGroup(groupID); secondAcquired || secondUnlock != nil {
+		t.Fatal("expected concurrent group lock attempt to be rejected")
+	}
+	unlock()
+	runLocksMu.Lock()
+	_, existsAfterUnlock := runLocks[groupID]
+	runLocksMu.Unlock()
+	if existsAfterUnlock {
+		t.Fatal("unused group lock should be removed")
+	}
+	thirdUnlock, thirdAcquired := tryLockGroup(groupID)
+	if !thirdAcquired {
+		t.Fatal("expected group lock to be reusable after unlock")
+	}
+	thirdUnlock()
+}
+
+type recordingGroupHealthRepository struct {
+	snapshot       model.GroupHealthSnapshot
+	appendErr      error
+	cancelOnAppend context.CancelFunc
+	finishCalls    int
+	finishCtxErr   error
+	finishStatus   model.GroupHealthStatus
+	finishMessage  string
+	finishErrs     []error
+	finishStatuses []model.GroupHealthStatus
+}
+
+func (r *recordingGroupHealthRepository) CreateRunningSnapshot(_ context.Context, group model.Group, probeMode model.GroupHealthProbeMode) (*model.GroupHealthSnapshot, error) {
+	r.snapshot = model.GroupHealthSnapshot{
+		ID:        1,
+		GroupID:   group.ID,
+		GroupName: group.Name,
+		GroupMode: group.Mode,
+		ProbeMode: probeMode,
+		Status:    model.GroupHealthStatusRunning,
+		StartedAt: time.Now(),
+	}
+	return &r.snapshot, nil
+}
+
+func (r *recordingGroupHealthRepository) AppendAttempt(context.Context, int, model.GroupHealthAttempt) error {
+	if r.cancelOnAppend != nil {
+		r.cancelOnAppend()
+	}
+	return r.appendErr
+}
+
+func (r *recordingGroupHealthRepository) FinishSnapshot(ctx context.Context, _ int, status model.GroupHealthStatus, _ *int, _ int64, message string, _ time.Time) error {
+	r.finishCalls++
+	r.finishCtxErr = ctx.Err()
+	r.finishStatus = status
+	r.finishMessage = message
+	r.finishStatuses = append(r.finishStatuses, status)
+	if r.finishCalls <= len(r.finishErrs) {
+		return r.finishErrs[r.finishCalls-1]
+	}
+	return nil
+}
+
+func (*recordingGroupHealthRepository) GetLatestSnapshotByGroupID(context.Context, int) (*model.GroupHealthSnapshot, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+
+func (*recordingGroupHealthRepository) GetRunningSnapshotByGroupID(context.Context, int) (*model.GroupHealthSnapshot, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+
+func (*recordingGroupHealthRepository) ListGroupHealthViews(context.Context) ([]model.GroupHealthGroupView, error) {
+	return nil, nil
+}
+
+func (*recordingGroupHealthRepository) GetGroupHealthViewByID(context.Context, int) (*model.GroupHealthGroupView, error) {
+	return nil, gorm.ErrRecordNotFound
+}
+
+func TestRunGroupHealthFinalizesSnapshotAfterCanceledIntermediateError(t *testing.T) {
+	baseCtx := setupGroupHealthTestDB(t)
+	channel := &model.Channel{
+		Name:     "group-health-finalize",
+		Type:     outbound.OutboundTypeOpenAIChat,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: "http://127.0.0.1:1/v1"}},
+		Model:    "probe-model",
+	}
+	if err := op.ChannelCreate(channel, baseCtx); err != nil {
+		t.Fatalf("ChannelCreate: %v", err)
+	}
+	group := &model.Group{Name: "finalize-group", Mode: model.GroupModeFailover}
+	if err := op.GroupCreate(group, baseCtx); err != nil {
+		t.Fatalf("GroupCreate: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: channel.ID, ModelName: "probe-model", Priority: 1, Weight: 1}, baseCtx); err != nil {
+		t.Fatalf("GroupItemAdd: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(baseCtx)
+	expectedErr := errors.New("append attempt failed")
+	repo := &recordingGroupHealthRepository{appendErr: expectedErr, cancelOnAppend: cancel}
+	service := NewService(repo, nil)
+	err := service.RunGroupHealth(ctx, group.ID)
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected append error, got %v", err)
+	}
+	if repo.finishCalls != 1 {
+		t.Fatalf("expected one snapshot finalization, got %d", repo.finishCalls)
+	}
+	if repo.finishCtxErr != nil {
+		t.Fatalf("expected independent finalization context, got %v", repo.finishCtxErr)
+	}
+	if repo.finishStatus != model.GroupHealthStatusFailed {
+		t.Fatalf("expected failed snapshot, got %s", repo.finishStatus)
+	}
+	if !strings.Contains(repo.finishMessage, expectedErr.Error()) {
+		t.Fatalf("expected finalization message to contain the cause, got %q", repo.finishMessage)
+	}
+}
+
+func TestRunGroupHealthJobsBoundsConcurrency(t *testing.T) {
+	groupIDs := make([]int, 24)
+	for i := range groupIDs {
+		groupIDs[i] = i + 1
+	}
+	var active atomic.Int32
+	var maximum atomic.Int32
+	var completed atomic.Int32
+	runGroupHealthJobs(context.Background(), groupIDs, 3, func(context.Context, int) error {
+		current := active.Add(1)
+		for {
+			previous := maximum.Load()
+			if current <= previous || maximum.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+		active.Add(-1)
+		completed.Add(1)
+		return nil
+	})
+	if got := maximum.Load(); got > 3 {
+		t.Fatalf("worker concurrency exceeded limit: %d", got)
+	}
+	if got := completed.Load(); got != int32(len(groupIDs)) {
+		t.Fatalf("expected %d completed jobs, got %d", len(groupIDs), got)
+	}
+}
+
+func TestRunGroupHealthFinalizeRetryPreservesComputedResult(t *testing.T) {
+	ctx := setupGroupHealthTestDB(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_retry","object":"response","status":"completed"}`))
+	}))
+	defer server.Close()
+
+	channel := &model.Channel{
+		Name:     "group-health-finalize-retry",
+		Type:     outbound.OutboundTypeOpenAIResponse,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: server.URL + "/v1"}},
+		Model:    "probe-model",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "sk-retry"}},
+	}
+	if err := op.ChannelCreate(channel, ctx); err != nil {
+		t.Fatalf("ChannelCreate: %v", err)
+	}
+	group := &model.Group{Name: "finalize-retry-group", Mode: model.GroupModeFailover}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: channel.ID, ModelName: "probe-model", Priority: 1, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd: %v", err)
+	}
+
+	expectedErr := errors.New("finish snapshot failed")
+	repo := &recordingGroupHealthRepository{finishErrs: []error{expectedErr, nil}}
+	service := NewService(repo, &Prober{CandidateTimeout: 5 * time.Second})
+	err := service.RunGroupHealth(ctx, group.ID)
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected first finish error, got %v", err)
+	}
+	if repo.finishCalls != 2 {
+		t.Fatalf("expected one retry after finish failure, got %d calls", repo.finishCalls)
+	}
+	for i, status := range repo.finishStatuses {
+		if status != model.GroupHealthStatusSuccess {
+			t.Fatalf("finish call %d changed computed status to %s", i+1, status)
+		}
+	}
 }
 
 func TestRunGroupHealthFailoverDoesNotMutateRuntimeStats(t *testing.T) {

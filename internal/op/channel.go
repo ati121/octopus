@@ -83,22 +83,23 @@ func ChannelKeyUpdate(key model.ChannelKey) error {
 	if key.ID == 0 || key.ChannelID == 0 {
 		return fmt.Errorf("invalid channel key")
 	}
-	ch, ok := channelCache.Get(key.ChannelID)
+	_, ok := channelCache.UpdateIfPresent(key.ChannelID, func(ch model.Channel) model.Channel {
+		if len(ch.Keys) > 0 {
+			keys := make([]model.ChannelKey, len(ch.Keys))
+			copy(keys, ch.Keys)
+			for i := range keys {
+				if keys[i].ID == key.ID {
+					keys[i] = key
+					break
+				}
+			}
+			ch.Keys = keys
+		}
+		return ch
+	})
 	if !ok {
 		return fmt.Errorf("channel not found")
 	}
-	if len(ch.Keys) > 0 {
-		keys := make([]model.ChannelKey, len(ch.Keys))
-		copy(keys, ch.Keys)
-		for i := range keys {
-			if keys[i].ID == key.ID {
-				keys[i] = key
-				break
-			}
-		}
-		ch.Keys = keys
-	}
-	channelCache.Set(key.ChannelID, ch)
 	channelKeyCache.Set(key.ID, key)
 	channelKeyCacheNeedUpdateLock.Lock()
 	channelKeyCacheNeedUpdate[key.ID] = struct{}{}
@@ -106,19 +107,20 @@ func ChannelKeyUpdate(key model.ChannelKey) error {
 	return nil
 }
 func ChannelBaseUrlUpdate(channelID int, baseUrl []model.BaseUrl) error {
-	ch, ok := channelCache.Get(channelID)
+	_, ok := channelCache.UpdateIfPresent(channelID, func(ch model.Channel) model.Channel {
+		// Copy to decouple callers from internal cache storage.
+		if baseUrl == nil {
+			ch.BaseUrls = nil
+		} else {
+			cp := make([]model.BaseUrl, len(baseUrl))
+			copy(cp, baseUrl)
+			ch.BaseUrls = cp
+		}
+		return ch
+	})
 	if !ok {
 		return fmt.Errorf("channel not found")
 	}
-	// Copy to decouple callers from internal cache storage.
-	if baseUrl == nil {
-		ch.BaseUrls = nil
-	} else {
-		cp := make([]model.BaseUrl, len(baseUrl))
-		copy(cp, baseUrl)
-		ch.BaseUrls = cp
-	}
-	channelCache.Set(channelID, ch)
 	return nil
 }
 
@@ -175,9 +177,13 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	}
 
 	tx := db.GetDB().WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", tx.Error)
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			panic(r)
 		}
 	}()
 
@@ -416,9 +422,13 @@ func channelDel(id int, ctx context.Context, bypassManagedCheck bool) error {
 
 	// 开启事务
 	tx := db.GetDB().WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return fmt.Errorf("failed to begin transaction: %w", tx.Error)
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			panic(r)
 		}
 	}()
 
@@ -467,6 +477,7 @@ func channelDel(id int, ctx context.Context, bypassManagedCheck bool) error {
 		}
 	}
 	StatsChannelDel(id)
+	recentChannelHealth.Delete(id)
 	resetBalancerStateForChannel(id)
 
 	// 刷新受影响的分组缓存
@@ -625,6 +636,7 @@ func channelRefreshCache(ctx context.Context) error {
 		log.Warnf("failed to get channels: %v", err)
 		return err
 	}
+	channelCache.Clear()
 	channelKeyCache.Clear()
 	channelKeyCacheNeedUpdateLock.Lock()
 	channelKeyCacheNeedUpdate = make(map[int]struct{})

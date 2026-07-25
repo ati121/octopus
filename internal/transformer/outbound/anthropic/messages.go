@@ -16,18 +16,20 @@ import (
 	"github.com/bestruirui/octopus/internal/transformer/compat"
 	anthropicModel "github.com/bestruirui/octopus/internal/transformer/inbound/anthropic"
 	"github.com/bestruirui/octopus/internal/transformer/model"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/xurl"
 )
 
 type MessageOutbound struct {
 	// Stream state tracking
-	streamID    string
-	streamModel string
-	streamUsage *model.Usage
-	toolIndex   int
-	toolCalls   map[int]*model.ToolCall
-	initialized bool
+	streamID       string
+	streamModel    string
+	streamUsage    *model.Usage
+	toolIndex      int
+	toolCalls      map[int]*model.ToolCall
+	initialized    bool
+	messageStopped bool
 }
 
 // DefaultAnthropicPassthroughBeta 是 Anthropic→Anthropic 直通路径在未从客户端收到
@@ -266,7 +268,7 @@ func (o *MessageOutbound) TransformResponse(ctx context.Context, response *http.
 		return nil, fmt.Errorf("response is nil")
 	}
 
-	body, err := io.ReadAll(response.Body)
+	body, err := iolimit.ReadAll(response.Body, iolimit.UpstreamResponseMaxBytes())
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -335,6 +337,7 @@ func (o *MessageOutbound) TransformStreamEvent(ctx context.Context, eventData []
 
 	switch streamEvent.Type {
 	case "message_start":
+		o.messageStopped = false
 		if streamEvent.Message != nil {
 			o.streamID = streamEvent.Message.ID
 			o.streamModel = streamEvent.Message.Model
@@ -437,12 +440,21 @@ func (o *MessageOutbound) TransformStreamEvent(ctx context.Context, eventData []
 		}
 		if streamEvent.Delta != nil && streamEvent.Delta.StopReason != nil {
 			finishReason := convertStopReason(streamEvent.Delta.StopReason)
-			if finishReason != nil {
+			if finishReason != nil && !o.messageStopped {
 				events = append(events, model.StreamEvent{Kind: model.StreamEventKindMessageStop, ID: o.streamID, Model: o.streamModel, StopReason: model.ParseFinishReason(*finishReason), StopSequence: streamEvent.Delta.StopSequence})
+				o.messageStopped = true
 			}
 		}
 
 	case "message_stop":
+		// Anthropic normally sends stop_reason in a preceding message_delta, but
+		// some compatible upstreams terminate with message_stop directly. Emit a
+		// default stop before usage so Responses API inbounds can finalize the
+		// stream instead of leaving strict clients with an incomplete response.
+		if !o.messageStopped {
+			events = append(events, model.StreamEvent{Kind: model.StreamEventKindMessageStop, ID: o.streamID, Model: o.streamModel, StopReason: model.FinishReasonStop})
+			o.messageStopped = true
+		}
 		appendUsage(o.streamUsage)
 
 	case "content_block_stop":

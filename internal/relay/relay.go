@@ -22,6 +22,7 @@ import (
 	"github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
 	openaiOutbound "github.com/bestruirui/octopus/internal/transformer/outbound/openai"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
 	"github.com/tmaxmax/go-sse"
@@ -121,7 +122,6 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 	}
 
 	metrics := NewRelayMetrics(apiKeyID, requestModel, rawBody, internalRequest)
-	metrics.SetClientIP(c.ClientIP())
 	metrics.StartLog()
 
 	// === 早期心跳 ===
@@ -525,9 +525,13 @@ func (ra *relayAttempt) attempt() attemptResult {
 // parseRequest 解析并验证入站请求
 // 返回值中的 rawBody 为客户端原始请求字节，供同格式直通路径重用。
 func parseRequest(inboundType inbound.InboundType, c *gin.Context) ([]byte, *model.InternalLLMRequest, model.Inbound, error) {
-	body, err := io.ReadAll(c.Request.Body)
+	body, err := iolimit.ReadRequestBody(c.Writer, c.Request, iolimit.RequestBodyMaxBytes())
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		if iolimit.IsTooLarge(err) {
+			resp.Error(c, http.StatusRequestEntityTooLarge, "request body too large")
+		} else {
+			resp.Error(c, http.StatusBadRequest, err.Error())
+		}
 		return nil, nil, nil, err
 	}
 
@@ -859,7 +863,13 @@ func (ra *relayAttempt) forwardViaHTTPPassthrough(ctx context.Context, pt model.
 	// Check status
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		ra.retryAfter = parseRetryAfter(response.Header.Get("Retry-After"))
-		body, _ := io.ReadAll(response.Body)
+		body, truncated, readErr := iolimit.ReadAtMost(response.Body, iolimit.DefaultErrorBodyMaxBytes)
+		if readErr != nil {
+			return response.StatusCode, fmt.Errorf("failed to read upstream error body: %w", readErr)
+		}
+		if truncated {
+			body = append(body, []byte("\n[upstream error body truncated]")...)
+		}
 		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
 		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, string(body))
 		return statusCode, newUpstreamHTTPError(response.StatusCode, body)
@@ -880,7 +890,7 @@ func (ra *relayAttempt) forwardViaHTTPPassthrough(ctx context.Context, pt model.
 
 // handleResponsePassthrough handles non-streaming passthrough responses.
 func (ra *relayAttempt) handleResponsePassthrough(ctx context.Context, response *http.Response, cfg model.PassthroughConfig) error {
-	body, err := io.ReadAll(response.Body)
+	body, err := iolimit.ReadAll(response.Body, iolimit.UpstreamResponseMaxBytes())
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -940,9 +950,12 @@ func (ra *relayAttempt) forwardViaHTTPStandard(ctx context.Context) (int, error)
 	// 检查响应状态
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		ra.retryAfter = parseRetryAfter(response.Header.Get("Retry-After"))
-		body, err := io.ReadAll(response.Body)
-		if err != nil {
-			return response.StatusCode, fmt.Errorf("failed to read response body: %w", err)
+		body, truncated, readErr := iolimit.ReadAtMost(response.Body, iolimit.DefaultErrorBodyMaxBytes)
+		if readErr != nil {
+			return response.StatusCode, fmt.Errorf("failed to read response body: %w", readErr)
+		}
+		if truncated {
+			body = append(body, []byte("\n[upstream error body truncated]")...)
 		}
 		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
 		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, string(body))
@@ -980,9 +993,9 @@ func readOutboundRequestBody(req *http.Request) ([]byte, error) {
 			return nil, err
 		}
 		defer bodyReader.Close()
-		return io.ReadAll(bodyReader)
+		return iolimit.ReadAll(bodyReader, iolimit.RequestBodyMaxBytes())
 	}
-	body, err := io.ReadAll(req.Body)
+	body, err := iolimit.ReadAll(req.Body, iolimit.RequestBodyMaxBytes())
 	if err != nil {
 		return nil, err
 	}
@@ -1192,9 +1205,6 @@ func (ra *relayAttempt) handleStreamResponsePassthroughV2(ctx context.Context, r
 		firstTokenTimeout = time.Duration(ra.firstTokenTimeOutSec) * time.Second
 	}
 
-	// Buffer for raw stream (for metrics collection)
-	var rawStreamBuf bytes.Buffer
-
 	// Create StreamProcessor
 	processor := stream.NewStreamProcessor(stream.StreamConfig{
 		Source:            stream.NewRawSource(response.Body, 32*1024),
@@ -1204,6 +1214,7 @@ func (ra *relayAttempt) handleStreamResponsePassthroughV2(ctx context.Context, r
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
 		BufferRawStream:   true,
+		MaxRawBufferBytes: maxRawStreamBufferSize,
 		TerminalEvents:    cfg.TerminalEvents,
 		OnFirstToken: func() {
 			ra.metrics.SetFirstTokenTime(time.Now())
@@ -1213,9 +1224,6 @@ func (ra *relayAttempt) handleStreamResponsePassthroughV2(ctx context.Context, r
 			if len(rawStream) == 0 {
 				return stream.ErrEmptyUpstreamStream
 			}
-			// Copy to buffer for metrics collection
-			rawStreamBuf.Write(rawStream)
-
 			// Collect passthrough metrics
 			ra.collectPassthroughMetrics(ctx, rawStream)
 
@@ -1247,14 +1255,6 @@ func (ra *relayAttempt) handleStreamResponsePassthroughV2(ctx context.Context, r
 	if err != nil {
 		if timeoutErr := ra.firstTokenTimeoutIfNeeded(ctx, err); timeoutErr != nil {
 			return timeoutErr
-		}
-	}
-
-	// On disconnect with partial data, still try to collect metrics
-	if err != nil && errors.Is(err, context.Canceled) && rawStreamBuf.Len() > 0 {
-		ra.collectPassthroughMetrics(context.Background(), rawStreamBuf.Bytes())
-		if cfg.CollectMetrics {
-			ra.collectResponse()
 		}
 	}
 

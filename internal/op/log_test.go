@@ -25,12 +25,40 @@ func resetRelayLogStateForTest() {
 
 	relayLogDroppedTotal.Store(0)
 	relayLogLastDropWarn.Store(0)
+	relayLogStreamTokensLock.Lock()
+	relayLogStreamTokens = make(map[string]time.Time)
+	relayLogStreamTokensLock.Unlock()
 	for {
 		select {
 		case <-relayLogFlushSignal:
 		default:
 			return
 		}
+	}
+}
+
+func TestRelayLogStreamTokenExpires(t *testing.T) {
+	resetRelayLogStateForTest()
+	relayLogStreamTokensLock.Lock()
+	relayLogStreamTokens["expired"] = time.Now().Add(-time.Second)
+	relayLogStreamTokensLock.Unlock()
+	if RelayLogStreamTokenVerify("expired") {
+		t.Fatal("expired stream token should be rejected")
+	}
+}
+
+func TestRelayLogStreamTokenStoreIsBounded(t *testing.T) {
+	resetRelayLogStateForTest()
+	for range relayLogStreamTokenMaxEntries + 10 {
+		if _, err := RelayLogStreamTokenCreate(); err != nil {
+			t.Fatalf("create stream token: %v", err)
+		}
+	}
+	relayLogStreamTokensLock.RLock()
+	count := len(relayLogStreamTokens)
+	relayLogStreamTokensLock.RUnlock()
+	if count > relayLogStreamTokenMaxEntries {
+		t.Fatalf("stream token store exceeded limit: %d", count)
 	}
 }
 

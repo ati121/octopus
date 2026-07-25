@@ -4,16 +4,57 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/dlclark/regexp2"
 )
 
-const modelFetchUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+const (
+	modelFetchUserAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+	maxModelFetchPages        = 100
+	maxFetchedModels          = 10000
+	maxFetchedModelNameBytes  = 4096
+	maxFetchedModelNamesBytes = 8 * 1024 * 1024
+)
+
+type modelFetchAccumulator struct {
+	models     []string
+	totalBytes int
+}
+
+func newModelFetchAccumulator(capacity int) *modelFetchAccumulator {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxFetchedModels {
+		capacity = maxFetchedModels
+	}
+	return &modelFetchAccumulator{models: make([]string, 0, capacity)}
+}
+
+func (a *modelFetchAccumulator) Add(rawName string) error {
+	name := strings.TrimSpace(rawName)
+	if name == "" {
+		return nil
+	}
+	if len(name) > maxFetchedModelNameBytes {
+		return fmt.Errorf("model name exceeds maximum size of %d bytes", maxFetchedModelNameBytes)
+	}
+	if len(a.models) >= maxFetchedModels {
+		return fmt.Errorf("model list exceeds maximum count of %d", maxFetchedModels)
+	}
+	if len(name) > maxFetchedModelNamesBytes-a.totalBytes {
+		return fmt.Errorf("model names exceed maximum total size of %d bytes", maxFetchedModelNamesBytes)
+	}
+	a.models = append(a.models, name)
+	a.totalBytes += len(name)
+	return nil
+}
 
 func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 	client, err := ChannelHTTPClientWithContext(ctx, &request)
@@ -38,6 +79,7 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		re.MatchTimeout = 200 * time.Millisecond
 		for _, model := range fetchModel {
 			matched, err := re.MatchString(model)
 			if err != nil {
@@ -97,13 +139,13 @@ func fetchOpenAIModelsAt(client *http.Client, ctx context.Context, request model
 		return nil, err
 	}
 
-	models := make([]string, 0, len(result.Data))
+	models := newModelFetchAccumulator(len(result.Data))
 	for _, m := range result.Data {
-		if id := strings.TrimSpace(m.ID); id != "" {
-			models = append(models, id)
+		if err := models.Add(m.ID); err != nil {
+			return nil, err
 		}
 	}
-	return models, nil
+	return models.models, nil
 }
 
 func openAIModelListURLs(baseURL string) []string {
@@ -143,16 +185,20 @@ func hasOpenAIVersionSuffix(baseURL string) bool {
 
 // refer: https://ai.google.dev/api/models
 func fetchGeminiModels(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
-	var allModels []string
+	allModels := newModelFetchAccumulator(128)
 	pageToken := ""
+	seenPageTokens := make(map[string]struct{})
 
-	for {
-		req, _ := http.NewRequestWithContext(
+	for page := 1; page <= maxModelFetchPages; page++ {
+		req, err := http.NewRequestWithContext(
 			ctx,
 			http.MethodGet,
 			request.GetBaseUrl()+"/models",
 			nil,
 		)
+		if err != nil {
+			return nil, err
+		}
 		applyDefaultModelRequestHeaders(req, request)
 		req.Header.Set("X-Goog-Api-Key", request.GetChannelKey().ChannelKey)
 		if pageToken != "" {
@@ -174,32 +220,46 @@ func fetchGeminiModels(client *http.Client, ctx context.Context, request model.C
 		resp.Body.Close()
 
 		for _, m := range result.Models {
-			name := strings.TrimPrefix(m.Name, "models/")
-			allModels = append(allModels, name)
+			name := strings.TrimPrefix(strings.TrimSpace(m.Name), "models/")
+			if err := allModels.Add(name); err != nil {
+				return nil, err
+			}
 		}
 
-		if result.NextPageToken == "" {
+		nextPageToken := strings.TrimSpace(result.NextPageToken)
+		if nextPageToken == "" {
 			break
 		}
-		pageToken = result.NextPageToken
+		if _, exists := seenPageTokens[nextPageToken]; exists {
+			return nil, fmt.Errorf("gemini model pagination returned a repeated page token")
+		}
+		seenPageTokens[nextPageToken] = struct{}{}
+		pageToken = nextPageToken
+		if page == maxModelFetchPages {
+			return nil, fmt.Errorf("gemini model pagination exceeds maximum of %d pages", maxModelFetchPages)
+		}
 	}
-	if len(allModels) == 0 {
+	if len(allModels.models) == 0 {
 		return fetchOpenAIModels(client, ctx, request)
 	}
-	return allModels, nil
+	return allModels.models, nil
 }
 
 // refer: https://platform.claude.com/docs
 func fetchAnthropicModels(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
-	var allModels []string
+	allModels := newModelFetchAccumulator(128)
 	var afterID string
-	for {
-		req, _ := http.NewRequestWithContext(
+	seenAfterIDs := make(map[string]struct{})
+	for page := 1; page <= maxModelFetchPages; page++ {
+		req, err := http.NewRequestWithContext(
 			ctx,
 			http.MethodGet,
 			request.GetBaseUrl()+"/models",
 			nil,
 		)
+		if err != nil {
+			return nil, err
+		}
 		applyDefaultModelRequestHeaders(req, request)
 		req.Header.Set("X-Api-Key", request.GetChannelKey().ChannelKey)
 		req.Header.Set("Anthropic-Version", "2023-06-01")
@@ -222,19 +282,32 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 		resp.Body.Close()
 
 		for _, m := range result.Data {
-			allModels = append(allModels, m.ID)
+			if err := allModels.Add(m.ID); err != nil {
+				return nil, err
+			}
 		}
 
 		if !result.HasMore {
 			break
 		}
 
-		afterID = result.LastID
+		nextAfterID := strings.TrimSpace(result.LastID)
+		if nextAfterID == "" {
+			return nil, fmt.Errorf("anthropic model pagination returned an empty last_id while has_more is true")
+		}
+		if _, exists := seenAfterIDs[nextAfterID]; exists {
+			return nil, fmt.Errorf("anthropic model pagination returned a repeated last_id")
+		}
+		seenAfterIDs[nextAfterID] = struct{}{}
+		afterID = nextAfterID
+		if page == maxModelFetchPages {
+			return nil, fmt.Errorf("anthropic model pagination exceeds maximum of %d pages", maxModelFetchPages)
+		}
 	}
-	if len(allModels) == 0 {
+	if len(allModels.models) == 0 {
 		return fetchOpenAIModels(client, ctx, request)
 	}
-	return allModels, nil
+	return allModels.models, nil
 }
 
 func fetchAnthropicModelsOrOpenAI(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
@@ -273,7 +346,7 @@ func applyDefaultModelRequestHeaders(req *http.Request, request model.Channel) {
 }
 
 func decodeModelJSONResponse(resp *http.Response, result any) error {
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := iolimit.ReadAll(resp.Body, iolimit.MetadataResponseMaxBytes())
 	if err != nil {
 		return err
 	}

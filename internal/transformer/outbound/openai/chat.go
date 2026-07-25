@@ -5,12 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/bestruirui/octopus/internal/transformer/model"
+	"github.com/bestruirui/octopus/internal/utils/iolimit"
 )
 
 type ChatOutbound struct{}
@@ -256,7 +256,7 @@ func convertToolsToChatCompletions(tools []model.Tool) []ChatCompletionsTool {
 }
 
 func (o *ChatOutbound) TransformResponse(ctx context.Context, response *http.Response) (*model.InternalLLMResponse, error) {
-	body, err := io.ReadAll(response.Body)
+	body, err := iolimit.ReadAll(response.Body, iolimit.UpstreamResponseMaxBytes())
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
