@@ -105,16 +105,16 @@ If your provider isn't a relay site but gave you a Base URL + Key directly (e.g.
 
 **Docker run:**
 ```bash
-docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/tianxia3111/octopus:latest
+docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/ati121/octopus:latest
 ```
 
 **docker compose:**
 ```bash
-wget https://raw.githubusercontent.com/tianxia3111/octopus/refs/heads/dev/docker-compose.yml
+wget https://raw.githubusercontent.com/ati121/octopus/refs/heads/dev/docker-compose.yml
 docker compose up -d
 ```
 
-> ⚠️ **Use `ghcr.io/tianxia3111/octopus:latest` for this fork.** Other upstream images do not include this fork's Site functionality, Chat stream cancellation fix, or realtime Responding log state. For building from source, see [README.md](README.md).
+> ⚠️ **Use `ghcr.io/ati121/octopus:latest` for this fork.** Other upstream images do not include this fork's Site functionality, Chat stream cancellation fix, or realtime Responding log state. For building from source, see [README.md](README.md).
 
 ### 4.2 First Login
 

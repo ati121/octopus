@@ -12,7 +12,7 @@ This fork contains local changes built on top of upstream, including:
 Run directly:
 
 ```bash
-docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/tianxia3111/octopus:latest
+docker run -d --name octopus -v /path/to/data:/app/data -p 8080:8080 ghcr.io/ati121/octopus:latest
 ```
 
 Docker Compose:
@@ -20,7 +20,7 @@ Docker Compose:
 ```yaml
 services:
   octopus:
-    image: ghcr.io/tianxia3111/octopus:latest
+    image: ghcr.io/ati121/octopus:latest
     ports:
       - "8080:8080"
     volumes:

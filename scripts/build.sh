@@ -17,8 +17,8 @@ readonly OUTPUT_DIR="build"
 
 # Build metadata
 readonly BUILD_TIME="$(TZ='Asia/Shanghai' date +'%F %T %z')"
-readonly GIT_AUTHOR="tianxia3111"
-readonly GIT_REPO="https://github.com/tianxia3111/octopus"
+readonly GIT_AUTHOR="ati121"
+readonly GIT_REPO="https://github.com/ati121/octopus"
 readonly GIT_VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo 'dev')"
 readonly COMMIT_ID="$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
 
