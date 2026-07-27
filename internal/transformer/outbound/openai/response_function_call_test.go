@@ -64,6 +64,41 @@ func TestConvertInputFromMessagesGeneratesFunctionCallIDAndItemReference(t *test
 	}
 }
 
+func TestConvertInputFromMessagesCanOmitItemReference(t *testing.T) {
+	msgs := []model.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []model.ToolCall{{
+				ID:   "call_abc123",
+				Type: "function",
+				Function: model.FunctionCall{
+					Name:      "get_weather",
+					Arguments: `{}`,
+				},
+			}},
+		},
+		{
+			Role:       "tool",
+			ToolCallID: lo.ToPtr("call_abc123"),
+			Content:    model.MessageContent{Content: lo.ToPtr("Sunny")},
+		},
+	}
+
+	input := convertInputFromMessages(msgs, model.TransformOptions{
+		ArrayInputs:                lo.ToPtr(true),
+		OmitResponsesItemReference: true,
+	})
+	if len(input.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(input.Items))
+	}
+	if input.Items[1].ItemReference != nil {
+		t.Fatalf("expected item_reference to be omitted, got %q", *input.Items[1].ItemReference)
+	}
+	if input.Items[1].CallID != "call_abc123" {
+		t.Fatalf("expected call_id to be preserved, got %q", input.Items[1].CallID)
+	}
+}
+
 func TestSanitizeResponsesRawItemsAddsItemReference(t *testing.T) {
 	// Test that sanitizeResponsesRawItems automatically adds missing item_reference
 	rawItems := json.RawMessage(`[
@@ -104,6 +139,25 @@ func TestSanitizeResponsesRawItemsAddsItemReference(t *testing.T) {
 	}
 	if itemRef != "item_xyz789" {
 		t.Errorf("expected item_reference=item_xyz789, got %s", itemRef)
+	}
+}
+
+func TestSanitizeResponsesRawItemsCanRemoveItemReference(t *testing.T) {
+	rawItems := json.RawMessage(`[
+		{"id":"item_xyz","type":"function_call","call_id":"call_1","name":"f","arguments":"{}"},
+		{"type":"function_call_output","call_id":"call_1","item_reference":"item_xyz","output":{"text":"ok"}}
+	]`)
+
+	sanitized := sanitizeResponsesRawItemsWithOptions(rawItems, true)
+	var items []map[string]interface{}
+	if err := json.Unmarshal(sanitized, &items); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := items[1]["item_reference"]; ok {
+		t.Fatalf("item_reference was not removed: %#v", items[1])
+	}
+	if items[1]["call_id"] != "call_1" {
+		t.Fatalf("call_id was not preserved: %#v", items[1])
 	}
 }
 

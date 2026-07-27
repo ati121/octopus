@@ -677,6 +677,9 @@ func (r *InternalLLMRequest) IsImageGenerationRequest() bool {
 type TransformOptions struct {
 	// ArrayInputs specifies whether the original input was an array.
 	ArrayInputs *bool `json:"-"`
+	// OmitResponsesItemReference disables the optional item_reference extension
+	// for Responses-compatible upstreams that reject unknown input fields.
+	OmitResponsesItemReference bool `json:"-"`
 }
 
 type StreamOptions struct {
