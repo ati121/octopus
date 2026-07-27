@@ -143,6 +143,51 @@ func TestStreamReasoningBlocksSingleSignature(t *testing.T) {
 	}
 }
 
+func TestStreamErrorResponseUsesEmptyOutputArray(t *testing.T) {
+	inbound := &ResponseInbound{}
+	out, err := inbound.TransformStreamEvents(context.Background(), []model.StreamEvent{{
+		Kind:  model.StreamEventKindError,
+		ID:    "resp_error",
+		Model: "claude-opus-4-7",
+		Error: &model.ResponseError{
+			StatusCode: 529,
+			Detail: model.ErrorDetail{
+				Type:    "overloaded_error",
+				Message: "upstream overloaded",
+			},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("TransformStreamEvents failed: %v", err)
+	}
+
+	for _, block := range bytes.Split(out, []byte("\n\n")) {
+		payload := bytes.TrimPrefix(bytes.TrimSpace(block), []byte("data: "))
+		if len(payload) == 0 {
+			continue
+		}
+		var event map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &event); err != nil {
+			t.Fatalf("unmarshal SSE event: %v", err)
+		}
+		var eventType string
+		if err := json.Unmarshal(event["type"], &eventType); err != nil || eventType != "response.failed" {
+			continue
+		}
+
+		var response map[string]json.RawMessage
+		if err := json.Unmarshal(event["response"], &response); err != nil {
+			t.Fatalf("unmarshal failed response: %v", err)
+		}
+		if output := bytes.TrimSpace(response["output"]); !bytes.Equal(output, []byte("[]")) {
+			t.Fatalf("response.failed output = %s, want []", output)
+		}
+		return
+	}
+
+	t.Fatal("response.failed event not found")
+}
+
 func TestStreamReasoningOutputItemAddedIncludesEmptySummary(t *testing.T) {
 	i := &ResponseInbound{}
 	out, err := i.TransformStreamEvents(context.Background(), []model.StreamEvent{

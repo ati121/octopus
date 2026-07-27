@@ -117,6 +117,7 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 	// 初始化 Metrics（Images 独立，避免 b64_json 内存膨胀）
 	metrics := newImagesRelayMetrics(apiKeyID, requestModel)
 	metrics.RequestContent = buildImagesRequestContentForLog(isMultipart, bc, jsonPayload)
+	metrics.StartLog()
 
 	// === 早期心跳 ===
 	// 流式：启动早期心跳协程，覆盖前置阶段（连接慢、failover、退避）期间向客户端发 SSE 注释字节
@@ -245,6 +246,7 @@ type imagesRelayMetrics struct {
 	RequestModel string
 	ActualModel  string
 	StartTime    time.Time
+	LogID        int64
 	FirstToken   time.Time
 
 	Stats model.StatsMetrics
@@ -259,6 +261,17 @@ func newImagesRelayMetrics(apiKeyID int, requestModel string) *imagesRelayMetric
 		RequestModel: requestModel,
 		StartTime:    time.Now(),
 	}
+}
+
+func (m *imagesRelayMetrics) StartLog() {
+	if m.LogID != 0 {
+		return
+	}
+	m.LogID = op.RelayLogStart(model.RelayLog{
+		Time:             m.StartTime.Unix(),
+		RequestModelName: m.RequestModel,
+		ActualModelName:  m.RequestModel,
+	})
 }
 
 func (m *imagesRelayMetrics) SetFirstTokenTime(t time.Time) {
@@ -345,6 +358,7 @@ func (m *imagesRelayMetrics) saveLog(ctx context.Context, success bool, err erro
 	}
 
 	relayLog := model.RelayLog{
+		ID:               m.LogID,
 		Time:             m.StartTime.Unix(),
 		RequestModelName: m.RequestModel,
 		ChannelName:      channelName,
@@ -378,7 +392,13 @@ func (m *imagesRelayMetrics) saveLog(ctx context.Context, success bool, err erro
 	}
 	relayLog.Success = success
 
-	if logErr := op.RelayLogAdd(ctx, relayLog); logErr != nil {
+	var logErr error
+	if m.LogID != 0 {
+		logErr = op.RelayLogUpdate(ctx, relayLog)
+	} else {
+		logErr = op.RelayLogAdd(ctx, relayLog)
+	}
+	if logErr != nil {
 		log.Warnf("failed to save relay log: %v", logErr)
 	}
 }

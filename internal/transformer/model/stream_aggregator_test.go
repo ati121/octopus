@@ -55,3 +55,28 @@ func TestMergeToolCallDeltaSetsFunctionNameWhenMissing(t *testing.T) {
 		t.Fatalf("function name not set: %q", toolCalls[0].Function.Name)
 	}
 }
+
+func TestStreamAggregatorPreservesResponseError(t *testing.T) {
+	aggregator := &StreamAggregator{}
+	want := &ResponseError{
+		StatusCode: 529,
+		Detail: ErrorDetail{
+			Type:    "overloaded_error",
+			Message: "upstream overloaded",
+		},
+	}
+	aggregator.Add(&InternalLLMResponse{
+		ID:     "msg_error",
+		Model:  "claude-opus-4-7",
+		Object: "chat.completion.chunk",
+		Error:  want,
+	})
+
+	got := aggregator.BuildAndReset()
+	if got == nil || got.Error == nil {
+		t.Fatalf("expected aggregated response error, got %+v", got)
+	}
+	if got.Error.StatusCode != want.StatusCode || got.Error.Detail != want.Detail {
+		t.Fatalf("aggregated error = %+v, want %+v", got.Error, want)
+	}
+}
