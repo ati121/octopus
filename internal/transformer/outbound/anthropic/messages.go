@@ -1143,11 +1143,18 @@ func convertToolResultBlock(msg model.Message) anthropicModel.MessageContentBloc
 	} else if len(msg.Content.MultipleContent) > 0 {
 		blocks := make([]anthropicModel.MessageContentBlock, 0, len(msg.Content.MultipleContent))
 		for _, part := range msg.Content.MultipleContent {
-			if part.Type == "text" && part.Text != nil {
-				blocks = append(blocks, anthropicModel.MessageContentBlock{
-					Type: "text",
-					Text: part.Text,
-				})
+			switch part.Type {
+			case "text":
+				if part.Text != nil {
+					blocks = append(blocks, anthropicModel.MessageContentBlock{
+						Type: "text",
+						Text: part.Text,
+					})
+				}
+			case "image_url":
+				if imageBlock := convertImageURLToBlock(part); imageBlock != nil {
+					blocks = append(blocks, *imageBlock)
+				}
 			}
 		}
 		block.Content = &anthropicModel.MessageContent{
