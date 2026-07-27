@@ -920,6 +920,9 @@ func (ra *relayAttempt) handleResponsePassthrough(ctx context.Context, response 
 // forwardViaHTTPStandard 是 forwardViaHTTP 的原路径（直通判定失败时的兜底）。
 // 留作显式出口，避免 passthrough 失败时的递归。
 func (ra *relayAttempt) forwardViaHTTPStandard(ctx context.Context) (int, error) {
+	restoreItemReferenceMode := ra.applyResponsesItemReferenceCompatibility()
+	defer restoreItemReferenceMode()
+
 	outboundRequest, err := ra.outAdapter.TransformRequest(
 		ctx,
 		ra.internalRequest,
@@ -958,6 +961,12 @@ func (ra *relayAttempt) forwardViaHTTPStandard(ctx context.Context) (int, error)
 			body = append(body, []byte("\n[upstream error body truncated]")...)
 		}
 		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
+		if ra.shouldRetryWithoutResponsesItemReference(response.StatusCode, body) {
+			markResponsesItemReferenceUnsupported(ra.channel.ID)
+			log.Infof("channel %s rejected Responses item_reference; retrying without the field", ra.channel.Name)
+			_ = response.Body.Close()
+			return ra.forwardViaHTTPStandard(ctx)
+		}
 		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, string(body))
 		return statusCode, newUpstreamHTTPError(response.StatusCode, body)
 	}

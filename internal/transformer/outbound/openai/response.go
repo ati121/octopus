@@ -303,7 +303,7 @@ func (o *ResponseOutbound) TransformStreamEvent(ctx context.Context, eventData [
 		if streamEvent.Response != nil && streamEvent.Response.Error != nil {
 			respErr = &model.ResponseError{
 				Detail: model.ErrorDetail{
-					Code:    fmt.Sprintf("%d", streamEvent.Response.Error.Code),
+					Code:    string(streamEvent.Response.Error.Code),
 					Message: streamEvent.Response.Error.Message,
 				},
 			}
@@ -536,8 +536,32 @@ type ResponsesUsage struct {
 }
 
 type ResponsesError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    ResponsesErrorCode `json:"code"`
+	Message string             `json:"message"`
+}
+
+type ResponsesErrorCode string
+
+func (c *ResponsesErrorCode) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) || len(trimmed) == 0 {
+		*c = ""
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(trimmed, &text); err == nil {
+		*c = ResponsesErrorCode(text)
+		return nil
+	}
+
+	var number json.Number
+	if err := json.Unmarshal(trimmed, &number); err == nil {
+		*c = ResponsesErrorCode(number.String())
+		return nil
+	}
+
+	return fmt.Errorf("invalid responses error code: %s", string(trimmed))
 }
 
 type ResponsesStreamEvent struct {
@@ -975,11 +999,11 @@ func buildResponsesInput(req *model.InternalLLMRequest) ResponsesInput {
 	// RawInputItems is the authoritative runtime source for Responses requests,
 	// especially after websocket replay mutates it in-place for exact replay.
 	if rawInputItems := req.OpenAIRawInputItems(); len(rawInputItems) > 0 {
-		return ResponsesInput{Raw: sanitizeResponsesRawItems(rawInputItems)}
+		return ResponsesInput{Raw: sanitizeResponsesRawItemsWithOptions(rawInputItems, req.TransformOptions.OmitResponsesItemReference)}
 	}
 	openaiExt := req.GetOpenAIExtensions()
 	if len(openaiExt.RawResponseItems) > 0 {
-		return ResponsesInput{Raw: sanitizeResponsesRawItems(append(json.RawMessage(nil), openaiExt.RawResponseItems...))}
+		return ResponsesInput{Raw: sanitizeResponsesRawItemsWithOptions(append(json.RawMessage(nil), openaiExt.RawResponseItems...), req.TransformOptions.OmitResponsesItemReference)}
 	}
 	return sanitizeResponsesInput(convertInputFromMessages(req.Messages, req.TransformOptions))
 }
@@ -1062,6 +1086,11 @@ func convertInputFromMessages(msgs []model.Message, transformOptions model.Trans
 			items = append(items, assistantItems...)
 		case "tool":
 			items = append(items, convertToolMessageToResponses(msg, callIDToItemID))
+		}
+	}
+	if transformOptions.OmitResponsesItemReference {
+		for idx := range items {
+			items[idx].ItemReference = nil
 		}
 	}
 
@@ -1677,6 +1706,10 @@ func ensureResponsesReasoningSummary(item *ResponsesItem) {
 }
 
 func sanitizeResponsesRawItems(raw json.RawMessage) json.RawMessage {
+	return sanitizeResponsesRawItemsWithOptions(raw, false)
+}
+
+func sanitizeResponsesRawItemsWithOptions(raw json.RawMessage, omitItemReference bool) json.RawMessage {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -1715,8 +1748,16 @@ func sanitizeResponsesRawItems(raw json.RawMessage) json.RawMessage {
 	for _, item := range items {
 		itemType := decodeRawString(item["type"])
 
-		// Sanitize function_call_output: add missing item_reference
+		// Sanitize function_call_output according to the selected upstream
+		// compatibility mode.
 		if itemType == "function_call_output" {
+			if omitItemReference {
+				if _, ok := item["item_reference"]; ok {
+					delete(item, "item_reference")
+					changed = true
+				}
+				continue
+			}
 			refRaw, hasRef := item["item_reference"]
 			refMissing := !hasRef || len(bytes.TrimSpace(refRaw)) == 0 ||
 				bytes.Equal(bytes.TrimSpace(refRaw), []byte("null")) ||
@@ -1835,10 +1876,10 @@ func firstNonEmpty(values ...string) string {
 // with O-M1.
 func normalizeResponsesFinishReason(status *string, errDetail *ResponsesError) (*string, *model.ResponseError) {
 	var respErr *model.ResponseError
-	if errDetail != nil && (errDetail.Message != "" || errDetail.Code != 0) {
+	if errDetail != nil && (errDetail.Message != "" || errDetail.Code != "") {
 		respErr = &model.ResponseError{
 			Detail: model.ErrorDetail{
-				Code:    fmt.Sprintf("%d", errDetail.Code),
+				Code:    string(errDetail.Code),
 				Message: errDetail.Message,
 			},
 		}
