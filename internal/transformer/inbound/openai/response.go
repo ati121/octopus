@@ -270,6 +270,7 @@ func (i *ResponseInbound) processStreamEvents(ctx context.Context, events []mode
 				ID:        i.responseID,
 				Model:     i.model,
 				CreatedAt: i.createdAt,
+				Output:    []ResponsesItem{},
 				Status:    lo.ToPtr("failed"),
 				Error: &ResponsesError{
 					Code:    500,

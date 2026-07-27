@@ -448,6 +448,74 @@ func TestHandlerPassthroughsOpenAIResponsesSameProtocolStream(t *testing.T) {
 	}
 }
 
+func TestHandlerRecordsAnthropicStreamErrorAsFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := setupRelayTestDB(t)
+
+	rawSSE := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_error","type":"message","role":"assistant","model":"claude-opus-4-7","content":[],"usage":{"input_tokens":27848,"output_tokens":0}}}`,
+		"",
+		"event: error",
+		`data: {"type":"error","error":{"type":"overloaded_error","message":"upstream overloaded"}}`,
+		"",
+	}, "\n")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(rawSSE))
+	}))
+	defer server.Close()
+
+	channel := &model.Channel{
+		Name:     "relay-anthropic-stream-error",
+		Type:     outbound.OutboundTypeAnthropic,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: server.URL + "/v1"}},
+		Model:    "claude-opus-4-7",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "test-key"}},
+	}
+	if err := op.ChannelCreate(channel, ctx); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+	group := &model.Group{Name: "relay-anthropic-stream-error-group", Mode: model.GroupModeFailover}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: channel.ID, ModelName: channel.Model, Priority: 1, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd failed: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"relay-anthropic-stream-error-group","input":"hello","stream":true}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	Handler(inbound.InboundTypeOpenAIResponse, c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("stream response status = %d, want 200", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), `"type":"response.failed"`) {
+		t.Fatalf("expected response.failed SSE, got %s", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), `"output":null`) || !strings.Contains(recorder.Body.String(), `"output":[]`) {
+		t.Fatalf("response.failed must contain output: [], got %s", recorder.Body.String())
+	}
+
+	logs, err := op.RelayLogList(ctx, nil, nil, nil, 1, 10)
+	if err != nil {
+		t.Fatalf("RelayLogList failed: %v", err)
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected relay log")
+	}
+	if logs[0].Success {
+		t.Fatalf("stream error was recorded as success: %+v", logs[0])
+	}
+	if !strings.Contains(logs[0].Error, "upstream overloaded") {
+		t.Fatalf("relay log lost upstream error: %q", logs[0].Error)
+	}
+}
+
 func TestHandlerPassthroughsOpenAIResponsesSameProtocolNonStream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := setupRelayTestDB(t)

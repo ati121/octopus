@@ -413,26 +413,38 @@ func (ra *relayAttempt) attempt() attemptResult {
 	ra.usedKey.LastUseTimeStamp = time.Now().Unix()
 
 	if fwdErr == nil {
-		// ====== 成功 ======
-		// Passthrough handlers collect response at stream end via PassthroughConfig.CollectMetrics
+		// Passthrough handlers collect response at stream end via PassthroughConfig.CollectMetrics.
+		// A streaming provider error arrives inside an HTTP 200 SSE response, so inspect
+		// the aggregated response before classifying the attempt as successful.
 		ra.collectResponse()
-		ra.usedKey.TotalCost += ra.metrics.Stats.InputCost + ra.metrics.Stats.OutputCost
-		op.ChannelKeyUpdate(ra.usedKey)
+		if ra.metrics != nil && ra.metrics.InternalResponse != nil && ra.metrics.InternalResponse.Error != nil {
+			responseErr := ra.metrics.InternalResponse.Error
+			fwdErr = responseErr
+			if responseErr.StatusCode > 0 {
+				statusCode = responseErr.StatusCode
+				ra.usedKey.StatusCode = statusCode
+			}
+			log.Warnf("upstream stream error from channel %s: %v", ra.channel.Name, responseErr)
+		} else {
+			// ====== 成功 ======
+			ra.usedKey.TotalCost += ra.metrics.Stats.InputCost + ra.metrics.Stats.OutputCost
+			op.ChannelKeyUpdate(ra.usedKey)
 
-		span.End(dbmodel.AttemptSuccess, statusCode, "")
+			span.End(dbmodel.AttemptSuccess, statusCode, "")
 
-		// Channel 维度统计
-		op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
-			WaitTime:       span.Duration().Milliseconds(),
-			RequestSuccess: 1,
-		})
+			// Channel 维度统计
+			op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
+				WaitTime:       span.Duration().Milliseconds(),
+				RequestSuccess: 1,
+			})
 
-		// 熔断器：记录成功
-		balancer.RecordSuccess(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
-		// 会话保持：更新粘性记录
-		balancer.SetSticky(ra.apiKeyID, ra.requestModel, ra.channel.ID, ra.usedKey.ID)
+			// 熔断器：记录成功
+			balancer.RecordSuccess(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
+			// 会话保持：更新粘性记录
+			balancer.SetSticky(ra.apiKeyID, ra.requestModel, ra.channel.ID, ra.usedKey.ID)
 
-		return attemptResult{Success: true}
+			return attemptResult{Success: true}
+		}
 	}
 
 	// ====== 失败 ======
