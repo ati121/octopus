@@ -53,10 +53,10 @@ func SyncAccount(ctx context.Context, accountID int) (*model.SiteSyncResult, err
 		return nil, sanitizeSiteError(err)
 	}
 
-	channelIDs, err := ProjectAccount(ctx, account.ID)
-	if err != nil {
-		return nil, sanitizeSiteError(err)
-	}
+	// 数据同步阶段已通过 persistSyncSnapshot 落库，投影阶段失败不应把整个请求
+	// 报成 500。此处把投影错误降级为提示信息附加到结果中，并保持“部分成功”语义，
+	// 让前端展示可读的告警而不是“服务内部错误”。
+	channelIDs, projectErr := ProjectAccount(ctx, account.ID)
 
 	modelNames := make([]string, 0, len(snapshot.models))
 	for _, item := range snapshot.models {
@@ -64,10 +64,27 @@ func SyncAccount(ctx context.Context, accountID int) (*model.SiteSyncResult, err
 	}
 	slices.Sort(modelNames)
 
+	status := snapshot.status
+	message := sanitizeSiteStatusText(snapshot.message)
+	if projectErr != nil {
+		projectMessage := sanitizeSiteStatusMessage(projectErr)
+		if projectMessage == "" {
+			projectMessage = "同步站点渠道投影失败，请稍后重试"
+		}
+		log.Warnf("site account sync projection failed (account=%d): %v", account.ID, projectErr)
+		if status == model.SiteExecutionStatusSuccess {
+			status = model.SiteExecutionStatusPartial
+		}
+		message = firstNonEmptyString(strings.TrimSpace(message+"；投影失败："+projectMessage), projectMessage)
+		if updateErr := updateAccountSyncState(ctx, account.ID, status, message, snapshot.accessToken); updateErr != nil {
+			log.Warnf("failed to update site account sync state after projection failure (account=%d): %v", account.ID, updateErr)
+		}
+	}
+
 	result := &model.SiteSyncResult{
 		AccountID:       account.ID,
 		SiteID:          siteRecord.ID,
-		Status:          snapshot.status,
+		Status:          status,
 		ChannelCount:    len(channelIDs),
 		GroupCount:      len(snapshot.groups),
 		TokenCount:      len(snapshot.tokens),
@@ -75,7 +92,7 @@ func SyncAccount(ctx context.Context, accountID int) (*model.SiteSyncResult, err
 		ManagedChannels: channelIDs,
 		Models:          modelNames,
 		GroupResults:    exportSiteSyncGroupResults(snapshot.groupResults),
-		Message:         sanitizeSiteStatusText(snapshot.message),
+		Message:         message,
 	}
 	if syncErr != nil {
 		return result, sanitizeSiteError(syncErr)

@@ -238,8 +238,11 @@ func ProjectAccount(ctx context.Context, accountID int) ([]int, error) {
 			desiredSet[compositeBindingKey(groupKey, obType, shouldSplit)] = struct{}{}
 		}
 	}
-	if err := rewriteManagedGroupItemsForAccount(ctx, siteRecord, account, shouldSplit, groupMap, tokenGroups, account.Models, bindingChannelByKey); err != nil {
-		return nil, err
+	// group-item 重写失败不应中断后续的过期绑定清理，否则改动端点格式后残留的
+	// 旧投影渠道（例如同名的 -Response）会一直无法删除。这里保留错误，待清理完成后再回报。
+	rewriteErr := rewriteManagedGroupItemsForAccount(ctx, siteRecord, account, shouldSplit, groupMap, tokenGroups, account.Models, bindingChannelByKey)
+	if rewriteErr != nil {
+		log.Warnf("failed to rewrite managed group items (account=%d): %v", account.ID, rewriteErr)
 	}
 	for _, binding := range existingBindings {
 		bindingKey := model.NormalizeSiteGroupKey(binding.GroupKey)
@@ -277,6 +280,12 @@ func ProjectAccount(ctx context.Context, accountID int) ([]int, error) {
 				log.Warnf("POR keep retired channel %d disabled failed: %v", channelID, err)
 			}
 		}
+	}
+
+	// 过期绑定清理完成后再回报此前延后的 group item 重写错误，
+	// 保证残留的端点格式渠道（例如手动改端点后遗留的 Response 渠道）总能被清理。
+	if rewriteErr != nil {
+		return managedChannelIDs, rewriteErr
 	}
 
 	return managedChannelIDs, nil

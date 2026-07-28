@@ -1119,3 +1119,79 @@ func assertProjectedChannel(t *testing.T, channelsByGroup map[string]model.Chann
 		t.Fatalf("expected channel %q name %q, got %q", groupKey, expectedName, channel.Name)
 	}
 }
+
+// TestProjectAccountRemovesResidualEndpointChannelAfterRouteChange 复现“同一分组下
+// 一个模型却显示两个端点接口”的问题：模型先以 OpenAI Response 端点投影，随后改成
+// OpenAI Chat 端点，再次投影后残留的 Response 渠道及其绑定必须被清理。
+func TestProjectAccountRemovesResidualEndpointChannelAfterRouteChange(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+
+	site := &model.Site{
+		Name:     "Residual Endpoint Site",
+		Platform: model.SitePlatformNewAPI,
+		BaseURL:  "https://example.com",
+		Enabled:  true,
+	}
+	if err := op.SiteCreate(site, ctx); err != nil {
+		t.Fatalf("SiteCreate failed: %v", err)
+	}
+
+	account := &model.SiteAccount{
+		SiteID:         site.ID,
+		Name:           "Residual Account",
+		CredentialType: model.SiteCredentialTypeAccessToken,
+		AccessToken:    "site-access-token",
+		Enabled:        true,
+	}
+	if err := op.SiteAccountCreate(account, ctx); err != nil {
+		t.Fatalf("SiteAccountCreate failed: %v", err)
+	}
+
+	token := model.SiteToken{SiteAccountID: account.ID, Name: "primary", Token: "key-primary", GroupKey: "default", GroupName: "default", Enabled: true}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&token).Error; err != nil {
+		t.Fatalf("create site token failed: %v", err)
+	}
+
+	models := []model.SiteModel{
+		{SiteAccountID: account.ID, GroupKey: model.SiteDefaultGroupKey, ModelName: "grok-4.5", Source: "sync", RouteType: model.SiteModelRouteTypeOpenAIResponse, RouteSource: model.SiteModelRouteSourceSyncInferred},
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&models).Error; err != nil {
+		t.Fatalf("create site models failed: %v", err)
+	}
+
+	if _, err := ProjectAccount(ctx, account.ID); err != nil {
+		t.Fatalf("initial ProjectAccount returned error: %v", err)
+	}
+
+	channelsByGroup := loadProjectedChannelsByGroupKey(t, ctx, account.ID)
+	if _, ok := channelsByGroup["default::openai-response"]; !ok {
+		t.Fatalf("expected residual OpenAI Response channel to exist initially, got %#v", channelsByGroup)
+	}
+
+	// 手动把端点格式改成 OpenAI Chat，模拟用户在界面上更正端点。
+	if err := dbpkg.GetDB().WithContext(ctx).
+		Model(&model.SiteModel{}).
+		Where("site_account_id = ? AND group_key = ? AND model_name = ?", account.ID, model.SiteDefaultGroupKey, "grok-4.5").
+		Updates(map[string]any{
+			"route_type":      model.SiteModelRouteTypeOpenAIChat,
+			"route_source":    model.SiteModelRouteSourceManualOverride,
+			"manual_override": true,
+		}).Error; err != nil {
+		t.Fatalf("updating site model route_type failed: %v", err)
+	}
+
+	if _, err := ProjectAccount(ctx, account.ID); err != nil {
+		t.Fatalf("second ProjectAccount returned error: %v", err)
+	}
+
+	channelsByGroup = loadProjectedChannelsByGroupKey(t, ctx, account.ID)
+	if _, ok := channelsByGroup["default"]; !ok {
+		t.Fatalf("expected OpenAI Chat channel to exist after route change, got %#v", channelsByGroup)
+	}
+	if _, ok := channelsByGroup["default::openai-response"]; ok {
+		t.Fatalf("expected residual OpenAI Response channel to be removed after route change")
+	}
+	if len(channelsByGroup) != 1 {
+		t.Fatalf("expected exactly one projected channel after route change, got %d: %#v", len(channelsByGroup), channelsByGroup)
+	}
+}
