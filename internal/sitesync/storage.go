@@ -126,7 +126,8 @@ func persistSyncSnapshot(ctx context.Context, accountID int, snapshot *syncSnaps
 				copyPersistedGroupSyncState(&snapshot.groups[i], *existing)
 			}
 		}
-		mergedTokens := mergePersistedSiteTokens(accountID, existingTokens, snapshot.tokens, now)
+		mergedTokens, revokedTokens := mergePersistedSiteTokens(accountID, existingTokens, snapshot.tokens, now)
+		applyRevokedManualTokensToSnapshot(snapshot, revokedTokens)
 		incomingModels := preparePersistedSyncModels(accountID, snapshot.models, existingModelMap, now)
 		finalModels := mergePersistedSiteModelsByGroup(existingModels, incomingModels, snapshot.groupResults)
 
@@ -287,7 +288,64 @@ func mergePersistedSiteModelsByGroup(existing []model.SiteModel, incoming []mode
 	return compactPersistedSiteModels(merged)
 }
 
-func mergePersistedSiteTokens(accountID int, existingTokens []model.SiteToken, incomingTokens []model.SiteToken, now time.Time) []model.SiteToken {
+// applyRevokedManualTokensToSnapshot downgrades the snapshot status and appends
+// a human-readable hint when the sync detected manual tokens that the upstream
+// no longer recognises. The affected keys have already been demoted to
+// masked_pending by mergePersistedSiteTokens; here we only surface the outcome
+// so the sync result tells the user to re-fill them instead of silently keeping
+// the stale value.
+func applyRevokedManualTokensToSnapshot(snapshot *syncSnapshot, revokedTokens []model.SiteToken) {
+	if snapshot == nil || len(revokedTokens) == 0 {
+		return
+	}
+	names := make([]string, 0, len(revokedTokens))
+	seen := make(map[string]struct{}, len(revokedTokens))
+	for _, token := range revokedTokens {
+		label := strings.TrimSpace(token.Name)
+		if label == "" {
+			label = model.NormalizeSiteGroupName(token.GroupKey, token.GroupName)
+		}
+		if label == "" {
+			continue
+		}
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		names = append(names, label)
+	}
+	if len(names) == 0 {
+		names = append(names, fmt.Sprintf("%d 个", len(revokedTokens)))
+	}
+	hint := fmt.Sprintf("检测到失效密钥（%s），已停用，请在上游重置后重新填写", strings.Join(names, "、"))
+	if snapshot.status == model.SiteExecutionStatusSuccess {
+		snapshot.status = model.SiteExecutionStatusPartial
+	}
+	trimmed := strings.TrimSpace(snapshot.message)
+	if trimmed == "" {
+		snapshot.message = hint
+	} else if !strings.Contains(trimmed, hint) {
+		snapshot.message = trimmed + "；" + hint
+	}
+}
+
+// maskRevokedSiteTokenValue builds a masked placeholder for a token that the
+// upstream no longer recognises, keeping the head/tail visible so the user can
+// identify which key to re-fill while ensuring the value reads as masked
+// (so downstream projection stops emitting a channel key for it).
+func maskRevokedSiteTokenValue(fullToken string) string {
+	normalized := model.NormalizeComparableSiteTokenValue(fullToken)
+	if normalized == "" {
+		return "••••"
+	}
+	runes := []rune(normalized)
+	if len(runes) <= 8 {
+		return string(runes[:1]) + "••••" + string(runes[len(runes)-1:])
+	}
+	return string(runes[:4]) + "••••••••••" + string(runes[len(runes)-4:])
+}
+
+func mergePersistedSiteTokens(accountID int, existingTokens []model.SiteToken, incomingTokens []model.SiteToken, now time.Time) ([]model.SiteToken, []model.SiteToken) {
 	preparedExisting := make([]model.SiteToken, 0, len(existingTokens))
 	for _, token := range existingTokens {
 		token.SiteAccountID = accountID
@@ -312,6 +370,11 @@ func mergePersistedSiteTokens(accountID int, existingTokens []model.SiteToken, i
 
 	result := make([]model.SiteToken, 0, len(incomingTokens)+len(preparedExisting))
 	usedExistingIDs := make(map[int]struct{}, len(preparedExisting))
+	revokedTokens := make([]model.SiteToken, 0)
+	groupsWithIncoming := make(map[string]struct{}, len(incomingTokens))
+	for _, incoming := range incomingTokens {
+		groupsWithIncoming[model.NormalizeSiteGroupKey(incoming.GroupKey)] = struct{}{}
+	}
 
 	for _, incoming := range incomingTokens {
 		incoming.SiteAccountID = accountID
@@ -346,6 +409,17 @@ func mergePersistedSiteTokens(accountID int, existingTokens []model.SiteToken, i
 			continue
 		}
 		existing.LastSyncAt = &now
+		// 上游已成功枚举该分组的密钥，但这个手动密钥不在其中，说明它已被上游删除或
+		// 重置。继续保留旧值会让渠道一直用失效密钥（健康检查报 401），因此把它降级为
+		// masked_pending 并禁用，等待用户重新填写，同时记录下来供同步结果提示。
+		if _, groupSynced := groupsWithIncoming[existing.GroupKey]; groupSynced &&
+			model.IsReadySiteToken(existing) && !model.IsMaskedSiteTokenValue(existing.Token) {
+			existing.Token = maskRevokedSiteTokenValue(existing.Token)
+			existing.ValueStatus = model.SiteTokenValueStatusMaskedPending
+			existing.Enabled = false
+			existing.IsDefault = false
+			revokedTokens = append(revokedTokens, existing)
+		}
 		result = append(result, existing)
 	}
 
@@ -363,7 +437,7 @@ func mergePersistedSiteTokens(accountID int, existingTokens []model.SiteToken, i
 		result[i].ID = 0
 	}
 
-	return result
+	return result, revokedTokens
 }
 
 func mergeReadyIncomingSiteToken(incoming model.SiteToken, existingTokens []model.SiteToken, usedExistingIDs map[int]struct{}) model.SiteToken {

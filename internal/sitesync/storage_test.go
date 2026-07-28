@@ -104,7 +104,7 @@ func TestMergePersistedSiteTokensPreservesManualFullTokenWhenIncomingIsMasked(t 
 		Source:      "sync",
 	}}
 
-	merged := mergePersistedSiteTokens(9, existing, incoming, now)
+	merged, _ := mergePersistedSiteTokens(9, existing, incoming, now)
 	if len(merged) != 1 {
 		t.Fatalf("expected exactly one merged token, got %+v", merged)
 	}
@@ -141,7 +141,7 @@ func TestMergePersistedSiteTokensTreatsOptionalSKPrefixAsSameReadyToken(t *testi
 		Source:    "sync",
 	}}
 
-	merged := mergePersistedSiteTokens(9, existing, incoming, now)
+	merged, _ := mergePersistedSiteTokens(9, existing, incoming, now)
 	if len(merged) != 1 {
 		t.Fatalf("expected exactly one merged token, got %+v", merged)
 	}
@@ -175,7 +175,7 @@ func TestMergePersistedSiteTokensPreservesLocalDisabledStateForReadyToken(t *tes
 		Source:    "sync",
 	}}
 
-	merged := mergePersistedSiteTokens(9, existing, incoming, now)
+	merged, _ := mergePersistedSiteTokens(9, existing, incoming, now)
 	if len(merged) != 1 {
 		t.Fatalf("expected exactly one merged token, got %+v", merged)
 	}
@@ -206,7 +206,7 @@ func TestMergePersistedSiteTokensPreservesLocalEnabledStateWhenIncomingDisabled(
 		Source:    "sync",
 	}}
 
-	merged := mergePersistedSiteTokens(9, existing, incoming, now)
+	merged, _ := mergePersistedSiteTokens(9, existing, incoming, now)
 	if len(merged) != 1 {
 		t.Fatalf("expected exactly one merged token, got %+v", merged)
 	}
@@ -251,7 +251,7 @@ func TestMergePersistedSiteTokensKeepsMaskedPendingWhenMatchIsAmbiguous(t *testi
 		Source:      "sync",
 	}}
 
-	merged := mergePersistedSiteTokens(9, existing, incoming, now)
+	merged, _ := mergePersistedSiteTokens(9, existing, incoming, now)
 	if len(merged) != 3 {
 		t.Fatalf("expected masked pending token plus two preserved manual tokens, got %+v", merged)
 	}
@@ -295,7 +295,7 @@ func TestMergePersistedSiteTokensDemotesReadyTokenWhenMaskedPatternMismatches(t 
 		Source:      "sync",
 	}}
 
-	merged := mergePersistedSiteTokens(9, existing, incoming, now)
+	merged, _ := mergePersistedSiteTokens(9, existing, incoming, now)
 	if len(merged) != 1 {
 		t.Fatalf("expected exactly one merged token, got %+v", merged)
 	}
@@ -472,5 +472,101 @@ func TestPersistSyncSnapshotEmptySuspendsWithoutAdvancingSuccessTime(t *testing.
 	}
 	if reloaded.LastModelSyncSuccessAt == nil || !reloaded.LastModelSyncSuccessAt.Equal(previousSuccess) {
 		t.Fatalf("expected empty sync to preserve last success time %v, got %v", previousSuccess, reloaded.LastModelSyncSuccessAt)
+	}
+}
+
+// TestMergePersistedSiteTokensDemotesRevokedManualToken 复现“上游换了密钥、多次同步
+// 却仍留着失效手动密钥导致健康检查 401”的问题：当上游成功枚举了该分组的密钥、但某个
+// 手动密钥不在其中时，应把它降级为 masked_pending 并禁用，同时回报到 revoked 列表。
+func TestMergePersistedSiteTokensDemotesRevokedManualToken(t *testing.T) {
+	now := time.Unix(1711929600, 0)
+	existing := []model.SiteToken{{
+		ID:            70,
+		SiteAccountID: 9,
+		Name:          "GROK",
+		Token:         "sk-8uvkkS5iTsstb5LBhlErROVOKED7KrZ",
+		GroupKey:      "grok",
+		GroupName:     "Grok 4.5 独立账号分组",
+		Enabled:       true,
+		ValueStatus:   model.SiteTokenValueStatusReady,
+		Source:        "manual",
+	}}
+	incoming := []model.SiteToken{{
+		Name:      "grok",
+		Token:     "sk-XiZiMKurIp4HQvmAlMRSXFRESHNEWZEHL",
+		GroupKey:  "grok",
+		GroupName: "Grok 4.5 独立账号分组",
+		Enabled:   true,
+		Source:    "sync",
+	}}
+
+	merged, revoked := mergePersistedSiteTokens(9, existing, incoming, now)
+	if len(revoked) != 1 {
+		t.Fatalf("expected exactly one revoked manual token, got %+v", revoked)
+	}
+	if revoked[0].Name != "GROK" {
+		t.Fatalf("expected revoked token to be the manual GROK key, got %q", revoked[0].Name)
+	}
+
+	var demoted *model.SiteToken
+	for i := range merged {
+		if merged[i].Name == "GROK" {
+			demoted = &merged[i]
+		}
+	}
+	if demoted == nil {
+		t.Fatalf("expected demoted manual token to remain in merged set, got %+v", merged)
+	}
+	if demoted.ValueStatus != model.SiteTokenValueStatusMaskedPending {
+		t.Fatalf("expected revoked manual token to be masked_pending, got %q", demoted.ValueStatus)
+	}
+	if demoted.Enabled {
+		t.Fatalf("expected revoked manual token to be disabled")
+	}
+	if !model.IsMaskedSiteTokenValue(demoted.Token) {
+		t.Fatalf("expected revoked manual token value to be masked, got %q", demoted.Token)
+	}
+	if model.NormalizeComparableSiteTokenValue(demoted.Token) == model.NormalizeComparableSiteTokenValue("sk-8uvkkS5iTsstb5LBhlErROVOKED7KrZ") {
+		t.Fatalf("expected revoked manual token to no longer expose the full stale value")
+	}
+}
+
+// TestMergePersistedSiteTokensKeepsMatchingManualToken 确认手动密钥仍与上游对得上时
+// （上游以掩码形式返回同一个密钥）不会被误降级。
+func TestMergePersistedSiteTokensKeepsMatchingManualToken(t *testing.T) {
+	now := time.Unix(1711929600, 0)
+	existing := []model.SiteToken{{
+		ID:            71,
+		SiteAccountID: 9,
+		Name:          "grok",
+		Token:         "sk-XiZiMKurIp4HQvmAlMRSXFRESHNEWZEHL",
+		GroupKey:      "grok",
+		GroupName:     "Grok 4.5 独立账号分组",
+		Enabled:       true,
+		ValueStatus:   model.SiteTokenValueStatusReady,
+		Source:        "manual",
+	}}
+	incoming := []model.SiteToken{{
+		Name:        "grok",
+		Token:       "XiZi**********ZEHL",
+		GroupKey:    "grok",
+		GroupName:   "Grok 4.5 独立账号分组",
+		Enabled:     true,
+		ValueStatus: model.SiteTokenValueStatusMaskedPending,
+		Source:      "sync",
+	}}
+
+	merged, revoked := mergePersistedSiteTokens(9, existing, incoming, now)
+	if len(revoked) != 0 {
+		t.Fatalf("expected no revoked tokens when manual key still matches upstream, got %+v", revoked)
+	}
+	if len(merged) != 1 {
+		t.Fatalf("expected exactly one merged token, got %+v", merged)
+	}
+	if merged[0].Token != "sk-XiZiMKurIp4HQvmAlMRSXFRESHNEWZEHL" {
+		t.Fatalf("expected matching manual token to keep its full value, got %q", merged[0].Token)
+	}
+	if merged[0].ValueStatus != model.SiteTokenValueStatusReady {
+		t.Fatalf("expected matching manual token to remain ready, got %q", merged[0].ValueStatus)
 	}
 }
