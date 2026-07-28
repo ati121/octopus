@@ -1,0 +1,9 @@
+services:
+  octopus:
+    image: ghcr.io/ati121/octopus:latest
+    ports:
+       - '8080:8080'
+    volumes:      
+       - '/path/to/data:/app/data'
+    container_name: octopus
+    restart: unless-stopped
