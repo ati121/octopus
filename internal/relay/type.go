@@ -127,12 +127,13 @@ func (r *relayRequest) requestContext() context.Context {
 type relayAttempt struct {
 	*relayRequest // 嵌入请求级上下文
 
-	outAdapter           model.Outbound
-	channel              *dbmodel.Channel
-	usedKey              dbmodel.ChannelKey
-	firstTokenTimeOutSec int
-	firstTokenBudget     *firstTokenBudget
-	retryAfter           time.Duration // forward() 提取后暂存
+	outAdapter            model.Outbound
+	channel               *dbmodel.Channel
+	usedKey               dbmodel.ChannelKey
+	firstTokenTimeOutSec  int
+	firstTokenBudget      *firstTokenBudget
+	retryAfter            time.Duration // forward() 提取后暂存
+	deferredStreamPayload []byte
 }
 
 // attemptResult 封装单次尝试的结果
@@ -145,4 +146,5 @@ type attemptResult struct {
 	Err               error         // 失败时的错误
 	StatusCode        int           // 上游 HTTP 状态码（0 = 连接错误）
 	RetryAfter        time.Duration // 解析的 Retry-After 值
+	DeferredPayload   []byte        // 未提交的纯错误流，仅在所有渠道失败时回传
 }

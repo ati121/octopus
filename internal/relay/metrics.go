@@ -69,6 +69,21 @@ func (m *RelayMetrics) SetFirstTokenTime(t time.Time) {
 	m.FirstTokenTime = t
 }
 
+func (m *RelayMetrics) ResetAttemptResponse() {
+	m.FirstTokenTime = time.Time{}
+	m.InternalResponse = nil
+	m.ActualModel = ""
+	m.Stats.InputToken = 0
+	m.Stats.OutputToken = 0
+	m.Stats.CacheReadToken = 0
+	m.Stats.CacheWriteToken = 0
+	m.Stats.InputCost = 0
+	m.Stats.OutputCost = 0
+	m.BillInputTokens = nil
+	m.CacheReadTokens = nil
+	m.CacheWriteTokens = nil
+}
+
 func (m *RelayMetrics) SetTransportRequestPayload(payload []byte, modelName string) {
 	if len(payload) == 0 {
 		return

@@ -263,7 +263,7 @@ func (p *StreamProcessor) processEvent(data []byte) error {
 		return fmt.Errorf("write error: %w", err)
 	}
 
-	p.payloadWritten = true
+	p.payloadWritten = p.config.Writer.Written()
 	if !p.terminalReached && len(p.config.TerminalEvents) > 0 {
 		p.terminalReached = streamContainsTerminal(output, p.config.TerminalEvents)
 	}

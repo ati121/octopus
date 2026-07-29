@@ -516,6 +516,211 @@ func TestHandlerRecordsAnthropicStreamErrorAsFailure(t *testing.T) {
 	}
 }
 
+func TestHandlerFailsOverAfterAnthropicStreamErrorBeforeContent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := setupRelayTestDB(t)
+
+	failedSSE := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_failed","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":12,"output_tokens":0}}}`,
+		"",
+		"event: error",
+		`data: {"type":"error","error":{"type":"permission_error","message":"Upstream access forbidden"}}`,
+		"",
+	}, "\n")
+	successSSE := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_success","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":12,"output_tokens":0}}}`,
+		"",
+		"event: content_block_start",
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		"",
+		"event: content_block_delta",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"fallback ok"}}`,
+		"",
+		"event: content_block_stop",
+		`data: {"type":"content_block_stop","index":0}`,
+		"",
+		"event: message_delta",
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
+		"",
+		"event: message_stop",
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+
+	var firstHits atomic.Int32
+	firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstHits.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(failedSSE))
+	}))
+	defer firstServer.Close()
+
+	var secondHits atomic.Int32
+	secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondHits.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(successSSE))
+	}))
+	defer secondServer.Close()
+
+	firstChannel := &model.Channel{
+		Name:     "relay-stream-error-first",
+		Type:     outbound.OutboundTypeAnthropic,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: firstServer.URL + "/v1"}},
+		Model:    "claude-test",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "first-key"}},
+	}
+	if err := op.ChannelCreate(firstChannel, ctx); err != nil {
+		t.Fatalf("ChannelCreate first channel failed: %v", err)
+	}
+	secondChannel := &model.Channel{
+		Name:     "relay-stream-error-fallback",
+		Type:     outbound.OutboundTypeAnthropic,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: secondServer.URL + "/v1"}},
+		Model:    "claude-test",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "second-key"}},
+	}
+	if err := op.ChannelCreate(secondChannel, ctx); err != nil {
+		t.Fatalf("ChannelCreate second channel failed: %v", err)
+	}
+
+	group := &model.Group{Name: "relay-stream-error-failover-group", Mode: model.GroupModeFailover}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: firstChannel.ID, ModelName: "claude-test", Priority: 1, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd first item failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: secondChannel.ID, ModelName: "claude-test", Priority: 2, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd second item failed: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"relay-stream-error-failover-group","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hello"}]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	Handler(inbound.InboundTypeAnthropic, c)
+
+	if firstHits.Load() != 1 || secondHits.Load() != 1 {
+		t.Fatalf("expected one failed and one successful upstream call, got first=%d second=%d", firstHits.Load(), secondHits.Load())
+	}
+	if got := recorder.Body.String(); got != successSSE {
+		t.Fatalf("expected only fallback stream, got %q want %q", got, successSSE)
+	}
+	if strings.Contains(recorder.Body.String(), "msg_failed") || strings.Contains(recorder.Body.String(), "Upstream access forbidden") {
+		t.Fatalf("failed channel stream leaked to client: %s", recorder.Body.String())
+	}
+
+	logs, err := op.RelayLogList(ctx, nil, nil, nil, 1, 10)
+	if err != nil {
+		t.Fatalf("RelayLogList failed: %v", err)
+	}
+	if len(logs) == 0 || len(logs[0].Attempts) != 2 {
+		t.Fatalf("expected exactly two attempts, got %#v", logs)
+	}
+	if logs[0].Attempts[0].Status != model.AttemptFailed || logs[0].Attempts[1].Status != model.AttemptSuccess {
+		t.Fatalf("expected failed then successful attempts, got %#v", logs[0].Attempts)
+	}
+}
+
+func TestHandlerDoesNotFailOverAfterAnthropicContentWasWritten(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := setupRelayTestDB(t)
+
+	partialSSE := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_partial","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":12,"output_tokens":0}}}`,
+		"",
+		"event: content_block_start",
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		"",
+		"event: content_block_delta",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial answer"}}`,
+		"",
+		"event: error",
+		`data: {"type":"error","error":{"type":"overloaded_error","message":"failed after content"}}`,
+		"",
+	}, "\n")
+
+	var firstHits atomic.Int32
+	firstServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstHits.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(partialSSE))
+	}))
+	defer firstServer.Close()
+
+	var secondHits atomic.Int32
+	secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondHits.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`event: message_stop\ndata: {"type":"message_stop"}\n\n`))
+	}))
+	defer secondServer.Close()
+
+	firstChannel := &model.Channel{
+		Name:     "relay-partial-stream-first",
+		Type:     outbound.OutboundTypeAnthropic,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: firstServer.URL + "/v1"}},
+		Model:    "claude-test",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "first-key"}},
+	}
+	if err := op.ChannelCreate(firstChannel, ctx); err != nil {
+		t.Fatalf("ChannelCreate first channel failed: %v", err)
+	}
+	secondChannel := &model.Channel{
+		Name:     "relay-partial-stream-fallback",
+		Type:     outbound.OutboundTypeAnthropic,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: secondServer.URL + "/v1"}},
+		Model:    "claude-test",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "second-key"}},
+	}
+	if err := op.ChannelCreate(secondChannel, ctx); err != nil {
+		t.Fatalf("ChannelCreate second channel failed: %v", err)
+	}
+
+	group := &model.Group{Name: "relay-partial-stream-group", Mode: model.GroupModeFailover}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: firstChannel.ID, ModelName: "claude-test", Priority: 1, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd first item failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: secondChannel.ID, ModelName: "claude-test", Priority: 2, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd second item failed: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"relay-partial-stream-group","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hello"}]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	Handler(inbound.InboundTypeAnthropic, c)
+
+	if firstHits.Load() != 1 {
+		t.Fatalf("expected first channel once, got %d", firstHits.Load())
+	}
+	if secondHits.Load() != 0 {
+		t.Fatalf("fallback must not run after content was written, got %d calls", secondHits.Load())
+	}
+	if got := recorder.Body.String(); got != partialSSE {
+		t.Fatalf("expected original partial stream only, got %q want %q", got, partialSSE)
+	}
+
+	logs, err := op.RelayLogList(ctx, nil, nil, nil, 1, 10)
+	if err != nil {
+		t.Fatalf("RelayLogList failed: %v", err)
+	}
+	if len(logs) == 0 || len(logs[0].Attempts) != 1 || logs[0].Attempts[0].Status != model.AttemptFailed {
+		t.Fatalf("expected one failed attempt after partial stream, got %#v", logs)
+	}
+}
+
 func TestHandlerPassthroughsOpenAIResponsesSameProtocolNonStream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := setupRelayTestDB(t)

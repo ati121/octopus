@@ -267,6 +267,20 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 				outAdapter = outbound.Get(channel.Type)
 			}
 
+			attemptInAdapter := inbound.Get(inboundType)
+			if attemptInAdapter == nil {
+				result = attemptResult{Err: fmt.Errorf("unsupported inbound type: %d", inboundType)}
+				break
+			}
+			if _, adapterErr := attemptInAdapter.TransformRequest(c.Request.Context(), rawBody); adapterErr != nil {
+				result = attemptResult{Err: fmt.Errorf("failed to reset inbound adapter: %w", adapterErr)}
+				break
+			}
+			req.inAdapter = attemptInAdapter
+			req.streamPayloadWritten.Store(false)
+			req.responseCollected.Store(false)
+			metrics.ResetAttemptResponse()
+
 			// 构造尝试级上下文
 			ra := &relayAttempt{
 				relayRequest:         req,
@@ -304,7 +318,7 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 				internalResponse := metrics.InternalResponse
 				if internalResponse == nil {
 					var err error
-					internalResponse, err = inAdapter.GetInternalResponse(c.Request.Context())
+					internalResponse, err = req.inAdapter.GetInternalResponse(c.Request.Context())
 					if err != nil {
 						log.Debugf("failed to get internal response for replay state save: %v", err)
 					}
@@ -378,6 +392,11 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 		return
 	}
 	metrics.SaveWithChannelStats(c.Request.Context(), false, lastErr, iter.Attempts(), false)
+	if isStream && len(lastResult.DeferredPayload) > 0 {
+		_, _ = c.Writer.Write(lastResult.DeferredPayload)
+		c.Writer.Flush()
+		return
+	}
 
 	// 透传 429/503 状态码和 Retry-After 头，让客户端 SDK 的重试机制接管
 	if isPassthroughStatus(lastResult.StatusCode) {
@@ -407,6 +426,12 @@ func (ra *relayAttempt) attempt() attemptResult {
 
 	// 转发请求
 	statusCode, fwdErr := ra.forward()
+	if fwdErr != nil {
+		var responseErr *model.ResponseError
+		if errors.As(fwdErr, &responseErr) && responseErr.StatusCode > 0 {
+			statusCode = responseErr.StatusCode
+		}
+	}
 
 	// 更新 channel key 状态
 	ra.usedKey.StatusCode = statusCode
@@ -462,6 +487,7 @@ func (ra *relayAttempt) attempt() attemptResult {
 			Err:               fmt.Errorf("channel %s failed: %w", ra.channel.Name, fwdErr),
 			StatusCode:        statusCode,
 			RetryAfter:        ra.retryAfter,
+			DeferredPayload:   ra.deferredStreamPayload,
 		}
 	}
 
@@ -494,11 +520,12 @@ func (ra *relayAttempt) attempt() attemptResult {
 		}
 		span.End(dbmodel.AttemptSkipped, statusCode, msg)
 		return attemptResult{
-			Success:    false,
-			Written:    written,
-			Canceled:   true,
-			Err:        fmt.Errorf("%s: %w", msg, fwdErr),
-			StatusCode: statusCode,
+			Success:         false,
+			Written:         written,
+			Canceled:        true,
+			Err:             fmt.Errorf("%s: %w", msg, fwdErr),
+			StatusCode:      statusCode,
+			DeferredPayload: ra.deferredStreamPayload,
 		}
 	}
 
@@ -531,6 +558,7 @@ func (ra *relayAttempt) attempt() attemptResult {
 		Err:               fmt.Errorf("channel %s failed: %w", ra.channel.Name, fwdErr),
 		StatusCode:        statusCode,
 		RetryAfter:        ra.retryAfter,
+		DeferredPayload:   ra.deferredStreamPayload,
 	}
 }
 
@@ -780,10 +808,11 @@ func (ra *relayAttempt) handleWSStreamResponseV2(ctx context.Context, reader *ws
 	}
 
 	// Create StreamProcessor
+	writer := newDeferredStreamWriter(ra.getStreamWriter())
 	processor := stream.NewStreamProcessor(stream.StreamConfig{
 		Source:            stream.NewWSSource(reader),
 		Transform:         transform,
-		Writer:            ra.getStreamWriter(),
+		Writer:            writer,
 		Context:           ctx,
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
@@ -796,6 +825,7 @@ func (ra *relayAttempt) handleWSStreamResponseV2(ctx context.Context, reader *ws
 
 	// Run processor
 	err := processor.Run()
+	ra.deferredStreamPayload = writer.RejectedPayload()
 
 	// Track payload written for metrics collection
 	if processor.PayloadWritten() {
@@ -1160,10 +1190,11 @@ func (ra *relayAttempt) handleStreamResponseV2(ctx context.Context, response *ht
 	}
 
 	// Create StreamProcessor
+	writer := newDeferredStreamWriter(ra.getStreamWriter())
 	processor := stream.NewStreamProcessor(stream.StreamConfig{
 		Source:            stream.NewSSESource(response.Body, maxSSEEventSize),
 		Transform:         transform,
-		Writer:            ra.getStreamWriter(),
+		Writer:            writer,
 		Context:           ctx,
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
@@ -1176,6 +1207,7 @@ func (ra *relayAttempt) handleStreamResponseV2(ctx context.Context, response *ht
 
 	// Run processor
 	err := processor.Run()
+	ra.deferredStreamPayload = writer.RejectedPayload()
 
 	// Track payload written for metrics collection
 	if processor.PayloadWritten() {
@@ -1227,10 +1259,11 @@ func (ra *relayAttempt) handleStreamResponsePassthroughV2(ctx context.Context, r
 	}
 
 	// Create StreamProcessor
+	writer := newDeferredStreamWriter(ra.getStreamWriter())
 	processor := stream.NewStreamProcessor(stream.StreamConfig{
 		Source:            stream.NewRawSource(response.Body, 32*1024),
 		Transform:         nil, // Passthrough: no transformation
-		Writer:            ra.getStreamWriter(),
+		Writer:            writer,
 		Context:           ctx,
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
@@ -1260,6 +1293,7 @@ func (ra *relayAttempt) handleStreamResponsePassthroughV2(ctx context.Context, r
 
 	// Run processor
 	err := processor.Run()
+	ra.deferredStreamPayload = writer.RejectedPayload()
 
 	// Track payload written for metrics collection
 	if processor.PayloadWritten() {
