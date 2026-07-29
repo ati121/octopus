@@ -478,7 +478,11 @@ func TestPersistSyncSnapshotEmptySuspendsWithoutAdvancingSuccessTime(t *testing.
 // TestMergePersistedSiteTokensDemotesRevokedManualToken 复现“上游换了密钥、多次同步
 // 却仍留着失效手动密钥导致健康检查 401”的问题：当上游成功枚举了该分组的密钥、但某个
 // 手动密钥不在其中时，应把它降级为 masked_pending 并禁用，同时回报到 revoked 列表。
-func TestMergePersistedSiteTokensDemotesRevokedManualToken(t *testing.T) {
+// TestMergePersistedSiteTokensRemovesRevokedManualToken 复现“上游换了密钥后旧的手动密钥
+// 已失效”的情况：上游成功枚举该分组、但旧手动密钥已不在其中，同步应把它从库里移除
+// （而不是降级保留一个会卡住回填校验的脱敏值），并回报供同步结果提示。分组内本轮 sync
+// 带回的有效新密钥保持可用。
+func TestMergePersistedSiteTokensRemovesRevokedManualToken(t *testing.T) {
 	now := time.Unix(1711929600, 0)
 	existing := []model.SiteToken{{
 		ID:            70,
@@ -508,26 +512,19 @@ func TestMergePersistedSiteTokensDemotesRevokedManualToken(t *testing.T) {
 		t.Fatalf("expected revoked token to be the manual GROK key, got %q", revoked[0].Name)
 	}
 
-	var demoted *model.SiteToken
 	for i := range merged {
 		if merged[i].Name == "GROK" {
-			demoted = &merged[i]
+			t.Fatalf("expected revoked manual token to be removed, still present: %+v", merged[i])
 		}
 	}
-	if demoted == nil {
-		t.Fatalf("expected demoted manual token to remain in merged set, got %+v", merged)
+	if len(merged) != 1 {
+		t.Fatalf("expected only the valid sync key to remain, got %+v", merged)
 	}
-	if demoted.ValueStatus != model.SiteTokenValueStatusMaskedPending {
-		t.Fatalf("expected revoked manual token to be masked_pending, got %q", demoted.ValueStatus)
+	if merged[0].Token != "sk-XiZiMKurIp4HQvmAlMRSXFRESHNEWZEHL" {
+		t.Fatalf("expected the valid sync key to remain usable, got %q", merged[0].Token)
 	}
-	if demoted.Enabled {
-		t.Fatalf("expected revoked manual token to be disabled")
-	}
-	if !model.IsMaskedSiteTokenValue(demoted.Token) {
-		t.Fatalf("expected revoked manual token value to be masked, got %q", demoted.Token)
-	}
-	if model.NormalizeComparableSiteTokenValue(demoted.Token) == model.NormalizeComparableSiteTokenValue("sk-8uvkkS5iTsstb5LBhlErROVOKED7KrZ") {
-		t.Fatalf("expected revoked manual token to no longer expose the full stale value")
+	if merged[0].ValueStatus != model.SiteTokenValueStatusReady || !merged[0].Enabled {
+		t.Fatalf("expected the remaining key to stay ready and enabled, got %+v", merged[0])
 	}
 }
 

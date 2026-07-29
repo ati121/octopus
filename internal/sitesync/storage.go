@@ -317,7 +317,7 @@ func applyRevokedManualTokensToSnapshot(snapshot *syncSnapshot, revokedTokens []
 	if len(names) == 0 {
 		names = append(names, fmt.Sprintf("%d 个", len(revokedTokens)))
 	}
-	hint := fmt.Sprintf("检测到失效密钥（%s），已停用，请在上游重置后重新填写", strings.Join(names, "、"))
+	hint := fmt.Sprintf("已移除失效密钥（%s）：上游已不存在该密钥，如需继续使用请在上游重置后重新添加", strings.Join(names, "、"))
 	if snapshot.status == model.SiteExecutionStatusSuccess {
 		snapshot.status = model.SiteExecutionStatusPartial
 	}
@@ -327,22 +327,6 @@ func applyRevokedManualTokensToSnapshot(snapshot *syncSnapshot, revokedTokens []
 	} else if !strings.Contains(trimmed, hint) {
 		snapshot.message = trimmed + "；" + hint
 	}
-}
-
-// maskRevokedSiteTokenValue builds a masked placeholder for a token that the
-// upstream no longer recognises, keeping the head/tail visible so the user can
-// identify which key to re-fill while ensuring the value reads as masked
-// (so downstream projection stops emitting a channel key for it).
-func maskRevokedSiteTokenValue(fullToken string) string {
-	normalized := model.NormalizeComparableSiteTokenValue(fullToken)
-	if normalized == "" {
-		return "••••"
-	}
-	runes := []rune(normalized)
-	if len(runes) <= 8 {
-		return string(runes[:1]) + "••••" + string(runes[len(runes)-1:])
-	}
-	return string(runes[:4]) + "••••••••••" + string(runes[len(runes)-4:])
 }
 
 func mergePersistedSiteTokens(accountID int, existingTokens []model.SiteToken, incomingTokens []model.SiteToken, now time.Time) ([]model.SiteToken, []model.SiteToken) {
@@ -371,9 +355,10 @@ func mergePersistedSiteTokens(accountID int, existingTokens []model.SiteToken, i
 	result := make([]model.SiteToken, 0, len(incomingTokens)+len(preparedExisting))
 	usedExistingIDs := make(map[int]struct{}, len(preparedExisting))
 	revokedTokens := make([]model.SiteToken, 0)
-	groupsWithIncoming := make(map[string]struct{}, len(incomingTokens))
+	incomingByGroup := make(map[string][]model.SiteToken, len(incomingTokens))
 	for _, incoming := range incomingTokens {
-		groupsWithIncoming[model.NormalizeSiteGroupKey(incoming.GroupKey)] = struct{}{}
+		groupKey := model.NormalizeSiteGroupKey(incoming.GroupKey)
+		incomingByGroup[groupKey] = append(incomingByGroup[groupKey], incoming)
 	}
 
 	for _, incoming := range incomingTokens {
@@ -409,16 +394,15 @@ func mergePersistedSiteTokens(accountID int, existingTokens []model.SiteToken, i
 			continue
 		}
 		existing.LastSyncAt = &now
-		// 上游已成功枚举该分组的密钥，但这个手动密钥不在其中，说明它已被上游删除或
-		// 重置。继续保留旧值会让渠道一直用失效密钥（健康检查报 401），因此把它降级为
-		// masked_pending 并禁用，等待用户重新填写，同时记录下来供同步结果提示。
-		if _, groupSynced := groupsWithIncoming[existing.GroupKey]; groupSynced &&
-			model.IsReadySiteToken(existing) && !model.IsMaskedSiteTokenValue(existing.Token) {
-			existing.Token = maskRevokedSiteTokenValue(existing.Token)
-			existing.ValueStatus = model.SiteTokenValueStatusMaskedPending
-			existing.Enabled = false
-			existing.IsDefault = false
+		// 上游已成功枚举该分组的密钥，但这个手动密钥跟上游返回的任何密钥都对不上，说明
+		// 它已被上游删除或重置。这类失效密钥继续保留只会让渠道一直用它（健康检查报 401），
+		// 且它旧值的脱敏头尾会卡住新 Key 的回填校验，因此直接移除，并记录下来供同步结果
+		// 提示。只要它仍与上游某个返回值（明文或脱敏）对得上，就保留不动，避免误删。
+		incomingForGroup, groupSynced := incomingByGroup[existing.GroupKey]
+		if groupSynced && model.IsReadySiteToken(existing) && !model.IsMaskedSiteTokenValue(existing.Token) &&
+			!manualTokenMatchesAnyIncoming(existing, incomingForGroup) {
 			revokedTokens = append(revokedTokens, existing)
+			continue
 		}
 		result = append(result, existing)
 	}
@@ -593,6 +577,31 @@ func normalizeSiteTokenName(name string) string {
 
 func siteMaskedTokenMatches(fullToken string, maskedToken string) bool {
 	return model.SiteMaskedTokenMatches(fullToken, maskedToken)
+}
+
+// manualTokenMatchesAnyIncoming reports whether a stored manual token still
+// corresponds to any token the upstream returned for its group this sync. The
+// upstream may surface a token either as a full value or as a masked sample, so
+// we accept a comparable-equality match or a masked-pattern match. When nothing
+// matches, the manual token has been deleted/reset upstream and is treated as
+// revoked.
+func manualTokenMatchesAnyIncoming(existing model.SiteToken, incoming []model.SiteToken) bool {
+	for _, candidate := range incoming {
+		candidateToken := strings.TrimSpace(candidate.Token)
+		if candidateToken == "" {
+			continue
+		}
+		if model.IsMaskedSiteTokenValue(candidateToken) {
+			if model.SiteMaskedTokenMatches(existing.Token, candidateToken) {
+				return true
+			}
+			continue
+		}
+		if sameComparableSiteTokenValue(existing.Token, candidateToken) {
+			return true
+		}
+	}
+	return false
 }
 
 func sameComparableSiteTokenValue(left string, right string) bool {
