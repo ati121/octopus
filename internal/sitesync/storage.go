@@ -289,11 +289,8 @@ func mergePersistedSiteModelsByGroup(existing []model.SiteModel, incoming []mode
 }
 
 // applyRevokedManualTokensToSnapshot downgrades the snapshot status and appends
-// a human-readable hint when the sync detected manual tokens that the upstream
-// no longer recognises. The affected keys have already been demoted to
-// masked_pending by mergePersistedSiteTokens; here we only surface the outcome
-// so the sync result tells the user to re-fill them instead of silently keeping
-// the stale value.
+// a human-readable hint when the sync removed manual tokens that the upstream
+// no longer recognises.
 func applyRevokedManualTokensToSnapshot(snapshot *syncSnapshot, revokedTokens []model.SiteToken) {
 	if snapshot == nil || len(revokedTokens) == 0 {
 		return
@@ -399,7 +396,7 @@ func mergePersistedSiteTokens(accountID int, existingTokens []model.SiteToken, i
 		// 且它旧值的脱敏头尾会卡住新 Key 的回填校验，因此直接移除，并记录下来供同步结果
 		// 提示。只要它仍与上游某个返回值（明文或脱敏）对得上，就保留不动，避免误删。
 		incomingForGroup, groupSynced := incomingByGroup[existing.GroupKey]
-		if groupSynced && model.IsReadySiteToken(existing) && !model.IsMaskedSiteTokenValue(existing.Token) &&
+		if groupSynced && strings.TrimSpace(existing.Token) != "" &&
 			!manualTokenMatchesAnyIncoming(existing, incomingForGroup) {
 			revokedTokens = append(revokedTokens, existing)
 			continue

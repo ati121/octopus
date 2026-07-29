@@ -528,6 +528,57 @@ func TestMergePersistedSiteTokensRemovesRevokedManualToken(t *testing.T) {
 	}
 }
 
+func TestMergePersistedSiteTokensRemovesRevokedMaskedPendingManualToken(t *testing.T) {
+	now := time.Unix(1711929600, 0)
+	existing := []model.SiteToken{
+		{
+			ID:            70,
+			SiteAccountID: 9,
+			Name:          "GROK",
+			Token:         "8uvk••••••••••7KrZ",
+			GroupKey:      "Grok 4.5 独立账号分组",
+			GroupName:     "Grok 4.5 独立账号分组",
+			Enabled:       false,
+			ValueStatus:   model.SiteTokenValueStatusMaskedPending,
+			Source:        "manual",
+		},
+		{
+			ID:            71,
+			SiteAccountID: 9,
+			Name:          "grok",
+			Token:         "sk-XiZiMKurIp4HQvmAlMRSXFRESHNEWZEHL",
+			GroupKey:      "Grok 4.5 独立账号分组",
+			GroupName:     "Grok 4.5 独立账号分组",
+			Enabled:       true,
+			ValueStatus:   model.SiteTokenValueStatusReady,
+			Source:        "sync",
+		},
+	}
+	incoming := []model.SiteToken{{
+		Name:        "grok",
+		Token:       "XiZi**********ZEHL",
+		GroupKey:    "Grok 4.5 独立账号分组",
+		GroupName:   "Grok 4.5 独立账号分组",
+		Enabled:     true,
+		ValueStatus: model.SiteTokenValueStatusMaskedPending,
+		Source:      "sync",
+	}}
+
+	merged, revoked := mergePersistedSiteTokens(9, existing, incoming, now)
+	if len(revoked) != 1 || revoked[0].Name != "GROK" {
+		t.Fatalf("expected stale masked manual token to be revoked, got %+v", revoked)
+	}
+	if len(merged) != 1 {
+		t.Fatalf("expected only the current full token to remain, got %+v", merged)
+	}
+	if merged[0].Token != "sk-XiZiMKurIp4HQvmAlMRSXFRESHNEWZEHL" {
+		t.Fatalf("expected current full token to remain usable, got %q", merged[0].Token)
+	}
+	if merged[0].ValueStatus != model.SiteTokenValueStatusReady || !merged[0].Enabled {
+		t.Fatalf("expected current token to stay ready and enabled, got %+v", merged[0])
+	}
+}
+
 // TestMergePersistedSiteTokensKeepsMatchingManualToken 确认手动密钥仍与上游对得上时
 // （上游以掩码形式返回同一个密钥）不会被误降级。
 func TestMergePersistedSiteTokensKeepsMatchingManualToken(t *testing.T) {
