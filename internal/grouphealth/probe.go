@@ -131,7 +131,7 @@ func buildProbeInternalRequest(channelType outbound.OutboundType, modelName stri
 				Single: &ping,
 			},
 		}
-	case outbound.OutboundTypeOpenAIResponse:
+	case outbound.OutboundTypeOpenAIResponse, outbound.OutboundTypeCodex:
 		return &transformerModel.InternalLLMRequest{
 			Model:               modelName,
 			RawAPIFormat:        transformerModel.APIFormatOpenAIResponse,
