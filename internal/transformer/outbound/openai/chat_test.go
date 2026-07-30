@@ -269,3 +269,68 @@ func TestTransformRequestAttachesOrgAndProjectHeaders(t *testing.T) {
 		t.Errorf("expected OpenAI-Organization omitted for blank value, got %q", got)
 	}
 }
+
+// TestSanitizeToolCallMessagesFillsEmptyArguments 验证空 arguments 被兜底成 "{}"，
+// 避免 Grok/xAI 等严格上游以 "function/name/arguments cannot be empty" 拒绝请求。
+func TestSanitizeToolCallMessagesFillsEmptyArguments(t *testing.T) {
+	req := &model.InternalLLMRequest{
+		Model: "grok-4",
+		Messages: []model.Message{
+			{
+				Role: "assistant",
+				ToolCalls: []model.ToolCall{
+					{
+						ID:   "call_1",
+						Type: "function",
+						Function: model.FunctionCall{
+							Name:      "get_time",
+							Arguments: "",
+						},
+					},
+					{
+						ID:   "call_2",
+						Type: "function",
+						Function: model.FunctionCall{
+							Name:      "lookup",
+							Arguments: `{"q":"octopus"}`,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	wire := buildChatCompletionsRequest(req)
+	if got := wire.Messages[0].ToolCalls[0].Function.Arguments; got != "{}" {
+		t.Fatalf("empty arguments should be normalized to \"{}\", got %q", got)
+	}
+	if got := wire.Messages[0].ToolCalls[1].Function.Arguments; got != `{"q":"octopus"}` {
+		t.Fatalf("non-empty arguments must be preserved, got %q", got)
+	}
+
+	// 确认序列化后不再出现空 "arguments":""。
+	body, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if got := string(body); !json.Valid(body) {
+		t.Fatalf("invalid json: %s", got)
+	}
+}
+
+// TestSanitizeToolCallMessagesNoCopyWhenClean 验证无空 arguments 时不发生额外拷贝，
+// 保持原切片引用（快路径）。
+func TestSanitizeToolCallMessagesNoCopyWhenClean(t *testing.T) {
+	messages := []model.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []model.ToolCall{
+				{ID: "call_1", Type: "function", Function: model.FunctionCall{Name: "lookup", Arguments: "{}"}},
+			},
+		},
+	}
+	out := sanitizeToolCallMessages(messages)
+	if &out[0] != &messages[0] {
+		t.Fatalf("clean messages should not be copied")
+	}
+}

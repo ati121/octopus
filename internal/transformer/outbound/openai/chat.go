@@ -165,7 +165,7 @@ func buildChatCompletionsRequest(request *model.InternalLLMRequest) *ChatComplet
 	}
 
 	result := &ChatCompletionsRequest{
-		Messages:            request.Messages,
+		Messages:            sanitizeToolCallMessages(request.Messages),
 		Model:               request.Model,
 		FrequencyPenalty:    request.FrequencyPenalty,
 		Logprobs:            request.Logprobs,
@@ -239,6 +239,50 @@ func isReasoningChatModel(modelName string) bool {
 		return true
 	}
 	return false
+}
+
+// sanitizeToolCallMessages repairs assistant tool_calls before they hit an
+// OpenAI-compatible upstream. OpenAI 官方对 function.arguments 为空是宽容的
+// （会当作 "{}" 处理），但部分兼容上游（如 xAI/Grok）执行严格校验，会以
+// `invalid tool_call function, function/name/arguments cannot be empty` 直接拒绝
+// 整个请求。空 arguments 的最常见来源是 Anthropic inbound 把无参数工具的
+// tool_use.input（null / 空）转成 `Arguments: string(block.Input)` == ""，
+// 而 FunctionCall.Arguments 的 JSON tag 无 omitempty，始终序列化出
+// `"arguments":""`。这里把空 arguments 兜底成合法的空 JSON 对象 "{}"，
+// 保证严格上游能接受。name 为空的 tool_call 无法安全补全，保持原样交由上游报错。
+func sanitizeToolCallMessages(messages []model.Message) []model.Message {
+	needsCopy := false
+	for i := range messages {
+		for j := range messages[i].ToolCalls {
+			if messages[i].ToolCalls[j].Function.Arguments == "" {
+				needsCopy = true
+				break
+			}
+		}
+		if needsCopy {
+			break
+		}
+	}
+	if !needsCopy {
+		return messages
+	}
+
+	out := make([]model.Message, len(messages))
+	copy(out, messages)
+	for i := range out {
+		if len(out[i].ToolCalls) == 0 {
+			continue
+		}
+		toolCalls := make([]model.ToolCall, len(out[i].ToolCalls))
+		copy(toolCalls, out[i].ToolCalls)
+		for j := range toolCalls {
+			if toolCalls[j].Function.Arguments == "" {
+				toolCalls[j].Function.Arguments = "{}"
+			}
+		}
+		out[i].ToolCalls = toolCalls
+	}
+	return out
 }
 
 func convertToolsToChatCompletions(tools []model.Tool) []ChatCompletionsTool {
