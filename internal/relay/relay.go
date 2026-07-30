@@ -18,6 +18,7 @@ import (
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/relay/stream"
 	"github.com/bestruirui/octopus/internal/server/resp"
+	"github.com/bestruirui/octopus/internal/transformer/hook"
 	"github.com/bestruirui/octopus/internal/transformer/inbound"
 	"github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
@@ -654,6 +655,9 @@ func (ra *relayAttempt) forwardViaWS(ctx context.Context) (int, error) {
 	log.Debugf("upstream WS selected (channel=%s, key=%d, continuation=%t, previous_response_id=%s)",
 		ra.channel.Name, ra.usedKey.ID, continuation, currentPreviousResponseID(ra.internalRequest))
 
+	// 在 IR 交给出站转换器之前，应用注册的请求 hook（与 HTTP 路径保持一致）。
+	hook.ApplyRequest(ctx, outbound.APIFormatOf(ra.channel.Type), ra.internalRequest)
+
 	// Build the Responses API request body
 	responsesReq := openaiOutbound.ConvertToResponsesRequest(ra.internalRequest)
 	reqBody, err := json.Marshal(responsesReq)
@@ -964,6 +968,10 @@ func (ra *relayAttempt) handleResponsePassthrough(ctx context.Context, response 
 func (ra *relayAttempt) forwardViaHTTPStandard(ctx context.Context) (int, error) {
 	restoreItemReferenceMode := ra.applyResponsesItemReferenceCompatibility()
 	defer restoreItemReferenceMode()
+
+	// 在 IR 交给出站转换器之前，应用注册的请求 hook（按模型/目标格式做 quirk 修补）。
+	// 默认无 hook 注册时为 no-op，行为与之前一致。
+	hook.ApplyRequest(ctx, outbound.APIFormatOf(ra.channel.Type), ra.internalRequest)
 
 	outboundRequest, err := ra.outAdapter.TransformRequest(
 		ctx,

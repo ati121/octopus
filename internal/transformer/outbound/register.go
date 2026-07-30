@@ -33,6 +33,24 @@ var ChatChannelTypes = map[OutboundType]bool{
 	OutboundTypeVolcengine:     true,
 }
 
+// outboundAPIFormats 定义每种出站 channel 类型对应的 provider APIFormat。
+// 供 hook 机制识别「本次实际路由到的目标出站格式」，以决定哪些 hook 适用。
+var outboundAPIFormats = map[OutboundType]model.APIFormat{
+	OutboundTypeOpenAIChat:      model.APIFormatOpenAIChatCompletion,
+	OutboundTypeOpenAIResponse:  model.APIFormatOpenAIResponse,
+	OutboundTypeOpenAIEmbedding: model.APIFormatOpenAIEmbedding,
+	OutboundTypeAnthropic:       model.APIFormatAnthropicMessage,
+	OutboundTypeGemini:          model.APIFormatGeminiContents,
+	// Volcengine 走 OpenAI Responses 线路（内部内嵌 openai.ResponseOutbound）。
+	OutboundTypeVolcengine: model.APIFormatOpenAIResponse,
+}
+
+// APIFormatOf 返回出站 channel 类型对应的 provider APIFormat。
+// 未知类型返回空字符串。
+func APIFormatOf(channelType OutboundType) model.APIFormat {
+	return outboundAPIFormats[channelType]
+}
+
 // IsEmbeddingChannelType 判断 channel 类型是否支持 embedding 请求
 func IsEmbeddingChannelType(channelType OutboundType) bool {
 	return EmbeddingChannelTypes[channelType]
