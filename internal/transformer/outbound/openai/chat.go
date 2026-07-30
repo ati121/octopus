@@ -107,6 +107,12 @@ func (o *ChatOutbound) TransformRequest(ctx context.Context, request *model.Inte
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+	// F-1: 仅当入站同为 OpenAI Chat 格式时，把 inbound 捕获的未建模顶层字段合并回上游
+	// 请求体（不覆盖 outbound 已显式写入的字段）。跨格式路径不合并，以保持
+	// ChatCompletionsRequest 白名单对字段泄漏的防护。
+	if request.RawAPIFormat == model.APIFormatOpenAIChatCompletion {
+		body = model.MergeUnknownFields(body, request.UnknownFields)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "", bytes.NewReader(body))
 	if err != nil {

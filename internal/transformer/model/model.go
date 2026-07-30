@@ -384,6 +384,19 @@ type InternalLLMRequest struct {
 	// Query stores the original query parameters from the inbound request.
 	// This is a help field and will not be sent to the llm service.
 	Query url.Values `json:"-"`
+
+	// UnknownFields captures top-level request fields that the client sent but
+	// InternalLLMRequest does not model explicitly. It exists to avoid silently
+	// dropping forward-compatible parameters on same-format passthrough-like
+	// paths (currently only OpenAI Chat → OpenAI Chat, see F-1).
+	//
+	// Scope & safety:
+	//   - Only populated by inbound transformers that opt in (OpenAI Chat).
+	//   - Only merged back by outbound transformers on the SAME wire format,
+	//     so the Chat whitelist keeps protecting cross-format paths from field
+	//     leakage.
+	//   - Internal-only; never marshaled as part of the IR itself (json:"-").
+	UnknownFields map[string]json.RawMessage `json:"-"`
 }
 
 func (r *InternalLLMRequest) Validate() error {

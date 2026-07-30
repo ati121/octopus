@@ -22,6 +22,9 @@ func (i *ChatInbound) TransformRequest(ctx context.Context, body []byte) (*model
 	// alternation enforcement, schema conversion) can tell a Chat request
 	// apart from a Responses request.
 	request.RawAPIFormat = model.APIFormatOpenAIChatCompletion
+	// F-1: 捕获 InternalLLMRequest 未建模的顶层字段，供 Chat → Chat 同格式路径
+	// 在 outbound 序列化后合并回上游请求体，避免静默丢弃前向兼容参数。
+	model.CaptureUnknownRequestFields(&request, body)
 	return &request, nil
 }
 
