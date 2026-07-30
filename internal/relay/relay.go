@@ -1360,6 +1360,23 @@ func (ra *relayAttempt) collectPassthroughMetrics(ctx context.Context, rawStream
 	}
 }
 
+// ============================================================================
+// relay ↔ transformer 分层契约
+//
+// 下面这组 decode/encode 方法是 relay 与 transformer 之间的唯一转换边界，命名成对：
+//   - decodeOutbound*：上游 provider 响应字节 → 内部通用格式(IR)，由 outAdapter 负责
+//   - encodeInbound* ：内部通用格式(IR) → 入站客户端 wire 格式，由 inAdapter 负责
+//
+// 分层职责划分（维护时请勿打破）：
+//   - transformer 包：承载全部协议语义（字段映射、流式事件拆分、签名/思考块处理等）。
+//     relay 不得内联任何 provider 特定的字段解析逻辑。
+//   - relay 这一层：只做编排——选择走事件通道还是整包通道、错误处理与日志、写回客户端。
+//     它持有 in/out adapter、channel、metrics 等尝试级状态，本身即充当转换管道的载体，
+//     因此无需再抽出独立的 pipeline 对象（参考实现 CLIProxyAPI 因缺少此类状态载体才需要）。
+//   - 请求侧的 IR quirk 修补统一走 hook.ApplyRequest（见 forwardViaHTTPStandard）；
+//     渠道级 JSON 覆盖走 applyParamOverride（作用于最终 http.Request body 字节）。
+// ============================================================================
+
 // transformStreamData 转换流式数据
 func (ra *relayAttempt) transformStreamData(ctx context.Context, data string) ([]byte, error) {
 	events, ok, err := ra.decodeOutboundStreamEvents(ctx, []byte(data))
