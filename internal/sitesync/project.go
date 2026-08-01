@@ -708,6 +708,9 @@ func rewriteManagedGroupItemsForAccount(ctx context.Context, siteRecord *model.S
 	}
 	affectedGroupIDs := make(map[int]struct{})
 	deleteItemIDs := make([]int, 0)
+	// 单条 item 处理失败不中断整轮重写：累积错误，等清理与缓存刷新做完再一并回报。
+	// 否则一次冲突就会连带跳过后续 item 的迁移、过期 item 清理和分组缓存刷新。
+	rewriteErrs := make([]error, 0)
 	for _, item := range items {
 		var binding *model.SiteChannelBinding
 		for i := range bindings {
@@ -745,27 +748,44 @@ func rewriteManagedGroupItemsForAccount(ctx context.Context, siteRecord *model.S
 		if targetChannelID == item.ChannelID {
 			continue
 		}
+		// 目标位置可能已经存在同一 (group_id, model_name) 的投影记录，例如账号启用
+		// 拆分后，旧的 Chat 渠道与新的 Response 渠道被同时加进了同一个分组。唯一索引
+		// idx_group_channel_model 会拒绝这种迁移，此时两条记录本就该合并成一条，
+		// 因此把当前条并入待删除集合，而不是硬改 channel_id 去撞索引。
+		var duplicated int64
+		if err := db.GetDB().WithContext(ctx).Model(&model.GroupItem{}).
+			Where("group_id = ? AND channel_id = ? AND model_name = ?", item.GroupID, targetChannelID, item.ModelName).
+			Count(&duplicated).Error; err != nil {
+			rewriteErrs = append(rewriteErrs, fmt.Errorf("failed to check duplicate target for group item %d: %w", item.ID, err))
+			continue
+		}
+		if duplicated > 0 {
+			deleteItemIDs = append(deleteItemIDs, item.ID)
+			affectedGroupIDs[item.GroupID] = struct{}{}
+			continue
+		}
 		if err := db.GetDB().WithContext(ctx).Model(&model.GroupItem{}).Where("id = ?", item.ID).Update("channel_id", targetChannelID).Error; err != nil {
-			return fmt.Errorf("failed to rewrite group item %d: %w", item.ID, err)
+			rewriteErrs = append(rewriteErrs, fmt.Errorf("failed to rewrite group item %d: %w", item.ID, err))
+			continue
 		}
 		affectedGroupIDs[item.GroupID] = struct{}{}
 	}
 	if len(deleteItemIDs) > 0 {
 		if err := db.GetDB().WithContext(ctx).Where("id IN ?", deleteItemIDs).Delete(&model.GroupItem{}).Error; err != nil {
-			return fmt.Errorf("failed to delete stale group items: %w", err)
+			rewriteErrs = append(rewriteErrs, fmt.Errorf("failed to delete stale group items: %w", err))
 		}
 	}
 	if len(affectedGroupIDs) == 0 {
-		return nil
+		return errors.Join(rewriteErrs...)
 	}
 	groupIDs := make([]int, 0, len(affectedGroupIDs))
 	for id := range affectedGroupIDs {
 		groupIDs = append(groupIDs, id)
 	}
 	if err := op.GroupRefreshCacheByIDs(groupIDs, ctx); err != nil {
-		return fmt.Errorf("failed to refresh group cache after rewrite: %w", err)
+		rewriteErrs = append(rewriteErrs, fmt.Errorf("failed to refresh group cache after rewrite: %w", err))
 	}
-	return nil
+	return errors.Join(rewriteErrs...)
 }
 
 // shouldSplitForAccount 决定是否为账号启用渠道拆分。

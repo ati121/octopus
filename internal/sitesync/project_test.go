@@ -192,6 +192,73 @@ func TestProjectAccountRewritesGroupItemsBeforeRemovingStaleManagedBindings(t *t
 	}
 }
 
+// 账号启用拆分后，同一个分组内可能同时存在指向旧渠道与新渠道的同名模型条目。
+// 此时把旧条目迁移到新渠道会撞上唯一索引 idx_group_channel_model，重写必须把它
+// 当作重复项删除，并且不能因此中断后续的过期绑定清理。
+func TestProjectAccountDeduplicatesGroupItemsWhenRewriteTargetExists(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+	_, account := createProjectionFixture(t, ctx)
+
+	if _, err := ProjectAccount(ctx, account.ID); err != nil {
+		t.Fatalf("initial ProjectAccount returned error: %v", err)
+	}
+
+	channelsByGroup := loadProjectedChannelsByGroupKey(t, ctx, account.ID)
+	openAIChannel, ok := channelsByGroup["default"]
+	if !ok {
+		t.Fatalf("expected default projected channel to exist")
+	}
+	anthropicChannel, ok := channelsByGroup["default::anthropic"]
+	if !ok {
+		t.Fatalf("expected anthropic projected channel to exist")
+	}
+
+	group := &model.Group{Name: "dedupe-managed-items", Mode: model.GroupModeFailover}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+	// 迁移源与迁移目标同时在组内，构造出唯一索引冲突。
+	for _, channelID := range []int{anthropicChannel.ID, openAIChannel.ID} {
+		if err := op.GroupItemAdd(&model.GroupItem{
+			GroupID:   group.ID,
+			ChannelID: channelID,
+			ModelName: "claude-3-5-sonnet",
+			Priority:  1,
+			Weight:    1,
+		}, ctx); err != nil {
+			t.Fatalf("GroupItemAdd failed for channel %d: %v", channelID, err)
+		}
+	}
+
+	if err := dbpkg.GetDB().WithContext(ctx).
+		Model(&model.SiteModel{}).
+		Where("site_account_id = ? AND group_key = ? AND model_name = ?", account.ID, model.SiteDefaultGroupKey, "claude-3-5-sonnet").
+		Update("route_type", model.SiteModelRouteTypeOpenAIChat).Error; err != nil {
+		t.Fatalf("updating site model route_type failed: %v", err)
+	}
+
+	if _, err := ProjectAccount(ctx, account.ID); err != nil {
+		t.Fatalf("second ProjectAccount returned error: %v", err)
+	}
+
+	items, err := op.GroupItemList(group.ID, ctx)
+	if err != nil {
+		t.Fatalf("GroupItemList failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected duplicate group item to be removed, got %d items", len(items))
+	}
+	if items[0].ChannelID != openAIChannel.ID {
+		t.Fatalf("expected surviving group item to point at OpenAI channel %d, got %d", openAIChannel.ID, items[0].ChannelID)
+	}
+
+	// 重写中断会让过期绑定清理一并被跳过，这里顺带守住该回归。
+	bindings := loadProjectedChannelsByGroupKey(t, ctx, account.ID)
+	if _, ok := bindings["default::anthropic"]; ok {
+		t.Fatalf("expected stale anthropic binding to be removed after dedupe")
+	}
+}
+
 func TestProjectAccountRemovesUnsupportedModelsFromProjectedChannels(t *testing.T) {
 	ctx := setupProjectTestDB(t)
 	_, account := createProjectionFixture(t, ctx)
