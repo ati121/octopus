@@ -28,6 +28,16 @@ func ProjectedChannelGlobalAutoGroupEnabled() bool {
 	return ProjectedChannelGlobalAutoGroupMode() != model.AutoGroupTypeNone
 }
 
+// DefaultChannelAutoGroup 返回新建渠道应落库的自动分组模式。创建渠道时表单没有
+// 自动分组开关，若保持「不自动分组」，新渠道要等用户事后到自动分组对话框里逐个
+// 补规则，因此未指定时沿用顶部的全局默认模式；显式指定的模式原样保留。
+func DefaultChannelAutoGroup(requested model.AutoGroupType) model.AutoGroupType {
+	if requested != model.AutoGroupTypeNone {
+		return requested
+	}
+	return ProjectedChannelGlobalAutoGroupMode()
+}
+
 func EffectiveProjectedChannelAutoGroup(channel model.Channel) model.AutoGroupType {
 	if mode := ProjectedChannelGlobalAutoGroupMode(); mode != model.AutoGroupTypeNone {
 		return mode

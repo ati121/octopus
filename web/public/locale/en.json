@@ -701,6 +701,7 @@
             },
             "bulk": {
                 "selected": "{count} selected",
+                "selectAll": "Select all listed",
                 "apply": "Apply",
                 "clear": "Clear",
                 "placeholder": "Set selected to..."

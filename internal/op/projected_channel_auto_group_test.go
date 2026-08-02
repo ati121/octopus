@@ -2,6 +2,7 @@ package op
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	dbpkg "github.com/bestruirui/octopus/internal/db"
@@ -146,5 +147,25 @@ func TestChannelAutoGroupCreateMissingWithNormalizeUsesPublicName(t *testing.T) 
 	models := autoGroupModels(t, groups[0].ID, channel.ID)
 	if len(models) != 2 || !containsAllModels(models, "gpt-4o-2024-08-06", "openai/gpt-4o") {
 		t.Fatalf("expected both upstream model ids, got %v", models)
+	}
+}
+
+func TestDefaultChannelAutoGroupFollowsGlobalMode(t *testing.T) {
+	setupAutoGroupTestDB(t)
+
+	// 全局未开启时保持原样：新渠道仍然是「不自动分组」。
+	if got := DefaultChannelAutoGroup(model.AutoGroupTypeNone); got != model.AutoGroupTypeNone {
+		t.Fatalf("expected none without global mode, got %d", got)
+	}
+
+	if err := SettingSetString(model.SettingKeyProjectedChannelAutoGroupEnabled, strconv.Itoa(int(model.AutoGroupTypeRegex))); err != nil {
+		t.Fatalf("set global auto group mode: %v", err)
+	}
+	if got := DefaultChannelAutoGroup(model.AutoGroupTypeNone); got != model.AutoGroupTypeRegex {
+		t.Fatalf("expected new channel to inherit global regex mode, got %d", got)
+	}
+	// 显式指定的模式不被全局覆盖。
+	if got := DefaultChannelAutoGroup(model.AutoGroupTypeFuzzy); got != model.AutoGroupTypeFuzzy {
+		t.Fatalf("expected explicit fuzzy mode to survive, got %d", got)
 	}
 }
