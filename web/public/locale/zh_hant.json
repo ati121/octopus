@@ -701,6 +701,7 @@
             },
             "bulk": {
                 "selected": "已選 {count} 項",
+                "selectAll": "全選目前清單",
                 "apply": "套用",
                 "clear": "清除",
                 "placeholder": "批次設為..."

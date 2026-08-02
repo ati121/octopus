@@ -303,6 +303,19 @@ export function GroupAutoGroupDialogContent() {
         [sources, modes],
     );
 
+    // 全选只作用于当前搜索结果内的渠道，避免关键词过滤后误改到看不见的条目。
+    const visibleSources = useMemo(() => groups.flatMap((group) => group.sources), [groups]);
+    const visibleSelectedCount = useMemo(
+        () => visibleSources.filter((s) => selection.has(s.channel_id)).length,
+        [visibleSources, selection],
+    );
+    const selectAllState: 'unchecked' | 'partial' | 'checked' =
+        visibleSelectedCount === 0
+            ? 'unchecked'
+            : visibleSelectedCount === visibleSources.length
+                ? 'checked'
+                : 'partial';
+
     const dirtyItems = useMemo(() => {
         if (!config) return [];
         return sources
@@ -351,6 +364,17 @@ export function GroupAutoGroupDialogContent() {
         setSelection((current) => {
             const updated = new Set(current);
             for (const source of group.sources) {
+                if (next) updated.add(source.channel_id);
+                else updated.delete(source.channel_id);
+            }
+            return updated;
+        });
+    };
+
+    const setAllSelection = (next: boolean) => {
+        setSelection((current) => {
+            const updated = new Set(current);
+            for (const source of visibleSources) {
                 if (next) updated.add(source.channel_id);
                 else updated.delete(source.channel_id);
             }
@@ -489,6 +513,22 @@ export function GroupAutoGroupDialogContent() {
                                     <Badge variant="outline" className="h-5 border-primary/30 bg-primary/10 px-1.5 text-[10px] text-primary">
                                         {configuredCount}
                                     </Badge>
+                                ) : null}
+                                {visibleSources.length > 0 ? (
+                                    <TooltipProvider>
+                                        <Tooltip>
+                                            <TooltipTrigger asChild>
+                                                <span className="flex items-center">
+                                                    <TristateCheckbox
+                                                        state={selectAllState}
+                                                        onChange={setAllSelection}
+                                                        ariaLabel={t('bulk.selectAll')}
+                                                    />
+                                                </span>
+                                            </TooltipTrigger>
+                                            <TooltipContent>{t('bulk.selectAll')}</TooltipContent>
+                                        </Tooltip>
+                                    </TooltipProvider>
                                 ) : null}
                                 <div className="ml-auto flex items-center gap-2">
                                     <div className="relative w-40 sm:w-48">
