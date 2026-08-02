@@ -50,6 +50,8 @@ const (
 	SettingKeyWebDAVBackupInterval             SettingKey = "webdav_backup_interval"               // WebDAV 自动备份间隔(小时)，0=禁用
 	SettingKeyWebDAVRetentionCount             SettingKey = "webdav_retention_count"               // WebDAV 保留备份份数
 	SettingKeyWebDAVIncludeStats               SettingKey = "webdav_include_stats"                 // WebDAV 备份是否包含统计数据
+	SettingKeyWebSearchEnabled                 SettingKey = "web_search_enabled"                   // 是否在网关侧执行 provider-native web search（0关闭/1开启）
+	SettingKeyWebSearchMaxRounds               SettingKey = "web_search_max_rounds"                // web search 重放最大轮数
 )
 
 type Setting struct {
@@ -100,6 +102,8 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyWebDAVBackupInterval, Value: "0"},            // 默认禁用自动备份
 		{Key: SettingKeyWebDAVRetentionCount, Value: "10"},           // 默认保留10份
 		{Key: SettingKeyWebDAVIncludeStats, Value: "true"},           // 默认包含统计数据
+		{Key: SettingKeyWebSearchEnabled, Value: "1"},                // 默认开启网关侧 web search 执行
+		{Key: SettingKeyWebSearchMaxRounds, Value: "3"},              // 默认最多重放 3 轮
 	}
 }
 
@@ -125,7 +129,7 @@ func (s *Setting) Validate() error {
 		SettingKeyWebDAVRetentionCount:
 		// 时间窗/样本/连击/间隔等：0 或负值无意义，下限为 1。
 		return validateIntMin(s.Value, 1)
-	case SettingKeySSEHeartbeatInterval, SettingKeySSEPreStreamHeartbeatDelay, SettingKeyWebDAVBackupInterval, SettingKeyRelayRequestTimeout:
+	case SettingKeySSEHeartbeatInterval, SettingKeySSEPreStreamHeartbeatDelay, SettingKeyWebDAVBackupInterval, SettingKeyRelayRequestTimeout, SettingKeyWebSearchMaxRounds:
 		value, err := strconv.Atoi(s.Value)
 		if err != nil {
 			return fmt.Errorf("setting value must be an integer")

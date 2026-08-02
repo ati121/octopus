@@ -113,6 +113,10 @@ type relayRequest struct {
 
 	streamPayloadWritten atomic.Bool
 	responseCollected    atomic.Bool
+
+	// pendingWebSearchCalls 保存本轮上游响应中被拦截的 web_search 工具调用，
+	// 由 attempt 层填充、Handler 重放循环消费（执行搜索后构造 tool result 重放）。
+	pendingWebSearchCalls []model.ToolCall
 }
 
 // requestContext returns the request context from gin or the standalone context.
@@ -147,4 +151,5 @@ type attemptResult struct {
 	StatusCode        int           // 上游 HTTP 状态码（0 = 连接错误）
 	RetryAfter        time.Duration // 解析的 Retry-After 值
 	DeferredPayload   []byte        // 未提交的纯错误流，仅在所有渠道失败时回传
+	WebSearchReplay   bool          // 响应含 web_search 调用，已被拦截，需要执行搜索后重放
 }
