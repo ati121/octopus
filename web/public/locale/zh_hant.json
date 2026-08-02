@@ -936,6 +936,8 @@
             "wsModeOff": "關閉",
             "matchRegex": "匹配正規",
             "matchRegexPlaceholder": "可選：用於匹配請求模型名稱的正規表示式",
+            "roundRobin": "輪詢",
+            "roundRobinHint": "開啟後同一供應源內多個 API Key 輪流使用；關閉則優先使用累計成本最低的 Key",
             "remark": "備註"
         }
     },

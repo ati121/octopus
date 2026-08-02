@@ -43,6 +43,7 @@ export interface ChannelFormData {
     skip_health_probe: boolean;
     auto_group: AutoGroupType;
     match_regex: string;
+    round_robin: boolean;
 }
 
 export interface ChannelFormProps {
@@ -314,16 +315,25 @@ export function ChannelForm({
                     <label className="text-sm font-medium text-card-foreground">
                         {t('apiKey')} {formData.keys.length > 0 ? `(${formData.keys.length})` : ''}
                     </label>
-                    <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleAddKey}
-                        className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
-                    >
-                        <Plus className="h-3 w-3 mr-1" />
-                        {t('add')}
-                    </Button>
+                    <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-1.5 cursor-pointer" title={t('roundRobinHint')}>
+                            <Switch
+                                checked={formData.round_robin}
+                                onCheckedChange={(checked) => onFormDataChange({ ...formData, round_robin: checked })}
+                            />
+                            <span className="text-xs text-muted-foreground">{t('roundRobin')}</span>
+                        </label>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleAddKey}
+                            className="h-6 px-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-transparent"
+                        >
+                            <Plus className="h-3 w-3 mr-1" />
+                            {t('add')}
+                        </Button>
+                    </div>
                 </div>
                 <div className="space-y-2">
                     {(formData.keys ?? []).map((k, idx) => (

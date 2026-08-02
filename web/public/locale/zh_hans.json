@@ -936,6 +936,8 @@
             "wsModeOff": "关闭",
             "matchRegex": "匹配正则",
             "matchRegexPlaceholder": "可选：用于匹配请求模型名称的正则表达式",
+            "roundRobin": "轮询",
+            "roundRobinHint": "开启后同一渠道内多个 API Key 轮流使用；关闭则优先使用累计成本最低的 Key",
             "remark": "备注"
         }
     },

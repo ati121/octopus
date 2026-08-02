@@ -936,6 +936,8 @@
             "wsModeOff": "Off",
             "matchRegex": "Match Regex",
             "matchRegexPlaceholder": "Optional: regex pattern to match request model names",
+            "roundRobin": "Round Robin",
+            "roundRobinHint": "When enabled, keys within this channel are rotated in round-robin order; otherwise the key with lowest total cost is preferred",
             "remark": "Remark"
         }
     },

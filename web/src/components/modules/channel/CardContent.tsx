@@ -63,6 +63,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         skip_health_probe: channel.skip_health_probe,
         auto_group: channel.auto_group,
         match_regex: channel.match_regex ?? '',
+        round_robin: channel.round_robin || false,
     });
     const t = useTranslations('channel.detail');
     const tProxy = useTranslations('proxyPool');
@@ -102,6 +103,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         if (formData.skip_health_probe !== channel.skip_health_probe) req.skip_health_probe = formData.skip_health_probe;
         if (formData.auto_group !== channel.auto_group) req.auto_group = formData.auto_group;
         if ((formData.ws_mode ?? 'inherit') !== (channel.ws_mode ?? 'inherit')) req.ws_mode = formData.ws_mode;
+        if ((formData.round_robin ?? false) !== (channel.round_robin ?? false)) req.round_robin = formData.round_robin;
 
         if (!headersEqual(formData.custom_header, channel.custom_header)) {
             req.custom_header = (formData.custom_header ?? [])

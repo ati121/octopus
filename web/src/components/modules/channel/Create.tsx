@@ -30,6 +30,7 @@ export function CreateDialogContent() {
         auto_group: AutoGroupType.None,
         enabled: true,
         match_regex: '',
+        round_robin: false,
     });
     const t = useTranslations('channel.create');
     const tProxy = useTranslations('proxyPool');
@@ -70,6 +71,7 @@ export function CreateDialogContent() {
                 ws_mode: formData.ws_mode,
                 param_override: paramOverride,
                 match_regex: formData.match_regex.trim(),
+                round_robin: formData.round_robin,
             },
             {
                 onSuccess: () => {
@@ -90,6 +92,7 @@ export function CreateDialogContent() {
                         auto_group: AutoGroupType.None,
                         enabled: true,
                         match_regex: '',
+                        round_robin: false,
                     });
                     setIsOpen(false);
                 }

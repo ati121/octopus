@@ -4,9 +4,14 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
 )
+
+// roundRobinKeyIndexes 记录每个渠道 key 轮询的当前游标，key 为渠道 ID。
+var roundRobinKeyIndexes sync.Map // int -> *uint64
 
 type AutoGroupType int
 
@@ -80,6 +85,7 @@ type Channel struct {
 	ChannelProxy    *string               `json:"-" gorm:"column:channel_proxy"`
 	Stats           *StatsChannel         `json:"stats,omitempty" gorm:"foreignKey:ChannelID"`
 	MatchRegex      *string               `json:"match_regex"`
+	RoundRobin      bool                  `json:"round_robin" gorm:"default:false"`
 	Managed         bool                  `json:"managed" gorm:"-"`
 	ManagedSource   *ManagedChannelSource `json:"managed_source,omitempty" gorm:"-"`
 }
@@ -156,6 +162,7 @@ type ChannelUpdateRequest struct {
 	ChannelProxy    *string                `json:"-"`
 	ParamOverride   *string                `json:"param_override,omitempty"`
 	MatchRegex      *string                `json:"match_regex,omitempty"`
+	RoundRobin      *bool                  `json:"round_robin,omitempty"`
 
 	KeysToAdd    []ChannelKeyAddRequest    `json:"keys_to_add,omitempty"`
 	KeysToUpdate []ChannelKeyUpdateRequest `json:"keys_to_update,omitempty"`
@@ -231,9 +238,11 @@ func (c *Channel) GetChannelKey(opts ...ChannelKeySelectOptions) ChannelKey {
 		}
 	}
 
+	// 收集合格 key（启用、非空、未被排除）
 	best := ChannelKey{}
 	bestCost := 0.0
 	bestSet := false
+	var validKeys []ChannelKey
 
 	for _, k := range c.Keys {
 		if !k.Enabled || k.ChannelKey == "" {
@@ -242,6 +251,7 @@ func (c *Channel) GetChannelKey(opts ...ChannelKeySelectOptions) ChannelKey {
 		if _, excluded := selectOpts.ExcludeKeyIDs[k.ID]; excluded {
 			continue
 		}
+		validKeys = append(validKeys, k)
 		if !bestSet || k.TotalCost < bestCost {
 			best = k
 			bestCost = k.TotalCost
@@ -252,5 +262,13 @@ func (c *Channel) GetChannelKey(opts ...ChannelKeySelectOptions) ChannelKey {
 	if !bestSet {
 		return ChannelKey{}
 	}
+
+	// 渠道开启轮询时，在合格 key 之间轮流选择
+	if c.RoundRobin {
+		counter, _ := roundRobinKeyIndexes.LoadOrStore(c.ID, new(uint64))
+		idx := atomic.AddUint64(counter.(*uint64), 1) - 1
+		return validKeys[idx%uint64(len(validKeys))]
+	}
+
 	return best
 }
