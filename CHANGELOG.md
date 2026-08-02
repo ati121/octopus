@@ -1,5 +1,10 @@
 # 更新日志
 
+## v1.8 - 2026-08-03
+
+- 渠道新增「轮询」开关（API Key 标题右侧）：开启后同一渠道内多个 API Key 在请求间轮流使用，关闭时保持按累计成本最低优先。可缓解单渠道多 key 在成本相同时总命中第一个 key 的问题。
+- 新增网关侧 web search 支持：上游响应包含 provider-native 的 `web_search` / `web_search_preview` / Anthropic `web_search_*` server tool 时，网关自行执行搜索并把结果作为 tool result 重放，无需客户端脚手架。新增 `web_search_enabled`（默认开启）与 `web_search_max_rounds`（默认 3）两项设置，分别控制是否执行与最大重放轮数。
+
 ## v1.7.2 - 2026-08-02
 
 - 自动分组配置对话框的渠道列表新增全选勾选框，可一次性选中当前搜索结果内的全部渠道再批量设置匹配方式。
