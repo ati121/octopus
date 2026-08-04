@@ -9,6 +9,7 @@ import (
 
 	"github.com/samber/lo"
 
+	"github.com/bestruirui/octopus/internal/transformer/compat"
 	"github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/utils/xurl"
 )
@@ -51,6 +52,15 @@ type ResponseInbound struct {
 	// arrival order. 0 → no encrypted_content, 1 → raw string (common case),
 	// N → JSON-encoded array string so information is not lost.
 	reasoningBlockSignatures []string
+
+	// turnReasoning 累计本轮 assistant 的推理正文，供按 tool call ID 存档。
+	// 与 accumulatedReasoning 不同，它不随 reasoning item 关闭而清零 ——
+	// handleToolCalls 会先关掉 reasoning item 再登记 tool call，等到那时
+	// accumulatedReasoning 已经空了。
+	turnReasoning strings.Builder
+
+	// reasoningArchived 保证一轮只存档一次。
+	reasoningArchived bool
 
 	// Tool call tracking
 	toolCalls           map[int]*model.ToolCall
@@ -101,6 +111,8 @@ func (i *ResponseInbound) TransformResponse(ctx context.Context, response *model
 
 	// Store the response for later retrieval
 	i.storedResponse = response
+
+	saveResponseReasoning(response)
 
 	// Convert to Responses API format
 	resp := convertToResponsesAPIResponse(response)
@@ -228,6 +240,7 @@ func (i *ResponseInbound) processStreamEvents(ctx context.Context, events []mode
 				i.finalFinishReason = event.StopReason.String()
 				out = append(out, i.closeCurrentContentPart()...)
 				out = append(out, i.closeCurrentOutputItem()...)
+				i.saveTurnReasoning()
 			}
 
 		case model.StreamEventKindUsageDelta:
@@ -306,6 +319,45 @@ func (i *ResponseInbound) enqueueEvent(ev *ResponsesStreamEvent) []byte {
 	return formatSSEData(data)
 }
 
+// saveResponseReasoning 是 [ResponseInbound.saveTurnReasoning] 的非流式版本。
+func saveResponseReasoning(response *model.InternalLLMResponse) {
+	if response == nil {
+		return
+	}
+	for idx := range response.Choices {
+		msg := response.Choices[idx].Message
+		if msg == nil || len(msg.ToolCalls) == 0 {
+			continue
+		}
+		compat.SaveReasoningContent(msg.ToolCalls, msg.GetReasoningContent())
+	}
+}
+
+// saveTurnReasoning 把本轮推理正文按 tool call ID 存档，供下一轮重放时回填。
+//
+// Responses 协议只回显推理摘要与 encrypted_content，正文出站即丢失；而
+// DeepSeek 一类的 thinking 模式上游要求重放历史时把 reasoning_content 原样带回。
+// 客户端没法带回它没收到的东西，只能由网关自己记着。详见 [compat.SaveReasoningContent]。
+func (i *ResponseInbound) saveTurnReasoning() {
+	if i.reasoningArchived {
+		return
+	}
+	i.reasoningArchived = true
+
+	reasoning := i.turnReasoning.String()
+	if reasoning == "" || len(i.toolCalls) == 0 {
+		return
+	}
+
+	toolCalls := make([]model.ToolCall, 0, len(i.toolCalls))
+	for _, tc := range i.toolCalls {
+		if tc != nil {
+			toolCalls = append(toolCalls, *tc)
+		}
+	}
+	compat.SaveReasoningContent(toolCalls, reasoning)
+}
+
 func (i *ResponseInbound) handleReasoningContent(content *string) [][]byte {
 	var events [][]byte
 
@@ -313,6 +365,7 @@ func (i *ResponseInbound) handleReasoningContent(content *string) [][]byte {
 
 	// Accumulate reasoning content
 	i.accumulatedReasoning.WriteString(*content)
+	i.turnReasoning.WriteString(*content)
 
 	// Emit reasoning_summary_text.delta
 	events = append(events, i.enqueueEvent(&ResponsesStreamEvent{
@@ -1500,7 +1553,31 @@ func convertInputToMessages(input *ResponsesInput) ([]model.Message, error) {
 	}
 	flushToolCalls()
 
-	return dropEmptyAssistantMessages(messages), nil
+	messages = dropEmptyAssistantMessages(messages)
+	restoreReasoningContent(messages)
+
+	return messages, nil
+}
+
+// restoreReasoningContent 给重放的 assistant 轮次补回推理正文。
+//
+// Responses 只回显推理摘要与 encrypted_content，正文出站即丢失，客户端自然也带不回来；
+// DeepSeek 一类的 thinking 模式上游却要求重放时把 reasoning_content 原样奉还，缺了就
+// 400（"The `reasoning_content` in the thinking mode must be passed back to the API."）。
+// 正文在出站时已按 tool call ID 存档，这里照 ID 取回。
+//
+// 只补那些「有 tool_calls 但没有推理正文」的轮次：没有 tool_calls 就没有可查的键，
+// 已经有正文的说明客户端带回来了，不该覆盖。
+func restoreReasoningContent(messages []model.Message) {
+	for idx := range messages {
+		msg := &messages[idx]
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 || msg.GetReasoningContent() != "" {
+			continue
+		}
+		if reasoning := compat.RestoreReasoningContent(msg.ToolCalls); reasoning != "" {
+			msg.SetReasoningContent(reasoning)
+		}
+	}
 }
 
 // dropEmptyAssistantMessages 清掉既无 content 又无 tool_calls 的 assistant 消息。
