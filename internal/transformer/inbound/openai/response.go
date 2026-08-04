@@ -1462,10 +1462,19 @@ func convertInputToMessages(input *ResponsesInput) ([]model.Message, error) {
 		if len(pendingToolCalls) == 0 {
 			return
 		}
-		messages = append(messages, model.Message{
-			Role:      "assistant",
-			ToolCalls: pendingToolCalls,
-		})
+		// O-H8: Responses 把 assistant 文本和它发起的 function_call 拆成相邻条目，
+		// Chat 要求两者合在同一条 assistant 消息里。末尾已经是一条还没带 tool_calls
+		// 的 assistant 消息时挂上去，否则单独成条 —— 不合并会留下一条既无 content
+		// 又无 tool_calls 的空 assistant 消息，严格的上游会以
+		// "Invalid assistant message: content or tool_calls must be set" 拒绝整轮请求。
+		if last := len(messages) - 1; last >= 0 && messages[last].Role == "assistant" && len(messages[last].ToolCalls) == 0 {
+			messages[last].ToolCalls = pendingToolCalls
+		} else {
+			messages = append(messages, model.Message{
+				Role:      "assistant",
+				ToolCalls: pendingToolCalls,
+			})
+		}
 		pendingToolCalls = nil
 	}
 
@@ -1491,7 +1500,70 @@ func convertInputToMessages(input *ResponsesInput) ([]model.Message, error) {
 	}
 	flushToolCalls()
 
-	return messages, nil
+	return dropEmptyAssistantMessages(messages), nil
+}
+
+// dropEmptyAssistantMessages 清掉既无 content 又无 tool_calls 的 assistant 消息。
+// Responses 把 reasoning 单独成条，转换后就是一条只带推理内容/签名的 assistant
+// 消息；Chat 协议没有对应载体，严格的上游会判为
+// "Invalid assistant message: content or tool_calls must be set" 并拒绝整轮请求。
+// 推理内容尽量并进紧随其后的 assistant 消息，实在没有可并入的目标就丢弃 ——
+// 它对后续轮次只是可选上下文，不值得赔上整个请求。
+func dropEmptyAssistantMessages(messages []model.Message) []model.Message {
+	out := make([]model.Message, 0, len(messages))
+	for i := range messages {
+		if !isEmptyAssistantMessage(&messages[i]) {
+			out = append(out, messages[i])
+			continue
+		}
+		// 只并进紧邻的下一条 assistant 消息：中间隔了别的角色说明不是同一轮，
+		// 硬搬会把上一轮的推理接到下一轮头上。
+		if i+1 < len(messages) && messages[i+1].Role == "assistant" {
+			adoptReasoning(&messages[i+1], &messages[i])
+		}
+	}
+	return out
+}
+
+// isEmptyAssistantMessage 判断一条 assistant 消息在 Chat 协议下是否没有任何可发送的正文。
+func isEmptyAssistantMessage(msg *model.Message) bool {
+	if msg == nil || msg.Role != "assistant" || len(msg.ToolCalls) > 0 || msg.Refusal != "" {
+		return false
+	}
+	if msg.Content.Content != nil && *msg.Content.Content != "" {
+		return false
+	}
+	return len(msg.Content.MultipleContent) == 0
+}
+
+// adoptReasoning 把被丢弃消息上的推理内容搬到目标消息。
+// src 在原序列里排在 dst 前面，所以文本按 src+dst 的顺序拼接；
+// 签名与具体推理块一一对应，无法合并，目标已有签名时保留目标自己的。
+func adoptReasoning(dst, src *model.Message) {
+	dst.ReasoningContent = mergeReasoningText(src.ReasoningContent, dst.ReasoningContent)
+	dst.Reasoning = mergeReasoningText(src.Reasoning, dst.Reasoning)
+
+	if dst.ReasoningSignature == nil && src.ReasoningSignature != nil {
+		dst.ReasoningSignature = src.ReasoningSignature
+	}
+	if len(src.ReasoningBlocks) > 0 {
+		dst.ReasoningBlocks = append(append([]model.ReasoningBlock{}, src.ReasoningBlocks...), dst.ReasoningBlocks...)
+	}
+	if len(src.RedactedThinkingBlocks) > 0 {
+		dst.RedactedThinkingBlocks = append(append([]string{}, src.RedactedThinkingBlocks...), dst.RedactedThinkingBlocks...)
+	}
+}
+
+// mergeReasoningText 按 prev、next 的先后顺序拼接推理文本，任一为空时返回另一个。
+func mergeReasoningText(prev, next *string) *string {
+	if prev == nil || *prev == "" {
+		return next
+	}
+	if next == nil || *next == "" {
+		return prev
+	}
+
+	return lo.ToPtr(*prev + *next)
 }
 
 func convertFunctionCallItem(item *ResponsesItem, toolCallIDs map[string]string) model.ToolCall {
