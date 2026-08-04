@@ -1,5 +1,9 @@
 # 更新日志
 
+## v1.8.3 - 2026-08-04
+
+- 修复 OpenAI Responses 入站（`/v1/responses`）打 DeepSeek 等 thinking 模式渠道时多轮工具调用被上游以 “The `reasoning_content` in the thinking mode must be passed back to the API.” 拒绝的问题。Responses 协议只回显推理摘要与 `encrypted_content`，推理正文出站即丢失，客户端自然也带不回来。现在网关按 tool call ID 自行缓存推理正文并在重放时回填，与 v1.8.1 的 Gemini `thoughtSignature` 缓存同一套路，客户端无需感知。
+
 ## v1.8.2 - 2026-08-04
 
 - 修复 OpenAI Responses 入站（`/v1/responses`）转发到 Chat 协议渠道时被上游以 `Invalid assistant message: content or tool_calls must be set` 拒绝的问题。Responses 把 assistant 文本、`reasoning` 和 `function_call` 拆成相邻的独立条目，转换时会产出既无 `content` 又无 `tool_calls` 的空 assistant 消息：宽松的上游忽略，严格的上游直接 400。现在 `function_call` 会并入紧邻的 assistant 消息，只带推理内容的孤立条目在推理并入后一条 assistant 消息后剔除。opencode 等客户端在多轮工具调用后必现此问题。
