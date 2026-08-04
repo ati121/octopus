@@ -1,5 +1,9 @@
 # 更新日志
 
+## v1.8.1 - 2026-08-04
+
+- 修复 OpenAI Chat 入站（`/v1/chat/completions`）打 Gemini 3 渠道时多轮工具调用被上游拒绝的问题：Chat 协议没有承载 `thoughtSignature` 的字段，签名随响应发出即被丢弃，客户端回传历史 `tool_calls` 时缺签名，Gemini 以 `Function call is missing a thought_signature` 返回 400。现在网关按 tool call ID 自行缓存并在重放时回填，与 Anthropic 入站行为一致，客户端无需感知。
+
 ## v1.8 - 2026-08-03
 
 - 渠道新增「轮询」开关（API Key 标题右侧）：开启后同一渠道内多个 API Key 在请求间轮流使用，关闭时保持按累计成本最低优先。可缓解单渠道多 key 在成本相同时总命中第一个 key 的问题。
