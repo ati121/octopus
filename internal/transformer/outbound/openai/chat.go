@@ -23,12 +23,31 @@ type ChatCompletionsTool struct {
 	Function model.Function `json:"function,omitempty"`
 }
 
+// ChatCompletionsToolCall is the request-side tool_call shape.
+//
+// 刻意不含 index：OpenAI Chat 的请求 schema 里 assistant.tool_calls 没有这个字段，
+// 严格的上游会以未知字段拒绝整轮请求。而 model.ToolCall.Index 服务于流式响应
+// （index 为 0 时不能被 omitempty 抹掉），所以请求侧单独定型而非改共享结构。
+type ChatCompletionsToolCall struct {
+	ID       string             `json:"id,omitempty"`
+	Type     string             `json:"type,omitempty"`
+	Function model.FunctionCall `json:"function"`
+}
+
+// ChatCompletionsMessage is the request-side message shape.
+// 内嵌 model.Message 复用其全部字段，只覆写 ToolCalls —— 同名字段以外层（更浅）
+// 的为准，内嵌的那份不会被序列化。
+type ChatCompletionsMessage struct {
+	model.Message
+	ToolCalls []ChatCompletionsToolCall `json:"tool_calls,omitempty"`
+}
+
 // ChatCompletionsRequest is the explicit OpenAI chat/completions wire payload.
 // Keeping this as a whitelist prevents internal/provider-specific fields on the
 // shared InternalLLMRequest from leaking to OpenAI-compatible upstreams.
 type ChatCompletionsRequest struct {
-	Messages []model.Message `json:"messages"`
-	Model    string          `json:"model"`
+	Messages []ChatCompletionsMessage `json:"messages"`
+	Model    string                   `json:"model"`
 
 	FrequencyPenalty    *float64              `json:"frequency_penalty,omitempty"`
 	Logprobs            *bool                 `json:"logprobs,omitempty"`
@@ -171,7 +190,7 @@ func buildChatCompletionsRequest(request *model.InternalLLMRequest) *ChatComplet
 	}
 
 	result := &ChatCompletionsRequest{
-		Messages:            sanitizeToolCallMessages(request.Messages),
+		Messages:            toChatCompletionsMessages(request.Messages),
 		Model:               request.Model,
 		FrequencyPenalty:    request.FrequencyPenalty,
 		Logprobs:            request.Logprobs,
@@ -247,8 +266,11 @@ func isReasoningChatModel(modelName string) bool {
 	return false
 }
 
-// sanitizeToolCallMessages repairs assistant tool_calls before they hit an
-// OpenAI-compatible upstream. OpenAI 官方对 function.arguments 为空是宽容的
+// toChatCompletionsMessages 把内部 message 转成请求侧形状，顺带修复 assistant
+// tool_calls。转换本身的必要性在于剥掉 tool_call 上的 index（见
+// ChatCompletionsToolCall）。
+//
+// arguments 修复：OpenAI 官方对 function.arguments 为空是宽容的
 // （会当作 "{}" 处理），但部分兼容上游（如 xAI/Grok）执行严格校验，会以
 // `invalid tool_call function, function/name/arguments cannot be empty` 直接拒绝
 // 整个请求。空 arguments 的最常见来源是 Anthropic inbound 把无参数工具的
@@ -256,34 +278,28 @@ func isReasoningChatModel(modelName string) bool {
 // 而 FunctionCall.Arguments 的 JSON tag 无 omitempty，始终序列化出
 // `"arguments":""`。这里把空 arguments 兜底成合法的空 JSON 对象 "{}"，
 // 保证严格上游能接受。name 为空的 tool_call 无法安全补全，保持原样交由上游报错。
-func sanitizeToolCallMessages(messages []model.Message) []model.Message {
-	needsCopy := false
-	for i := range messages {
-		for j := range messages[i].ToolCalls {
-			if messages[i].ToolCalls[j].Function.Arguments == "" {
-				needsCopy = true
-				break
-			}
-		}
-		if needsCopy {
-			break
-		}
-	}
-	if !needsCopy {
-		return messages
+//
+// 入参不被修改：tool_calls 逐条复制后再改写。
+func toChatCompletionsMessages(messages []model.Message) []ChatCompletionsMessage {
+	if messages == nil {
+		return nil
 	}
 
-	out := make([]model.Message, len(messages))
-	copy(out, messages)
-	for i := range out {
-		if len(out[i].ToolCalls) == 0 {
+	out := make([]ChatCompletionsMessage, len(messages))
+	for i := range messages {
+		out[i].Message = messages[i]
+		if len(messages[i].ToolCalls) == 0 {
 			continue
 		}
-		toolCalls := make([]model.ToolCall, len(out[i].ToolCalls))
-		copy(toolCalls, out[i].ToolCalls)
-		for j := range toolCalls {
-			if toolCalls[j].Function.Arguments == "" {
-				toolCalls[j].Function.Arguments = "{}"
+		toolCalls := make([]ChatCompletionsToolCall, len(messages[i].ToolCalls))
+		for j, tc := range messages[i].ToolCalls {
+			if tc.Function.Arguments == "" {
+				tc.Function.Arguments = "{}"
+			}
+			toolCalls[j] = ChatCompletionsToolCall{
+				ID:       tc.ID,
+				Type:     tc.Type,
+				Function: tc.Function,
 			}
 		}
 		out[i].ToolCalls = toolCalls

@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -318,19 +319,59 @@ func TestSanitizeToolCallMessagesFillsEmptyArguments(t *testing.T) {
 	}
 }
 
-// TestSanitizeToolCallMessagesNoCopyWhenClean 验证无空 arguments 时不发生额外拷贝，
-// 保持原切片引用（快路径）。
-func TestSanitizeToolCallMessagesNoCopyWhenClean(t *testing.T) {
+// TestToChatCompletionsMessagesDoesNotMutateInput 验证 arguments 兜底写在副本上，
+// 不污染调用方持有的 messages（重试时会复用同一个 InternalLLMRequest）。
+func TestToChatCompletionsMessagesDoesNotMutateInput(t *testing.T) {
 	messages := []model.Message{
 		{
 			Role: "assistant",
 			ToolCalls: []model.ToolCall{
-				{ID: "call_1", Type: "function", Function: model.FunctionCall{Name: "lookup", Arguments: "{}"}},
+				{ID: "call_1", Type: "function", Function: model.FunctionCall{Name: "lookup", Arguments: ""}},
 			},
 		},
 	}
-	out := sanitizeToolCallMessages(messages)
-	if &out[0] != &messages[0] {
-		t.Fatalf("clean messages should not be copied")
+
+	out := toChatCompletionsMessages(messages)
+	if got := out[0].ToolCalls[0].Function.Arguments; got != "{}" {
+		t.Fatalf("copy should be repaired, got %q", got)
+	}
+	if got := messages[0].ToolCalls[0].Function.Arguments; got != "" {
+		t.Fatalf("input must not be mutated, got %q", got)
+	}
+}
+
+// TestToChatCompletionsMessagesDropsToolCallIndex 验证请求侧 tool_calls 不再带 index。
+// index 不在 OpenAI Chat 的请求 schema 里，严格上游会以未知字段拒绝整轮请求；
+// 它之所以会出现，是因为 model.ToolCall.Index 为了流式响应不能加 omitempty。
+func TestToChatCompletionsMessagesDropsToolCallIndex(t *testing.T) {
+	toolResult := "ok"
+	toolCallID := "call_1"
+	req := &model.InternalLLMRequest{
+		Model: "deepseek-v4-flash",
+		Messages: []model.Message{
+			{
+				Role: "assistant",
+				ToolCalls: []model.ToolCall{
+					{ID: "call_1", Type: "function", Index: 0, Function: model.FunctionCall{Name: "lookup", Arguments: "{}"}},
+					{ID: "call_2", Type: "function", Index: 1, Function: model.FunctionCall{Name: "read", Arguments: "{}"}},
+				},
+			},
+			{Role: "tool", ToolCallID: &toolCallID, Content: model.MessageContent{Content: &toolResult}},
+		},
+	}
+
+	body, err := json.Marshal(buildChatCompletionsRequest(req))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(body, []byte(`"index"`)) {
+		t.Fatalf("request body must not carry tool_call index: %s", body)
+	}
+
+	// 合法字段不能被误伤。
+	for _, want := range []string{`"id":"call_1"`, `"id":"call_2"`, `"name":"lookup"`, `"type":"function"`} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("request body lost %s: %s", want, body)
+		}
 	}
 }
