@@ -18,6 +18,9 @@ import (
 // InternalLLMRequest.UnknownFields；outbound 侧在「相同 wire 格式」时用
 // MergeUnknownFields 把它们合并回最终请求体。跨格式路径不合并，从而保持
 // Chat outbound 白名单对字段泄漏的防护。
+//
+// 例外：驼峰写法的已建模字段（promptCacheKey 之于 prompt_cache_key）不算未知，
+// 会在捕获阶段按正名收编，见 CaptureUnknownRequestFields。
 
 // knownRequestJSONKeys 缓存 InternalLLMRequest 上所有带 json tag（且非 "-"）的顶层
 // 字段名集合，用于在 unmarshal 后判定哪些客户端顶层字段是「未知」的。
@@ -68,6 +71,11 @@ func collectJSONKeys(t reflect.Type) map[string]struct{} {
 // CaptureUnknownRequestFields 解析原始请求体，收集 InternalLLMRequest 未建模的顶层字段，
 // 存入 req.UnknownFields。仅供选择「同格式保全」的 inbound 调用（当前为 OpenAI Chat）。
 //
+// 驼峰别名先被收编：部分客户端（如把 TS 侧选项名直接塞进请求体的 SDK）会发出
+// promptCacheKey 这类驼峰键，snake 化后若命中已建模字段，就按正名解析进 req，
+// 不再进 UnknownFields。否则它会被原样转发给上游，而严格的上游会以
+// UNKNOWN_FIELD 拒绝整轮请求（实测 tokenrhythm 对 promptCacheKey 返回 400）。
+//
 // body 非合法 JSON 对象时静默跳过（此时上层 unmarshal 也会报错，无需重复处理）。
 func CaptureUnknownRequestFields(req *InternalLLMRequest, body []byte) {
 	if req == nil || len(body) == 0 {
@@ -79,8 +87,16 @@ func CaptureUnknownRequestFields(req *InternalLLMRequest, body []byte) {
 	}
 	known := requestKnownJSONKeys()
 	var unknown map[string]json.RawMessage
+	var aliased map[string]json.RawMessage
 	for key, value := range raw {
 		if _, ok := known[key]; ok {
+			continue
+		}
+		if snake, ok := knownSnakeAlias(known, raw, key); ok {
+			if aliased == nil {
+				aliased = make(map[string]json.RawMessage, 2)
+			}
+			aliased[snake] = value
 			continue
 		}
 		if unknown == nil {
@@ -88,9 +104,68 @@ func CaptureUnknownRequestFields(req *InternalLLMRequest, body []byte) {
 		}
 		unknown[key] = value
 	}
+	applyAliasedFields(req, aliased)
 	if unknown != nil {
 		req.UnknownFields = unknown
 	}
+}
+
+// knownSnakeAlias 判定 key 是否为某个已建模字段的驼峰别名，是则返回其 snake_case 正名。
+// 客户端同时发了正名时不收编（正名已由上层 unmarshal 解析），别名直接丢弃，
+// 避免重复字段仍然泄漏到上游。
+func knownSnakeAlias(known map[string]struct{}, raw map[string]json.RawMessage, key string) (string, bool) {
+	snake := toSnakeCase(key)
+	if snake == key {
+		return "", false
+	}
+	if _, ok := known[snake]; !ok {
+		return "", false
+	}
+	if _, dup := raw[snake]; dup {
+		return "", true
+	}
+	return snake, true
+}
+
+// applyAliasedFields 把收编的别名按正名解析进 req。
+// 逐个字段单独 unmarshal，避免某个值类型不匹配时连累后面的字段；
+// 解析失败的字段保持零值（等价于客户端没发），不回退成原样转发。
+func applyAliasedFields(req *InternalLLMRequest, aliased map[string]json.RawMessage) {
+	for name, value := range aliased {
+		patch, err := json.Marshal(map[string]json.RawMessage{name: value})
+		if err != nil {
+			continue
+		}
+		// 先在弃用副本上试解析。类型不匹配时 encoding/json 会先分配目标
+		// （指针字段变成指向零值的非 nil 指针）再报错，直接写进 req 会让上游
+		// 收到 "prompt_cache_key":"" 这类空值，比丢弃更糟。
+		var probe InternalLLMRequest
+		if err := json.Unmarshal(patch, &probe); err != nil {
+			continue
+		}
+		_ = json.Unmarshal(patch, req)
+	}
+}
+
+// toSnakeCase 把驼峰名转成 snake_case：promptCacheKey → prompt_cache_key。
+// 非字母字符原样保留，已是 snake_case 或全小写的键会原样返回。
+func toSnakeCase(name string) string {
+	if name == "" {
+		return name
+	}
+	var b strings.Builder
+	b.Grow(len(name) + 4)
+	for i, r := range name {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r - 'A' + 'a')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // MergeUnknownFields 把 req.UnknownFields 合并进已序列化的请求体 body。
