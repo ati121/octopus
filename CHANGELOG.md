@@ -1,5 +1,9 @@
 # 更新日志
 
+## v1.8.4 - 2026-08-05
+
+- 修复网关向上游发送对方 schema 之外的请求字段、被严格上游以未知字段拒绝整轮请求的问题（此前靠渠道 failover 兜底）。其一，v1.7 引入的「同格式保留未建模顶层参数」会把客户端的驼峰写法原样转发，如 `promptCacheKey` 被基元律动以 `UNKNOWN_FIELD` 返回 400，而网关建模的字段名是 `prompt_cache_key`，该值既没被识别也没被丢弃；现在驼峰键会按对应的 snake_case 正名收编，真正未建模的新参数仍照旧保留。其二，请求体里 `assistant.tool_calls` 会多带一个 `index` 字段，它不在 OpenAI Chat 的请求 schema 内，现已在出站剥离，流式响应侧不受影响。
+
 ## v1.8.3 - 2026-08-04
 
 - 修复 OpenAI Responses 入站（`/v1/responses`）打 DeepSeek 等 thinking 模式渠道时多轮工具调用被上游以 “The `reasoning_content` in the thinking mode must be passed back to the API.” 拒绝的问题。Responses 协议只回显推理摘要与 `encrypted_content`，推理正文出站即丢失，客户端自然也带不回来。现在网关按 tool call ID 自行缓存推理正文并在重放时回填，与 v1.8.1 的 Gemini `thoughtSignature` 缓存同一套路，客户端无需感知。
