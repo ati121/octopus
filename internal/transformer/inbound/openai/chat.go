@@ -32,6 +32,10 @@ func (i *ChatInbound) TransformRequest(ctx context.Context, body []byte) (*model
 	for idx := range request.Messages {
 		compat.RestoreGeminiToolCallSignatures(request.Messages[idx].ToolCalls)
 	}
+	// 同理回填推理正文：Chat 协议下部分客户端（如 Hermes）对没有思维过程的轮次
+	// 填一个空格占位，DeepSeek 一类的 thinking 上游会把缺失/空白占位当成 400
+	// 拒绝。正文此前已按 tool call ID 存档，这里照 ID 取回补回。
+	restoreReasoningContent(request.Messages)
 	return &request, nil
 }
 
@@ -40,6 +44,7 @@ func (i *ChatInbound) TransformResponse(ctx context.Context, response *model.Int
 	i.storedResponse = response
 	// 签名不会随 Chat 响应发给客户端，落库到网关缓存，等下一轮回传时补回。
 	saveGeminiSignaturesFromResponse(response)
+	saveChatReasoning(response)
 
 	body, err := json.Marshal(response)
 	if err != nil {
@@ -117,5 +122,21 @@ func (i *ChatInbound) GetInternalResponse(ctx context.Context) (*model.InternalL
 	if i.storedResponse != nil {
 		return i.storedResponse, nil
 	}
-	return i.streamAggregator.BuildAndReset(), nil
+	response := i.streamAggregator.BuildAndReset()
+	// 流式正文只在聚合完成后才完整：thinking 与 tool call 的 delta 跨多个分片，
+	// 必须在 BuildAndReset（响应已完整送达客户端）后按 tool call ID 存档。
+	saveChatReasoning(response)
+	return response, nil
+}
+
+// saveChatReasoning 把本轮推理正文按 tool call ID 存档，供后续轮次回填。
+//
+// Chat 协议本身允许客户端把 reasoning_content 回传，但部分客户端（如 Hermes）
+// 对没有思维过程的轮次填「一个空格」占位，DeepSeek 一类的 thinking 上游会把
+// 缺失/空白占位当作 400 拒绝（"The `reasoning_content` in the thinking mode
+// must be passed back to the API."）。网关在自己这一侧记住真实正文，重放时
+// 按 ID 补回。正文为空或没有 tool calls 的轮次不值得存档。复用 Responses 侧
+// 的 [saveResponseReasoning] 实现。
+func saveChatReasoning(response *model.InternalLLMResponse) {
+	saveResponseReasoning(response)
 }

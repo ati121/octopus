@@ -1561,17 +1561,19 @@ func convertInputToMessages(input *ResponsesInput) ([]model.Message, error) {
 
 // restoreReasoningContent 给重放的 assistant 轮次补回推理正文。
 //
-// Responses 只回显推理摘要与 encrypted_content，正文出站即丢失，客户端自然也带不回来；
-// DeepSeek 一类的 thinking 模式上游却要求重放时把 reasoning_content 原样奉还，缺了就
-// 400（"The `reasoning_content` in the thinking mode must be passed back to the API."）。
-// 正文在出站时已按 tool call ID 存档，这里照 ID 取回。
+// OpenAI Chat / Responses 入站的推理正文在出站时按 tool call ID 存档（见
+// [compat.SaveReasoningContent]），重放历史时按 ID 取回。DeepSeek 一类的
+// thinking 模式上游要求重放时把 reasoning_content 原样奉还，缺失或空白占位
+// 都会 400（"The `reasoning_content` in the thinking mode must be passed back
+// to the API."）。部分客户端（如 Hermes）对没有思维过程的轮次填「一个空格」
+// 占位，同样按缺失处理回填。
 //
-// 只补那些「有 tool_calls 但没有推理正文」的轮次：没有 tool_calls 就没有可查的键，
-// 已经有正文的说明客户端带回来了，不该覆盖。
+// 只补「有 tool_calls 但推理正文缺失或空白」的轮次：没有 tool_calls 就没有
+// 可查的键；已有非空正文的说明客户端带回来了，不该覆盖。
 func restoreReasoningContent(messages []model.Message) {
 	for idx := range messages {
 		msg := &messages[idx]
-		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 || msg.GetReasoningContent() != "" {
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 || strings.TrimSpace(msg.GetReasoningContent()) != "" {
 			continue
 		}
 		if reasoning := compat.RestoreReasoningContent(msg.ToolCalls); reasoning != "" {
