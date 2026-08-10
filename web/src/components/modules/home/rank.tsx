@@ -3,20 +3,29 @@
 import { useChannelList } from '@/api/endpoints/channel';
 import { useStatsModel } from '@/api/endpoints/stats';
 import { useMemo } from 'react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { TrendingUp } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContents, TabsContent } from '@/components/animate-ui/components/animate/tabs';
 import { useHomeViewStore, type RankSortMode } from '@/components/modules/home/store';
+import { formatCountCJK } from '@/lib/utils';
 
 type ChannelData = NonNullable<ReturnType<typeof useChannelList>['data']>[number];
 type ModelData = NonNullable<ReturnType<typeof useStatsModel>['data']>[number];
+
+type FormattedValue = { value: string; unit: string };
 
 export function Rank() {
     const { data: channelData } = useChannelList();
     const { data: modelData } = useStatsModel();
     const t = useTranslations('home.rank');
+    const locale = useLocale();
     const rankSortMode = useHomeViewStore((state) => state.rankSortMode);
     const setRankSortMode = useHomeViewStore((state) => state.setRankSortMode);
+
+    // 中文界面下 token 按万/亿显示，其余语言沿用 K/M/B。
+    const useCJKCount = locale.startsWith('zh');
+    const tokenText = (token: { raw: number; formatted: FormattedValue }): FormattedValue =>
+        useCJKCount ? formatCountCJK(token.raw).formatted : token.formatted;
 
     const rankedChannels = useMemo(() => {
         if (!channelData) return { cost: [] as ChannelData[], count: [] as ChannelData[], tokens: [] as ChannelData[] };
@@ -60,6 +69,7 @@ export function Rank() {
                     const failedCount = channel.formatted.request_failed.raw;
                     const totalCount = successCount + failedCount;
                     const successRate = totalCount > 0 ? (successCount / totalCount) * 100 : 0;
+                    const tokenFmt = tokenText(channel.formatted.total_token);
                     return (
                         <div key={channel.raw.id} className="flex items-center gap-3 rounded-2xl p-3 transition-colors hover:bg-accent/5">
                             <div className="flex size-8 shrink-0 items-center justify-center rounded-lg text-lg font-bold">
@@ -89,8 +99,8 @@ export function Rank() {
                                     </div>
                                 ) : mode === 'tokens' ? (
                                     <span className="text-base font-semibold">
-                                        {channel.formatted.total_token.formatted.value}
-                                        <span className="text-xs text-muted-foreground">{channel.formatted.total_token.formatted.unit}</span>
+                                        {tokenFmt.value}
+                                        <span className="text-xs text-muted-foreground">{tokenFmt.unit}</span>
                                     </span>
                                 ) : (
                                     <span className="text-base font-semibold">
@@ -116,6 +126,7 @@ export function Rank() {
                     const failed = row.request_failed.raw;
                     const total = success + failed;
                     const successRate = total > 0 ? (success / total) * 100 : 0;
+                    const tokenFmt = tokenText(row.total_token);
                     return (
                         <div key={`${row.id}-${row.name}`} className="flex items-center gap-3 rounded-2xl p-3 transition-colors hover:bg-accent/5">
                             <div className="flex size-8 shrink-0 items-center justify-center rounded-lg text-lg font-bold">
@@ -147,8 +158,8 @@ export function Rank() {
                                     </div>
                                 ) : mode === 'tokens' ? (
                                     <span className="text-base font-semibold">
-                                        {row.total_token.formatted.value}
-                                        <span className="text-xs text-muted-foreground">{row.total_token.formatted.unit}</span>
+                                        {tokenFmt.value}
+                                        <span className="text-xs text-muted-foreground">{tokenFmt.unit}</span>
                                     </span>
                                 ) : (
                                     <span className="text-base font-semibold">
