@@ -32,11 +32,8 @@ func GroupAutoGroupConfigGet(ctx context.Context) (*model.GroupAutoGroupConfig, 
 	for _, channel := range channels {
 		models := splitChannelModelNames(channel.Model, channel.CustomModel)
 		binding, managed := bindingMap[channel.ID]
-		effective := channel.AutoGroup
+		effective := ResolveChannelAutoGroup(channel.AutoGroup, managed)
 		globalOverride := managed && globalMode != model.AutoGroupTypeNone
-		if globalOverride {
-			effective = globalMode
-		}
 
 		source := model.GroupAutoGroupSource{
 			ChannelID:          channel.ID,
@@ -97,7 +94,7 @@ func GroupAutoGroupConfigUpdate(req *model.GroupAutoGroupConfigUpdateRequest, ct
 		if item.AutoGroup == nil {
 			continue
 		}
-		if !item.AutoGroup.Valid() {
+		if !item.AutoGroup.ValidForChannel() {
 			return nil, newGroupAutoGroupBadRequestError("invalid auto group type")
 		}
 	}
@@ -109,8 +106,10 @@ func GroupAutoGroupConfigUpdate(req *model.GroupAutoGroupConfigUpdateRequest, ct
 		}
 		// Preserve the old global-setting behavior: enabling a global projected-channel
 		// mode immediately applies auto grouping to existing projected channels.
+		// 跟随全局的普通渠道同样要立刻重算，因此这里跑全量（解析结果为「不自动分组」
+		// 的渠道会被 RunGroupAutoGroup 跳过）。
 		if mode != model.AutoGroupTypeNone {
-			if err := AutoGroupAllProjectedChannels(ctx); err != nil {
+			if err := RunGroupAutoGroup(nil, ctx); err != nil {
 				return nil, err
 			}
 		}
@@ -155,7 +154,7 @@ func ChannelAutoGroupUpdate(channelID int, mode model.AutoGroupType, ctx context
 	if channelID <= 0 {
 		return newGroupAutoGroupBadRequestError("channel id is required")
 	}
-	if !mode.Valid() {
+	if !mode.ValidForChannel() {
 		return newGroupAutoGroupBadRequestError("invalid auto group type")
 	}
 	if _, ok := channelCache.Get(channelID); !ok {
@@ -199,14 +198,10 @@ func RunGroupAutoGroup(channelIDs []int, ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	globalMode := ProjectedChannelGlobalAutoGroupMode()
 
 	for id, channel := range targets {
 		_, managed := bindingMap[id]
-		mode := channel.AutoGroup
-		if managed && globalMode != model.AutoGroupTypeNone {
-			mode = globalMode
-		}
+		mode := ResolveChannelAutoGroup(channel.AutoGroup, managed)
 		if mode == model.AutoGroupTypeNone {
 			continue
 		}

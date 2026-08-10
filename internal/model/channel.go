@@ -16,12 +16,15 @@ var roundRobinKeyIndexes sync.Map // int -> *uint64
 type AutoGroupType int
 
 const (
-	AutoGroupTypeNone  AutoGroupType = 0 //不自动分组
-	AutoGroupTypeFuzzy AutoGroupType = 1 //模糊匹配
-	AutoGroupTypeExact AutoGroupType = 2 //准确匹配
-	AutoGroupTypeRegex AutoGroupType = 3 //正则匹配
+	AutoGroupTypeInherit AutoGroupType = -1 //跟随全局默认模式
+	AutoGroupTypeNone    AutoGroupType = 0  //不自动分组
+	AutoGroupTypeFuzzy   AutoGroupType = 1  //模糊匹配
+	AutoGroupTypeExact   AutoGroupType = 2  //准确匹配
+	AutoGroupTypeRegex   AutoGroupType = 3  //正则匹配
 )
 
+// Valid 判断是否为具体的匹配模式。全局默认模式与站点投影渠道设置只接受具体模式，
+// 「跟随全局」不是一个能落到全局设置上的取值。
 func (t AutoGroupType) Valid() bool {
 	switch t {
 	case AutoGroupTypeNone, AutoGroupTypeFuzzy, AutoGroupTypeExact, AutoGroupTypeRegex:
@@ -29,6 +32,11 @@ func (t AutoGroupType) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// ValidForChannel 渠道自身除了具体模式外，还可以存「跟随全局」。
+func (t AutoGroupType) ValidForChannel() bool {
+	return t == AutoGroupTypeInherit || t.Valid()
 }
 
 func ParseAutoGroupSettingValue(value string) (AutoGroupType, bool) {

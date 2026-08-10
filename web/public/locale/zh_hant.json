@@ -697,7 +697,8 @@
                 "noModels": "暫無模型",
                 "unknownSite": "未知站點",
                 "manualGroup": "普通供應源",
-                "followingGlobalTip": "全域已啟用，此供應源目前依全域模式分組；下方單獨模式將在全域關閉後生效。"
+                "followingGlobalTip": "全域已啟用，此供應源目前依全域模式分組；下方單獨模式將在全域關閉後生效。",
+                "inheritTip": "此供應源跟隨全域預設模式，之後修改全域模式會自動生效，無需再單獨設定。"
             },
             "bulk": {
                 "selected": "已選 {count} 項",
@@ -707,6 +708,7 @@
                 "placeholder": "批次設為..."
             },
             "mode": {
+                "inherit": "跟隨全域",
                 "none": "關閉",
                 "fuzzy": "模糊比對",
                 "exact": "精確比對",

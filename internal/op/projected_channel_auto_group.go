@@ -30,25 +30,41 @@ func ProjectedChannelGlobalAutoGroupEnabled() bool {
 
 // DefaultChannelAutoGroup 返回新建渠道应落库的自动分组模式。创建渠道时表单没有
 // 自动分组开关，若保持「不自动分组」，新渠道要等用户事后到自动分组对话框里逐个
-// 补规则，因此未指定时沿用顶部的全局默认模式；显式指定的模式原样保留。
+// 补规则，因此未指定时落「跟随全局」——之后全局默认模式变化也会自动生效；
+// 显式指定的具体模式原样保留。
 func DefaultChannelAutoGroup(requested model.AutoGroupType) model.AutoGroupType {
-	if requested != model.AutoGroupTypeNone {
-		return requested
+	if !requested.ValidForChannel() {
+		return model.AutoGroupTypeInherit
 	}
-	return ProjectedChannelGlobalAutoGroupMode()
+	if requested == model.AutoGroupTypeNone {
+		return model.AutoGroupTypeInherit
+	}
+	return requested
+}
+
+// ResolveChannelAutoGroup 把渠道上存的模式解析成实际生效的模式：
+//   - 托管（站点投影）渠道在全局模式开启时始终被全局强制覆盖
+//   - 存为「跟随全局」的渠道解析为当前全局默认模式
+//   - 其余情况按渠道自身设置
+func ResolveChannelAutoGroup(stored model.AutoGroupType, managed bool) model.AutoGroupType {
+	global := ProjectedChannelGlobalAutoGroupMode()
+	if managed && global != model.AutoGroupTypeNone {
+		return global
+	}
+	if stored == model.AutoGroupTypeInherit {
+		return global
+	}
+	return stored
 }
 
 func EffectiveProjectedChannelAutoGroup(channel model.Channel) model.AutoGroupType {
-	if mode := ProjectedChannelGlobalAutoGroupMode(); mode != model.AutoGroupTypeNone {
-		return mode
-	}
-	return channel.AutoGroup
+	return ResolveChannelAutoGroup(channel.AutoGroup, true)
 }
 
 // ChannelAutoGroupWithMode treats auto grouping as desired state: missing
 // mappings are added and stale mappings for this channel are removed.
 func ChannelAutoGroupWithMode(channel *model.Channel, autoGroup model.AutoGroupType, ctx context.Context) {
-	if channel == nil || autoGroup == model.AutoGroupTypeNone {
+	if channel == nil || autoGroup == model.AutoGroupTypeNone || autoGroup == model.AutoGroupTypeInherit {
 		return
 	}
 	groups, err := GroupList(ctx)
@@ -273,33 +289,7 @@ func ChannelAutoGroup(channel *model.Channel, ctx context.Context) {
 	if channel == nil {
 		return
 	}
-	ChannelAutoGroupWithMode(channel, channel.AutoGroup, ctx)
-}
-
-func AutoGroupAllProjectedChannels(ctx context.Context) error {
-	mode := ProjectedChannelGlobalAutoGroupMode()
-	if mode == model.AutoGroupTypeNone {
-		return nil
-	}
-	channels := channelCache.GetAll()
-	if len(channels) == 0 {
-		return nil
-	}
-	channelIDs := make([]int, 0, len(channels))
-	for id := range channels {
-		channelIDs = append(channelIDs, id)
-	}
-	bindingMap, err := SiteChannelBindingMapByChannelIDs(channelIDs, ctx)
-	if err != nil {
-		return err
-	}
-	for id, channel := range channels {
-		if _, ok := bindingMap[id]; !ok {
-			continue
-		}
-		ChannelAutoGroupWithMode(&channel, mode, ctx)
-	}
-	return nil
+	ChannelAutoGroupWithMode(channel, ResolveChannelAutoGroup(channel.AutoGroup, false), ctx)
 }
 
 func splitChannelModelNames(values ...string) []string {

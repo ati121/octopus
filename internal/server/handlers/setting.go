@@ -110,8 +110,9 @@ func setSetting(c *gin.Context) {
 				defer projectedAutoGroupQueued.Store(false)
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 				defer cancel()
-				if err := op.AutoGroupAllProjectedChannels(ctx); err != nil {
-					log.Warnf("failed to auto group all projected channels: %v", err)
+				// 站点投影渠道被全局强制覆盖，跟随全局的普通渠道也要一起重算。
+				if err := op.RunGroupAutoGroup(nil, ctx); err != nil {
+					log.Warnf("failed to auto group channels after global mode change: %v", err)
 				}
 			})
 		}

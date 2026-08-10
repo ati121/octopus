@@ -697,7 +697,8 @@
                 "noModels": "No models",
                 "unknownSite": "Unknown site",
                 "manualGroup": "Manual channels",
-                "followingGlobalTip": "Global is on; this channel is currently grouped by the global mode. The per-channel mode below takes effect after the global mode is disabled."
+                "followingGlobalTip": "Global is on; this channel is currently grouped by the global mode. The per-channel mode below takes effect after the global mode is disabled.",
+                "inheritTip": "This channel follows the global default mode. Changing the global mode later applies automatically, no per-channel setup needed."
             },
             "bulk": {
                 "selected": "{count} selected",
@@ -707,6 +708,7 @@
                 "placeholder": "Set selected to..."
             },
             "mode": {
+                "inherit": "Follow global",
                 "none": "Off",
                 "fuzzy": "Fuzzy",
                 "exact": "Exact",

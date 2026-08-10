@@ -697,7 +697,8 @@
                 "noModels": "暂无模型",
                 "unknownSite": "未知站点",
                 "manualGroup": "普通渠道",
-                "followingGlobalTip": "全局已开启，此渠道当前按全局模式分组；下方单独模式将在全局关闭后生效。"
+                "followingGlobalTip": "全局已开启，此渠道当前按全局模式分组；下方单独模式将在全局关闭后生效。",
+                "inheritTip": "此渠道跟随全局默认模式，之后修改全局模式会自动生效，无需再单独设置。"
             },
             "bulk": {
                 "selected": "已选 {count} 项",
@@ -707,6 +708,7 @@
                 "placeholder": "批量设为..."
             },
             "mode": {
+                "inherit": "跟随全局",
                 "none": "关闭",
                 "fuzzy": "模糊匹配",
                 "exact": "精确匹配",

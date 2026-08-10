@@ -31,7 +31,15 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { toast } from '@/components/common/Toast';
 import { cn } from '@/lib/utils';
 
+// 每渠道可选「跟随全局」；全局默认模式本身不能选它，所以单独一份取值。
 const AUTO_GROUP_VALUES = [
+    AutoGroupType.Inherit,
+    AutoGroupType.None,
+    AutoGroupType.Fuzzy,
+    AutoGroupType.Exact,
+    AutoGroupType.Regex,
+] as const;
+const GLOBAL_MODE_VALUES = [
     AutoGroupType.None,
     AutoGroupType.Fuzzy,
     AutoGroupType.Exact,
@@ -49,6 +57,8 @@ type SourceTreeGroup = {
 
 function modeKey(value: AutoGroupType) {
     switch (value) {
+        case AutoGroupType.Inherit:
+            return 'inherit';
         case AutoGroupType.Fuzzy:
             return 'fuzzy';
         case AutoGroupType.Exact:
@@ -59,6 +69,14 @@ function modeKey(value: AutoGroupType) {
         default:
             return 'none';
     }
+}
+
+// 与后端 op.ResolveChannelAutoGroup 对齐：托管渠道被全局强制覆盖，
+// 「跟随全局」解析为当前全局模式，其余按渠道自身设置。
+function resolveMode(stored: AutoGroupType, globalMode: AutoGroupType, managed: boolean) {
+    if (managed && globalMode !== AutoGroupType.None) return globalMode;
+    if (stored === AutoGroupType.Inherit) return globalMode;
+    return stored;
 }
 
 function matchesKeyword(source: GroupAutoGroupSource, keyword: string) {
@@ -165,7 +183,8 @@ function ChannelRow({
     onModeChange: (mode: AutoGroupType) => void;
 }) {
     const t = useTranslations('group.autoGroup');
-    const configured = mode !== AutoGroupType.None;
+    const inherited = !overridden && mode === AutoGroupType.Inherit;
+    const configured = resolveMode(mode, globalMode, source.managed) !== AutoGroupType.None;
 
     return (
         <div
@@ -194,7 +213,7 @@ function ChannelRow({
                     {t('source.disabled')}
                 </Badge>
             ) : null}
-            {overridden ? (
+            {overridden || inherited ? (
                 <TooltipProvider>
                     <Tooltip>
                         <TooltipTrigger asChild>
@@ -206,7 +225,9 @@ function ChannelRow({
                                 {t(`mode.${modeKey(globalMode)}`)}
                             </Badge>
                         </TooltipTrigger>
-                        <TooltipContent className="max-w-xs">{t('source.followingGlobalTip')}</TooltipContent>
+                        <TooltipContent className="max-w-xs">
+                            {overridden ? t('source.followingGlobalTip') : t('source.inheritTip')}
+                        </TooltipContent>
                     </Tooltip>
                 </TooltipProvider>
             ) : null}
@@ -223,7 +244,7 @@ function ChannelRow({
                     <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="rounded-xl">
-                    {AUTO_GROUP_VALUES.map((value) => (
+                    {(source.managed ? GLOBAL_MODE_VALUES : AUTO_GROUP_VALUES).map((value) => (
                         <SelectItem key={value} value={String(value)}>
                             {t(`mode.${modeKey(value)}`)}
                         </SelectItem>
@@ -299,8 +320,13 @@ export function GroupAutoGroupDialogContent() {
     }, [sources, normalizedKeyword, t]);
 
     const configuredCount = useMemo(
-        () => sources.filter((s) => (modes[s.channel_id] ?? AutoGroupType.None) !== AutoGroupType.None).length,
-        [sources, modes],
+        () =>
+            sources.filter(
+                (s) =>
+                    resolveMode(modes[s.channel_id] ?? AutoGroupType.None, projectedGlobalMode, s.managed) !==
+                    AutoGroupType.None,
+            ).length,
+        [sources, modes, projectedGlobalMode],
     );
 
     // 全选只作用于当前搜索结果内的渠道，避免关键词过滤后误改到看不见的条目。
@@ -337,7 +363,9 @@ export function GroupAutoGroupDialogContent() {
         if (globalDirty && projectedGlobalMode !== AutoGroupType.None) return true;
         if (createMissingDirty && createMissingGroups) return true;
         if (normalizeDirty && normalizeModelNames) return true;
-        return dirtyItems.some((item) => item.auto_group !== AutoGroupType.None);
+        return dirtyItems.some(
+            (item) => resolveMode(item.auto_group, projectedGlobalMode, false) !== AutoGroupType.None,
+        );
     }, [config, createMissingDirty, createMissingGroups, dirtyItems, globalDirty, normalizeDirty, normalizeModelNames, projectedGlobalMode]);
     const hasChanges = globalDirty || createMissingDirty || normalizeDirty || dirtyItems.length > 0;
     const isPending = updateConfig.isPending;
@@ -384,9 +412,14 @@ export function GroupAutoGroupDialogContent() {
 
     const applyBulkMode = (mode: AutoGroupType) => {
         if (selection.size === 0) return;
+        // 托管渠道恒被全局强制覆盖，不参与「跟随全局」，批量时跳过。
+        const managedIDs = new Set(sources.filter((s) => s.managed).map((s) => s.channel_id));
         setModes((current) => {
             const updated = { ...current };
-            for (const id of selection) updated[id] = mode;
+            for (const id of selection) {
+                if (mode === AutoGroupType.Inherit && managedIDs.has(id)) continue;
+                updated[id] = mode;
+            }
             return updated;
         });
         setSelection(new Set());
@@ -458,7 +491,7 @@ export function GroupAutoGroupDialogContent() {
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent className="rounded-xl">
-                                        {AUTO_GROUP_VALUES.map((value) => (
+                                        {GLOBAL_MODE_VALUES.map((value) => (
                                             <SelectItem key={value} value={String(value)}>
                                                 {t(`mode.${modeKey(value)}`)}
                                             </SelectItem>
@@ -592,7 +625,12 @@ export function GroupAutoGroupDialogContent() {
                                     groups.map((group) => {
                                         const isExpanded = expanded.has(group.key) || !!normalizedKeyword;
                                         const groupConfigured = group.sources.filter(
-                                            (s) => (modes[s.channel_id] ?? AutoGroupType.None) !== AutoGroupType.None,
+                                            (s) =>
+                                                resolveMode(
+                                                    modes[s.channel_id] ?? AutoGroupType.None,
+                                                    projectedGlobalMode,
+                                                    s.managed,
+                                                ) !== AutoGroupType.None,
                                         ).length;
                                         const groupSelected = group.sources.filter((s) => selection.has(s.channel_id)).length;
                                         const groupState: 'unchecked' | 'partial' | 'checked' =

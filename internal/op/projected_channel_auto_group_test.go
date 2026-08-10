@@ -153,19 +153,77 @@ func TestChannelAutoGroupCreateMissingWithNormalizeUsesPublicName(t *testing.T) 
 func TestDefaultChannelAutoGroupFollowsGlobalMode(t *testing.T) {
 	setupAutoGroupTestDB(t)
 
-	// 全局未开启时保持原样：新渠道仍然是「不自动分组」。
-	if got := DefaultChannelAutoGroup(model.AutoGroupTypeNone); got != model.AutoGroupTypeNone {
+	// 新建渠道未指定模式时落「跟随全局」，而不是把当时的全局模式快照下来。
+	if got := DefaultChannelAutoGroup(model.AutoGroupTypeNone); got != model.AutoGroupTypeInherit {
+		t.Fatalf("expected inherit for unspecified mode, got %d", got)
+	}
+	// 显式指定的模式不被全局覆盖。
+	if got := DefaultChannelAutoGroup(model.AutoGroupTypeFuzzy); got != model.AutoGroupTypeFuzzy {
+		t.Fatalf("expected explicit fuzzy mode to survive, got %d", got)
+	}
+
+	// 全局未开启时，跟随全局解析为「不自动分组」。
+	if got := ResolveChannelAutoGroup(model.AutoGroupTypeInherit, false); got != model.AutoGroupTypeNone {
 		t.Fatalf("expected none without global mode, got %d", got)
 	}
 
 	if err := SettingSetString(model.SettingKeyProjectedChannelAutoGroupEnabled, strconv.Itoa(int(model.AutoGroupTypeRegex))); err != nil {
 		t.Fatalf("set global auto group mode: %v", err)
 	}
-	if got := DefaultChannelAutoGroup(model.AutoGroupTypeNone); got != model.AutoGroupTypeRegex {
-		t.Fatalf("expected new channel to inherit global regex mode, got %d", got)
+	// 全局改了之后，跟随全局的渠道立刻跟着变。
+	if got := ResolveChannelAutoGroup(model.AutoGroupTypeInherit, false); got != model.AutoGroupTypeRegex {
+		t.Fatalf("expected inherit channel to follow global regex mode, got %d", got)
 	}
-	// 显式指定的模式不被全局覆盖。
-	if got := DefaultChannelAutoGroup(model.AutoGroupTypeFuzzy); got != model.AutoGroupTypeFuzzy {
-		t.Fatalf("expected explicit fuzzy mode to survive, got %d", got)
+	// 单独设置过的渠道不受全局影响。
+	if got := ResolveChannelAutoGroup(model.AutoGroupTypeExact, false); got != model.AutoGroupTypeExact {
+		t.Fatalf("expected explicit exact mode to survive global change, got %d", got)
+	}
+	if got := ResolveChannelAutoGroup(model.AutoGroupTypeNone, false); got != model.AutoGroupTypeNone {
+		t.Fatalf("expected explicit none to survive global change, got %d", got)
+	}
+	// 站点投影渠道在全局开启时仍被强制覆盖。
+	if got := ResolveChannelAutoGroup(model.AutoGroupTypeNone, true); got != model.AutoGroupTypeRegex {
+		t.Fatalf("expected managed channel to be forced to global mode, got %d", got)
+	}
+}
+
+// 跟随全局的渠道在全局模式变更后立刻被重新分组，无需逐个去自动分组对话框里选。
+func TestRunGroupAutoGroupAppliesGlobalModeToInheritChannels(t *testing.T) {
+	setupAutoGroupTestDB(t)
+	context := t.Context()
+
+	inherit := autoGroupTestChannel("inherit", "gpt-5.4,claude-4.6", model.AutoGroupTypeInherit)
+	if err := ChannelCreate(inherit, context); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+	pinned := autoGroupTestChannel("pinned", "gpt-5.4,claude-4.6", model.AutoGroupTypeNone)
+	if err := ChannelCreate(pinned, context); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+	group := &model.Group{Name: "gpt-5.4", MatchRegex: `^gpt-5\.4$`, Mode: model.GroupModeRoundRobin}
+	if err := GroupCreate(group, context); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+
+	// 全局关闭时跟随全局 == 不分组。
+	if err := RunGroupAutoGroup(nil, context); err != nil {
+		t.Fatalf("RunGroupAutoGroup failed: %v", err)
+	}
+	if models := autoGroupModels(t, group.ID, inherit.ID); len(models) != 0 {
+		t.Fatalf("expected no mappings while global mode is off, got %v", models)
+	}
+
+	if err := SettingSetString(model.SettingKeyProjectedChannelAutoGroupEnabled, strconv.Itoa(int(model.AutoGroupTypeRegex))); err != nil {
+		t.Fatalf("set global auto group mode: %v", err)
+	}
+	if err := RunGroupAutoGroup(nil, context); err != nil {
+		t.Fatalf("RunGroupAutoGroup failed: %v", err)
+	}
+	if models := autoGroupModels(t, group.ID, inherit.ID); len(models) != 1 || !containsAllModels(models, "gpt-5.4") {
+		t.Fatalf("expected inherit channel to follow global regex mode, got %v", models)
+	}
+	// 显式设成「不自动分组」的渠道不受全局影响。
+	if models := autoGroupModels(t, group.ID, pinned.ID); len(models) != 0 {
+		t.Fatalf("expected explicit none channel to stay ungrouped, got %v", models)
 	}
 }
