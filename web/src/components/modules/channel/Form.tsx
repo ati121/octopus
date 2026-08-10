@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/common/Toast';
 import { useTranslations } from 'next-intl';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw, X, Plus } from 'lucide-react';
 
 export interface ChannelKeyFormItem {
@@ -104,6 +104,24 @@ export function ChannelForm({
     const inputRef = useRef<HTMLInputElement>(null);
 
     const fetchModel = useFetchModel();
+
+    // 与后端 regexp2 的 ECMAScript 模式对齐：支持 (?i)(?s)(?m) 内联 flag。
+    const matchRegexError = useMemo(() => {
+        const pattern = formData.match_regex.trim();
+        if (!pattern) return '';
+        try {
+            const inlineMatch = pattern.match(/^\(\?([ism]+)\)(.+)$/);
+            if (inlineMatch) {
+                const flags = inlineMatch[1].split('').filter((f) => 'ism'.includes(f)).join('');
+                new RegExp(inlineMatch[2], flags);
+            } else {
+                new RegExp(pattern);
+            }
+            return '';
+        } catch (e) {
+            return (e as Error)?.message ?? 'Invalid regex';
+        }
+    }, [formData.match_regex]);
 
     const effectiveKey =
         formData.keys.find((k) => k.enabled && k.channel_key.trim())?.channel_key.trim() || '';
@@ -381,7 +399,7 @@ export function ChannelForm({
                         variant="ghost"
                         size="sm"
                         onClick={handleRefreshModels}
-                        disabled={!formData.base_urls?.[0]?.url || !effectiveKey || fetchModel.isPending}
+                        disabled={!formData.base_urls?.[0]?.url || !effectiveKey || !!matchRegexError || fetchModel.isPending}
                         className="h-6 px-2 text-xs text-muted-foreground/50 hover:text-muted-foreground hover:bg-transparent"
                     >
                         <RefreshCw className={`h-3 w-3 mr-1 ${fetchModel.isPending ? 'animate-spin' : ''}`} />
@@ -468,6 +486,28 @@ export function ChannelForm({
                             </div>
                         )}
                     </div>
+                </div>
+
+                <div className="space-y-1.5">
+                    <label htmlFor={`${idPrefix}-match-regex`} className="text-xs font-medium text-card-foreground">
+                        {t('matchRegex')}
+                    </label>
+                    <Input
+                        id={`${idPrefix}-match-regex`}
+                        type="text"
+                        value={formData.match_regex}
+                        onChange={(e) => onFormDataChange({ ...formData, match_regex: e.target.value })}
+                        placeholder={t('matchRegexPlaceholder')}
+                        aria-invalid={!!matchRegexError}
+                        className="rounded-xl"
+                    />
+                    {matchRegexError ? (
+                        <p className="text-xs text-destructive">
+                            {t('matchRegexInvalid')}: {matchRegexError}
+                        </p>
+                    ) : (
+                        <p className="text-xs text-muted-foreground">{t('matchRegexHint')}</p>
+                    )}
                 </div>
             </div>
 
@@ -560,20 +600,6 @@ export function ChannelForm({
                                     </div>
                                 ))}
                             </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label htmlFor={`${idPrefix}-match-regex`} className="text-sm font-medium text-card-foreground">
-                                {t('matchRegex')}
-                            </label>
-                            <Input
-                                id={`${idPrefix}-match-regex`}
-                                type="text"
-                                value={formData.match_regex}
-                                onChange={(e) => onFormDataChange({ ...formData, match_regex: e.target.value })}
-                                placeholder={t('matchRegexPlaceholder')}
-                                className="rounded-xl"
-                            />
                         </div>
 
                         <div className="space-y-2">

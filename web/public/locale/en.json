@@ -934,8 +934,10 @@
             "wsModePassthrough": "Passthrough",
             "wsModeTransform": "Transform",
             "wsModeOff": "Off",
-            "matchRegex": "Match Regex",
-            "matchRegexPlaceholder": "Optional: regex pattern to match request model names",
+            "matchRegex": "Sync Filter Regex",
+            "matchRegexPlaceholder": "e.g. ^(gpt|claude)- , empty syncs everything",
+            "matchRegexHint": "On auto sync or manual refresh, only upstream models matching this regex are kept; custom models are unaffected",
+            "matchRegexInvalid": "Invalid regex",
             "roundRobin": "Round Robin",
             "roundRobinHint": "When enabled, keys within this channel are rotated in round-robin order; otherwise the key with lowest total cost is preferred",
             "remark": "Remark"

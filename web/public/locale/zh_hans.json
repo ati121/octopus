@@ -934,8 +934,10 @@
             "wsModePassthrough": "直通",
             "wsModeTransform": "转换",
             "wsModeOff": "关闭",
-            "matchRegex": "匹配正则",
-            "matchRegexPlaceholder": "可选：用于匹配请求模型名称的正则表达式",
+            "matchRegex": "同步过滤正则",
+            "matchRegexPlaceholder": "例：^(gpt|claude)- ，留空同步全部",
+            "matchRegexHint": "开启自动同步或点击刷新时，只保留匹配该正则的上游模型；自定义模型不受影响",
+            "matchRegexInvalid": "正则无效",
             "roundRobin": "轮询",
             "roundRobinHint": "开启后同一渠道内多个 API Key 轮流使用；关闭则优先使用累计成本最低的 Key",
             "remark": "备注"

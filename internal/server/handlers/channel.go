@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/apperror"
 	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
@@ -15,6 +16,7 @@ import (
 	"github.com/bestruirui/octopus/internal/server/router"
 	"github.com/bestruirui/octopus/internal/task"
 	"github.com/bestruirui/octopus/internal/utils/safe"
+	"github.com/dlclark/regexp2"
 	"github.com/gin-gonic/gin"
 )
 
@@ -95,6 +97,10 @@ func createChannel(c *gin.Context) {
 		resp.InvalidJSON(c)
 		return
 	}
+	if err := validateChannelMatchRegex(channel.MatchRegex); err != nil {
+		respondInvalidMatchRegex(c, err)
+		return
+	}
 	if channel.ProxyMode == "" {
 		channel.ProxyMode = model.ProxyUsageModeDirect
 	}
@@ -141,6 +147,10 @@ func updateChannel(c *gin.Context) {
 	var req model.ChannelUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.InvalidJSON(c)
+		return
+	}
+	if err := validateChannelMatchRegex(req.MatchRegex); err != nil {
+		respondInvalidMatchRegex(c, err)
 		return
 	}
 	channel, err := op.ChannelUpdate(&req, c.Request.Context())
@@ -198,12 +208,30 @@ func fetchModel(c *gin.Context) {
 		resp.InvalidJSON(c)
 		return
 	}
+	if err := validateChannelMatchRegex(request.MatchRegex); err != nil {
+		respondInvalidMatchRegex(c, err)
+		return
+	}
 	models, err := helper.FetchModels(c.Request.Context(), request)
 	if err != nil {
 		resp.ErrorWithAppError(c, http.StatusInternalServerError, channelError(codeChannelFetchModelsFailed, "channel fetch models failed", err))
 		return
 	}
 	resp.Success(c, models)
+}
+
+// validateChannelMatchRegex 校验同步过滤正则。写错的正则会让 helper.FetchModels 每轮
+// 自动同步都直接返回错误，渠道从此静默不再同步，因此在入口就挡掉。
+func validateChannelMatchRegex(matchRegex *string) error {
+	if matchRegex == nil || strings.TrimSpace(*matchRegex) == "" {
+		return nil
+	}
+	_, err := regexp2.Compile(*matchRegex, regexp2.ECMAScript)
+	return err
+}
+
+func respondInvalidMatchRegex(c *gin.Context, err error) {
+	resp.ErrorWithAppError(c, http.StatusBadRequest, apperror.New(apperror.CodeCommonValidationFailed, err.Error()).WithStatus(http.StatusBadRequest))
 }
 
 func syncChannel(c *gin.Context) {
