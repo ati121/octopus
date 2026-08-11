@@ -125,6 +125,10 @@ func mergeChoiceDelta(existingChoice *Choice, choice Choice) {
 		if delta.Refusal != "" {
 			existingChoice.Message.Refusal = delta.Refusal
 		}
+		// 搜索来源按 URL 去重累积：结果块与逐句 citations_delta 会指向同一批
+		// URL，直接 append 会让聚合后的响应出现大量重复来源。
+		existingChoice.Message.Annotations = mergeAnnotations(existingChoice.Message.Annotations, delta.Annotations)
+		existingChoice.Message.SearchSources = mergeSearchSources(existingChoice.Message.SearchSources, delta.SearchSources)
 	}
 	if choice.FinishReason != nil {
 		existingChoice.FinishReason = choice.FinishReason
@@ -135,6 +139,52 @@ func mergeChoiceDelta(existingChoice *Choice, choice Choice) {
 		}
 		existingChoice.Logprobs.Content = append(existingChoice.Logprobs.Content, choice.Logprobs.Content...)
 	}
+}
+
+// mergeAnnotations 累积 annotations，按 URL + cited_text 去重。
+// 同一 URL 的不同引用片段是有意义的独立标注，因此不能只按 URL 去重。
+func mergeAnnotations(existing, incoming []Annotation) []Annotation {
+	if len(incoming) == 0 {
+		return existing
+	}
+	seen := make(map[string]struct{}, len(existing)+len(incoming))
+	key := func(a Annotation) string {
+		if a.URLCitation == nil {
+			return a.Type
+		}
+		return a.Type + "\x00" + a.URLCitation.URL + "\x00" + a.URLCitation.CitedText
+	}
+	for _, a := range existing {
+		seen[key(a)] = struct{}{}
+	}
+	for _, a := range incoming {
+		k := key(a)
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		existing = append(existing, a)
+	}
+	return existing
+}
+
+// mergeSearchSources 累积来源列表，按 URL 去重。
+func mergeSearchSources(existing, incoming []SearchSource) []SearchSource {
+	if len(incoming) == 0 {
+		return existing
+	}
+	seen := make(map[string]struct{}, len(existing)+len(incoming))
+	for _, s := range existing {
+		seen[s.URL] = struct{}{}
+	}
+	for _, s := range incoming {
+		if _, dup := seen[s.URL]; dup {
+			continue
+		}
+		seen[s.URL] = struct{}{}
+		existing = append(existing, s)
+	}
+	return existing
 }
 
 func MergeToolCallDelta(toolCalls []ToolCall, delta ToolCall) []ToolCall {

@@ -776,6 +776,24 @@ type Message struct {
 	// Images will be merged into Content.MultipleContent during response processing.
 	Images []MessageContentPart `json:"images,omitempty"`
 
+	// Annotations carries inline citation references in OpenAI's Chat
+	// Completions shape (`{"type":"url_citation","url_citation":{...}}`).
+	// Populated when an upstream executed a server-side web search and
+	// returned sources — Anthropic's web_search_tool_result +
+	// text-block `citations`, Gemini's groundingMetadata.
+	//
+	// 服务端搜索的来源必须以客户端认得的字段回传，否则调用方（如 grok-search-rs）
+	// 会判定「无可验证来源」并降级到自己的兜底搜索，白白丢掉上游已经做完的
+	// 联网检索与摘要整合。与 ServerToolUse / ServerToolResult 不同，这个字段
+	// 必须参与序列化。
+	Annotations []Annotation `json:"annotations,omitempty"`
+
+	// SearchSources is the gateway's flat source list for the same data as
+	// Annotations. Not an OpenAI-official field; provided because callers
+	// differ in which one they read, and a source list without offsets is
+	// cheaper to consume than annotations.
+	SearchSources []SearchSource `json:"search_sources,omitempty"`
+
 	Audio *struct {
 		Data       string `json:"data,omitempty"`
 		ExpiresAt  int64  `json:"expires_at,omitempty"`
@@ -878,6 +896,60 @@ func (m *Message) ClearHelpFields() {
 	m.ReasoningSignature = nil
 	m.RedactedThinkingBlocks = nil
 	m.ReasoningBlocks = nil
+	// annotations / search_sources 只在响应侧有意义。客户端回放历史 assistant
+	// 轮次时会把它们连同正文一起发回来，转发给上游就是未知字段 —— 严格的上游
+	// 会以此拒绝整轮请求（同 v1.8.4 处理 tool_calls.index 的原因）。
+	m.Annotations = nil
+	m.SearchSources = nil
+}
+
+// DropServerToolBlocks removes server_tool_use / server_tool_result content
+// parts from the message. Both carry their payload exclusively in json:"-"
+// Go fields, so an OpenAI-shaped client receives nothing but a bare
+// `{"type":"server_tool_use"}` husk — noise at best, and a parse error for
+// clients that validate content-part shapes.
+//
+// Call this on the response path for OpenAI-compatible inbounds, and only
+// after the sources have been harvested into Annotations / SearchSources —
+// otherwise the search results are silently discarded.
+func (m *Message) DropServerToolBlocks() {
+	if m == nil || len(m.Content.MultipleContent) == 0 {
+		return
+	}
+	filtered := m.Content.MultipleContent[:0]
+	for _, part := range m.Content.MultipleContent {
+		switch part.Type {
+		case "server_tool_use", "server_tool_result":
+			continue
+		default:
+			filtered = append(filtered, part)
+		}
+	}
+	m.Content.MultipleContent = filtered
+
+	// 空壳剔除后可能只剩一个 text 块：折叠成字符串形态，与其它单文本响应
+	// 保持一致（部分客户端只认 content 为字符串的响应）。
+	if len(m.Content.MultipleContent) == 1 &&
+		m.Content.MultipleContent[0].Type == "text" &&
+		m.Content.MultipleContent[0].Text != nil {
+		text := *m.Content.MultipleContent[0].Text
+		m.Content.Content = &text
+		m.Content.MultipleContent = nil
+	} else if len(m.Content.MultipleContent) == 0 {
+		m.Content.MultipleContent = nil
+	}
+}
+
+// DropServerToolBlocks applies Message.DropServerToolBlocks to every choice
+// on the response, covering both the non-stream Message and the stream Delta.
+func (r *InternalLLMResponse) DropServerToolBlocks() {
+	if r == nil {
+		return
+	}
+	for i := range r.Choices {
+		r.Choices[i].Message.DropServerToolBlocks()
+		r.Choices[i].Delta.DropServerToolBlocks()
+	}
 }
 
 // Normalize prepares the message for dispatch to upstream providers. It
@@ -1130,6 +1202,46 @@ type ServerToolResultBlock struct {
 	// the upstream type and the outbound should default to
 	// "web_search_tool_result" (Anthropic's original server-tool result).
 	BlockType string `json:"-"`
+}
+
+// Annotation is one inline citation reference on an assistant message,
+// shaped after OpenAI's Chat Completions web-search output. Only the
+// url_citation variant exists today; Type is kept explicit so future
+// variants (file_citation, ...) can be added without breaking consumers.
+// Ref: https://platform.openai.com/docs/guides/tools-web-search
+type Annotation struct {
+	Type string `json:"type"`
+
+	URLCitation *URLCitation `json:"url_citation,omitempty"`
+}
+
+// URLCitation is the payload of an annotation of type "url_citation".
+// StartIndex / EndIndex are character offsets into the assistant text the
+// citation applies to. Providers that don't report offsets (Anthropic's
+// web_search citations carry cited_text rather than offsets) leave them at
+// zero — consumers should treat 0/0 as "offsets unknown" rather than
+// "cites the empty prefix".
+type URLCitation struct {
+	URL        string `json:"url"`
+	Title      string `json:"title,omitempty"`
+	StartIndex int    `json:"start_index,omitempty"`
+	EndIndex   int    `json:"end_index,omitempty"`
+	// CitedText is the upstream-provided excerpt backing the claim.
+	// Anthropic surfaces this as `cited_text`; OpenAI does not emit it.
+	CitedText string `json:"cited_text,omitempty"`
+}
+
+// SearchSource is one upstream document a server-side search drew on.
+// Flat by design: callers that only need "which pages back this answer"
+// can read this without walking annotation offsets.
+type SearchSource struct {
+	URL   string `json:"url"`
+	Title string `json:"title,omitempty"`
+	// Snippet is the result summary when the provider supplies one.
+	Snippet string `json:"snippet,omitempty"`
+	// PageAge is Anthropic's freshness hint on web_search results
+	// (e.g. "2 hours", "1 day"). Empty when not reported.
+	PageAge string `json:"page_age,omitempty"`
 }
 
 // ImageURL represents an image URL with optional detail level.

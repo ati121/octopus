@@ -588,6 +588,24 @@ func (o *MessageOutbound) TransformStream(ctx context.Context, eventData []byte)
 						},
 					},
 				}
+			case "web_search_tool_result":
+				// 服务端搜索的结果整块随 content_block_start 一次到达（没有
+				// delta）。之前直接丢弃，流式请求因此完全拿不到来源；这里把它
+				// 折成 annotations / search_sources 发出去，与非流式对齐。
+				sources := extractWebSearchSources(*streamEvent.ContentBlock)
+				if len(sources) == 0 {
+					return nil, nil
+				}
+				resp.Choices = []model.Choice{
+					{
+						Index: 0,
+						Delta: &model.Message{
+							Role:          "assistant",
+							Annotations:   annotationsFromSources(sources),
+							SearchSources: sources,
+						},
+					},
+				}
 			default:
 				return nil, nil
 			}
@@ -625,6 +643,14 @@ func (o *MessageOutbound) TransformStream(ctx context.Context, eventData []byte)
 			case "thinking_delta":
 				if streamEvent.Delta.Thinking != nil {
 					choice.Delta.ReasoningContent = streamEvent.Delta.Thinking
+				}
+			case "citations_delta":
+				// 逐句引用在流式下以 citations_delta 增量到达，每个事件一处引用。
+				if ann := citationDeltaToAnnotation(streamEvent.Delta); ann != nil {
+					choice.Delta.Annotations = []model.Annotation{*ann}
+					choice.Delta.SearchSources = sourcesFromAnnotations(choice.Delta.Annotations)
+				} else {
+					return nil, nil
 				}
 			case "signature_delta":
 				if streamEvent.Delta.Signature != nil {
@@ -1591,22 +1617,257 @@ func convertTools(tools []model.Tool) []anthropicModel.Tool {
 			// display_width_px, ...) survive without enumerating every
 			// variant here. The MarshalJSON on anthropicModel.Tool handles
 			// the raw-body passthrough.
-			if len(tool.AnthropicServerSpec) == 0 {
-				log.Warnw("transformer.anthropic.server_tool.missing_spec",
-					"tool_type", tool.Type,
-					"tool_name", tool.Function.Name,
-				)
-				continue
+			spec := tool.AnthropicServerSpec
+			wireType := tool.Type
+			wireName := tool.Function.Name
+			if len(spec) == 0 {
+				// 非 Anthropic inbound 不会带 AnthropicServerSpec：OpenAI Chat 发
+				// `{"type":"web_search"}`、Responses 发 `web_search_preview`、
+				// Gemini 发 `server_search`。这里按未版本化的类型补一份最小合法
+				// spec，否则整个服务端工具会被丢弃 —— 上游不执行搜索，也就没有
+				// 引用来源回传，调用方会据此判定无来源并降级到自己的兜底搜索。
+				synth, ok := synthesizeServerToolSpec(tool)
+				if !ok {
+					log.Warnw("transformer.anthropic.server_tool.missing_spec",
+						"tool_type", tool.Type,
+						"tool_name", tool.Function.Name,
+					)
+					continue
+				}
+				spec = synth.rawBody
+				wireType = synth.toolType
+				wireName = synth.toolName
 			}
 			result = append(result, anthropicModel.Tool{
-				Type:         tool.Type,
-				Name:         tool.Function.Name,
-				RawBody:      tool.AnthropicServerSpec,
+				Type:         wireType,
+				Name:         wireName,
+				RawBody:      spec,
 				CacheControl: convertCacheControl(tool.CacheControl),
 			})
 		}
 	}
 	return result
+}
+
+// extractWebSearchSources 从 web_search_tool_result 块里取出搜索结果列表。
+//
+// Anthropic 的结果块形如：
+//
+//	{"type":"web_search_tool_result","tool_use_id":"srv_1","content":[
+//	  {"type":"web_search_result","url":"...","title":"...","page_age":"2 hours"}
+//	]}
+//
+// 内容也可能退化成纯字符串（部分兼容上游），那种形态没有结构化 URL，跳过。
+func extractWebSearchSources(block anthropicModel.MessageContentBlock) []model.SearchSource {
+	if block.Content == nil || len(block.Content.MultipleContent) == 0 {
+		return nil
+	}
+	out := make([]model.SearchSource, 0, len(block.Content.MultipleContent))
+	for _, item := range block.Content.MultipleContent {
+		// 结果项复用 MessageContentBlock 解析，url / page_age 不在其字段集里，
+		// 因此这里按原始 JSON 再取一次。
+		raw, err := json.Marshal(item)
+		if err != nil {
+			continue
+		}
+		var probe struct {
+			Type      string `json:"type"`
+			URL       string `json:"url"`
+			Title     string `json:"title"`
+			PageAge   string `json:"page_age"`
+			Snippet   string `json:"snippet"`
+			Encrypted string `json:"encrypted_content"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			continue
+		}
+		if strings.TrimSpace(probe.URL) == "" {
+			continue
+		}
+		out = append(out, model.SearchSource{
+			URL:     probe.URL,
+			Title:   probe.Title,
+			Snippet: probe.Snippet,
+			PageAge: probe.PageAge,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// extractTextCitations 把 text 块上的 citations 数组转成 OpenAI 风格 annotations。
+// Anthropic 的引用项形如
+// `{"type":"web_search_result_location","url":"...","title":"...","cited_text":"..."}`，
+// 没有字符偏移，因此 start/end 留零（消费方按「偏移未知」处理）。
+func extractTextCitations(block anthropicModel.MessageContentBlock) []model.Annotation {
+	if block.Citations == nil || len(block.Citations.Locations) == 0 {
+		return nil
+	}
+	var items []struct {
+		Type       string `json:"type"`
+		URL        string `json:"url"`
+		Title      string `json:"title"`
+		CitedText  string `json:"cited_text"`
+		StartIndex int    `json:"start_char_index"`
+		EndIndex   int    `json:"end_char_index"`
+	}
+	if err := json.Unmarshal(block.Citations.Locations, &items); err != nil {
+		return nil
+	}
+	out := make([]model.Annotation, 0, len(items))
+	for _, it := range items {
+		if strings.TrimSpace(it.URL) == "" {
+			continue
+		}
+		out = append(out, model.Annotation{
+			Type: "url_citation",
+			URLCitation: &model.URLCitation{
+				URL:        it.URL,
+				Title:      it.Title,
+				CitedText:  it.CitedText,
+				StartIndex: it.StartIndex,
+				EndIndex:   it.EndIndex,
+			},
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// citationDeltaToAnnotation 把一个 citations_delta 事件的 citation 转成
+// annotation。URL 缺失（例如 char_location 形态的文档引用）时返回 nil。
+func citationDeltaToAnnotation(delta *anthropicModel.StreamDelta) *model.Annotation {
+	if delta == nil || len(delta.Citation) == 0 {
+		return nil
+	}
+	var probe struct {
+		Type       string `json:"type"`
+		URL        string `json:"url"`
+		Title      string `json:"title"`
+		CitedText  string `json:"cited_text"`
+		StartIndex int    `json:"start_char_index"`
+		EndIndex   int    `json:"end_char_index"`
+	}
+	if err := json.Unmarshal(delta.Citation, &probe); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(probe.URL) == "" {
+		return nil
+	}
+	return &model.Annotation{
+		Type: "url_citation",
+		URLCitation: &model.URLCitation{
+			URL:        probe.URL,
+			Title:      probe.Title,
+			CitedText:  probe.CitedText,
+			StartIndex: probe.StartIndex,
+			EndIndex:   probe.EndIndex,
+		},
+	}
+}
+
+// annotationsFromSources 在模型没有逐句标注时，用搜索结果列表兜底出 annotations。
+func annotationsFromSources(sources []model.SearchSource) []model.Annotation {
+	out := make([]model.Annotation, 0, len(sources))
+	for _, s := range sources {
+		out = append(out, model.Annotation{
+			Type: "url_citation",
+			URLCitation: &model.URLCitation{
+				URL:   s.URL,
+				Title: s.Title,
+			},
+		})
+	}
+	return out
+}
+
+// sourcesFromAnnotations 从 annotations 反推来源列表，按 URL 去重。
+func sourcesFromAnnotations(annotations []model.Annotation) []model.SearchSource {
+	seen := make(map[string]struct{}, len(annotations))
+	out := make([]model.SearchSource, 0, len(annotations))
+	for _, a := range annotations {
+		if a.URLCitation == nil || a.URLCitation.URL == "" {
+			continue
+		}
+		if _, dup := seen[a.URLCitation.URL]; dup {
+			continue
+		}
+		seen[a.URLCitation.URL] = struct{}{}
+		out = append(out, model.SearchSource{
+			URL:   a.URLCitation.URL,
+			Title: a.URLCitation.Title,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// synthesizedServerTool 是补齐后的 Anthropic 服务端工具三元组：版本化 wire type、
+// 工具名，以及序列化好的 spec 原文。
+type synthesizedServerTool struct {
+	toolType string
+	toolName string
+	rawBody  json.RawMessage
+}
+
+// anthropicServerToolVersions 把跨协议的「非版本化」服务端工具类型映射到 Anthropic
+// 要求的版本化 type + name。Anthropic 只接受带日期后缀的 type（web_search 会被以
+// `Input tag 'web_search' found using 'type' does not match any of the expected tags`
+// 拒绝），而 OpenAI / Gemini 侧的客户端只会发不带版本的名字。
+//
+// 键覆盖 OpenAI Chat 的 `web_search`、Responses 的 `web_search_preview`、
+// Gemini 的 `server_search`，以及 code execution 的同类写法。
+// Ref: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/web-search-tool
+// Ref: https://platform.minimaxi.com/docs/guides/server-tools.md
+var anthropicServerToolVersions = map[string]struct {
+	toolType string
+	toolName string
+}{
+	"web_search":         {toolType: "web_search_20250305", toolName: "web_search"},
+	"web_search_preview": {toolType: "web_search_20250305", toolName: "web_search"},
+	"server_search":      {toolType: "web_search_20250305", toolName: "web_search"},
+	"code_execution":     {toolType: "code_execution_20250522", toolName: "code_execution"},
+}
+
+// synthesizeServerToolSpec 为缺少 AnthropicServerSpec 的服务端工具构造一份最小
+// 合法 spec。只处理已知可映射的类型；未知类型返回 false，交由调用方按原逻辑丢弃并
+// 记录告警，避免把无法被上游识别的 type 发出去换成 400。
+//
+// 已经带版本后缀的 type（web_search_20250305 等）也在这里补 spec：这类工具可能来自
+// 内部构造或非 Anthropic inbound 的手工映射，此时 name 缺失同样会让上游拒绝。
+func synthesizeServerToolSpec(tool model.Tool) (synthesizedServerTool, bool) {
+	toolType := strings.TrimSpace(tool.Type)
+	if toolType == "" {
+		return synthesizedServerTool{}, false
+	}
+
+	out := synthesizedServerTool{toolType: toolType, toolName: strings.TrimSpace(tool.Function.Name)}
+	if mapped, ok := anthropicServerToolVersions[toolType]; ok {
+		out.toolType = mapped.toolType
+		out.toolName = mapped.toolName
+	} else if anthropicServerToolBeta(toolType) == "" {
+		// 既不在映射表里，也不是 Anthropic 认得的服务端工具族前缀。
+		return synthesizedServerTool{}, false
+	}
+	if out.toolName == "" {
+		return synthesizedServerTool{}, false
+	}
+
+	body, err := json.Marshal(map[string]string{
+		"type": out.toolType,
+		"name": out.toolName,
+	})
+	if err != nil {
+		return synthesizedServerTool{}, false
+	}
+	out.rawBody = body
+	return out, true
 }
 
 // anthropicMaxStopSequences caps the stop_sequences array sent to
@@ -1940,6 +2201,8 @@ func convertToLLMResponse(resp *anthropicModel.Message) *model.InternalLLMRespon
 		textParts         []string
 		redactedBlocks    []string
 		reasoningBlocks   []model.ReasoningBlock
+		annotations       []model.Annotation
+		searchSources     []model.SearchSource
 	)
 
 	for _, block := range resp.Content {
@@ -1952,6 +2215,9 @@ func convertToLLMResponse(resp *anthropicModel.Message) *model.InternalLLMRespon
 					Text: block.Text,
 				})
 			}
+			// web_search 让 Anthropic 在 text 块上挂 citations 数组，
+			// 每项指向一处被引用的搜索结果。
+			annotations = append(annotations, extractTextCitations(block)...)
 		case "tool_use":
 			if block.ID != "" && block.Name != nil {
 				input := "{}"
@@ -2007,6 +2273,7 @@ func convertToLLMResponse(resp *anthropicModel.Message) *model.InternalLLMRespon
 			result := &model.ServerToolResultBlock{
 				ToolUseID: lo.FromPtr(block.ToolUseID),
 				IsError:   block.IsError,
+				BlockType: block.Type,
 			}
 			if block.Content != nil {
 				if block.Content.Content != nil {
@@ -2021,6 +2288,9 @@ func convertToLLMResponse(resp *anthropicModel.Message) *model.InternalLLMRespon
 				Type:             "server_tool_result",
 				ServerToolResult: result,
 			})
+			if block.Type == "web_search_tool_result" {
+				searchSources = append(searchSources, extractWebSearchSources(block)...)
+			}
 		}
 	}
 
@@ -2031,6 +2301,16 @@ func convertToLLMResponse(resp *anthropicModel.Message) *model.InternalLLMRespon
 		content.MultipleContent = nil
 	}
 
+	// 没有 citations 偏移信息时，用搜索结果本身兜底成 annotations：调用方
+	// 只要拿到 URL 列表就能判定「有来源」，不必依赖模型是否逐句标注。
+	if len(annotations) == 0 && len(searchSources) > 0 {
+		annotations = annotationsFromSources(searchSources)
+	}
+	// 反向兜底：模型标了 citations 但结果块没解析出来源时，从 citations 反推。
+	if len(searchSources) == 0 && len(annotations) > 0 {
+		searchSources = sourcesFromAnnotations(annotations)
+	}
+
 	message := &model.Message{
 		Role:                   resp.Role,
 		Content:                content,
@@ -2039,6 +2319,8 @@ func convertToLLMResponse(resp *anthropicModel.Message) *model.InternalLLMRespon
 		ReasoningSignature:     thinkingSignature,
 		RedactedThinkingBlocks: redactedBlocks,
 		ReasoningBlocks:        reasoningBlocks,
+		Annotations:            annotations,
+		SearchSources:          searchSources,
 	}
 
 	choice := model.Choice{
