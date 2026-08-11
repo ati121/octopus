@@ -611,9 +611,14 @@ func TestTransformRequestPreservesServerToolSpecAndBeta(t *testing.T) {
 	}
 }
 
-// A-H5: convertTools drops server tools that lack a raw spec payload instead
-// of emitting a malformed wire object.
-func TestConvertToolsDropsServerToolWithoutSpec(t *testing.T) {
+// A-H5: convertTools 对缺少 raw spec 的服务端工具不再一律丢弃。
+//
+// 早先的行为是整条丢掉，避免发出畸形 wire 对象；但这会让 OpenAI / Gemini inbound
+// 声明的 web_search 静默失效 —— 上游不搜索、响应没有引用来源，调用方只能降级。
+// 现在只要 type 能映射到 Anthropic 服务端工具族，就补一份最小合法 spec
+// （type + name）后正常下发；仍然无法映射的类型才丢弃并告警，
+// 见 TestConvertToolsDropsUnmappableServerTool。
+func TestConvertToolsSynthesizesSpecForKnownServerTool(t *testing.T) {
 	tools := []model.Tool{
 		{
 			Type:     "web_search_20250305",
@@ -621,8 +626,28 @@ func TestConvertToolsDropsServerToolWithoutSpec(t *testing.T) {
 		},
 	}
 	got := convertTools(tools)
+	if len(got) != 1 {
+		t.Fatalf("expected the known server tool to be emitted, got %+v", got)
+	}
+	if got[0].Type != "web_search_20250305" || got[0].Name != "web_search" {
+		t.Fatalf("unexpected wire type/name: %+v", got[0])
+	}
+	body, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, want := range []string{`"type":"web_search_20250305"`, `"name":"web_search"`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("synthesized spec missing %s: %s", want, body)
+		}
+	}
+}
+
+// 名字缺失且类型也无法推出名字的服务端工具仍然丢弃：Anthropic 要求 name 必填。
+func TestConvertToolsDropsServerToolWithoutName(t *testing.T) {
+	got := convertTools([]model.Tool{{Type: "computer_20250124"}})
 	if len(got) != 0 {
-		t.Fatalf("expected empty result for spec-less server tool, got %+v", got)
+		t.Fatalf("expected nameless server tool to be dropped, got %+v", got)
 	}
 }
 

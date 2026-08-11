@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -409,6 +410,14 @@ type MessageContentBlock struct {
 	// Type can be "text" or "image".
 	Content *MessageContent `json:"content,omitempty"`
 	IsError *bool           `json:"is_error,omitempty"`
+
+	// web_search_result 结果项字段（出现在 web_search_tool_result.content 数组里）。
+	// 结果项与 MessageContentBlock 共用同一套解析：字段不在结构体里就会在
+	// unmarshal 时被丢掉，透传给 Anthropic 客户端的搜索结果只剩 title，
+	// 转成 OpenAI annotations 时也取不到 URL。Title 复用上面的 document 字段。
+	URL              string `json:"url,omitempty"`
+	PageAge          string `json:"page_age,omitempty"`
+	EncryptedContent string `json:"encrypted_content,omitempty"`
 }
 
 type ProviderExtensions = model.ProviderExtensions
@@ -418,8 +427,63 @@ type GeminiExtension = model.GeminiExtension
 // DocumentCitationsControl mirrors document.citations on Anthropic document
 // blocks. A single `enabled` flag today; we preserve the struct shape for
 // forward-compatibility as Anthropic extends citation metadata.
+//
+// `citations` 在 Anthropic wire 上是被复用的字段名，两种形态不同：
+//   - 请求侧 document 块：对象 `{"enabled": true}`，即本结构；
+//   - 响应侧 text 块：数组，每项是一处引用位置（web_search_result_location /
+//     char_location 等），由 web_search 之类的服务端工具产生。
+//
+// 因此这里的 UnmarshalJSON 必须同时接受两种形态：数组形态按「引用已启用」处理并把
+// 原文留在 Locations 里，否则整个响应体会以
+// `cannot unmarshal array into ... DocumentCitationsControl` 解析失败，
+// 带引用来源的搜索结果一条都到不了客户端。
 type DocumentCitationsControl struct {
 	Enabled bool `json:"enabled,omitempty"`
+
+	// Locations 保留响应侧数组形态的引用原文，供需要透传的 inbound 使用。
+	// 请求侧的对象形态下为 nil。
+	Locations json.RawMessage `json:"-"`
+}
+
+// MarshalJSON 按来源形态还原：带 Locations 的（响应侧）输出原始数组，
+// 其余情况输出 `{"enabled":...}` 对象。
+func (d DocumentCitationsControl) MarshalJSON() ([]byte, error) {
+	if len(d.Locations) > 0 {
+		return d.Locations, nil
+	}
+	type alias struct {
+		Enabled bool `json:"enabled,omitempty"`
+	}
+	return json.Marshal(alias{Enabled: d.Enabled})
+}
+
+// UnmarshalJSON 接受对象与数组两种 wire 形态，见类型注释。
+func (d *DocumentCitationsControl) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	if trimmed[0] == '[' {
+		buf := make([]byte, len(trimmed))
+		copy(buf, trimmed)
+		d.Locations = buf
+		// 响应侧出现引用数组即代表该 text 块带引用。空数组不算。
+		var probe []json.RawMessage
+		if err := json.Unmarshal(trimmed, &probe); err != nil {
+			return err
+		}
+		d.Enabled = len(probe) > 0
+		return nil
+	}
+	type alias struct {
+		Enabled bool `json:"enabled,omitempty"`
+	}
+	var a alias
+	if err := json.Unmarshal(trimmed, &a); err != nil {
+		return err
+	}
+	d.Enabled = a.Enabled
+	return nil
 }
 
 // ImageSource represents the `source` sub-object of an Anthropic content
@@ -483,6 +547,11 @@ type StreamDelta struct {
 
 	// PartialJSON will be present if type is "input_json_delta".
 	PartialJSON *string `json:"partial_json,omitempty"`
+
+	// Citation will be present if type is "citations_delta" — one citation
+	// location per event, emitted while the model attributes a span of text
+	// to a web_search result.
+	Citation json.RawMessage `json:"citation,omitempty"`
 
 	// Thinking will be present if type is "thinking_delta".
 	Thinking *string `json:"thinking,omitempty"`

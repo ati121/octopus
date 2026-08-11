@@ -45,6 +45,10 @@ func (i *ChatInbound) TransformResponse(ctx context.Context, response *model.Int
 	// 签名不会随 Chat 响应发给客户端，落库到网关缓存，等下一轮回传时补回。
 	saveGeminiSignaturesFromResponse(response)
 	saveChatReasoning(response)
+	// 服务端工具块的载荷全在 json:"-" 字段上，序列化给 Chat 客户端只剩
+	// `{"type":"server_tool_use"}` 空壳。来源此前已由 outbound 收进
+	// annotations / search_sources，这里把空壳剔掉。
+	response.DropServerToolBlocks()
 
 	body, err := json.Marshal(response)
 	if err != nil {
@@ -77,6 +81,8 @@ func (i *ChatInbound) TransformStream(ctx context.Context, stream *model.Interna
 	// Store the chunk for aggregation
 	i.streamAggregator.Add(stream)
 	saveGeminiSignaturesFromResponse(stream)
+	// 与非流式一致：空壳块不发给客户端（见 TransformResponse）。
+	stream.DropServerToolBlocks()
 
 	var body []byte
 	var err error

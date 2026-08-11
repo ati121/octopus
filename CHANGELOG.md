@@ -1,5 +1,10 @@
 # 更新日志
 
+## v1.9.1 - 2026-08-12
+
+- 修复 OpenAI Chat 入站（`/v1/chat/completions`）声明 `web_search` 打 Anthropic 协议渠道（MiniMax 官方等）时上游根本不执行搜索的问题。Anthropic 只接受带日期后缀的服务端工具类型（`web_search_20250305`），网关此前只在 Anthropic 入站保留客户端发来的原始 spec，其它入站没有 spec 就把整个服务端工具丢掉，只留一条 `transformer.anthropic.server_tool.missing_spec` warn 日志：请求照常成功，但答案没有任何来源，调用方据此判定搜索失败并降级到自己的兜底搜索（如 `fallback_reason: grok_sources_empty`）。现在出站会按类型补一份最小合法 spec 并带上对应 beta 头，覆盖 Chat 的 `web_search`、Responses 的 `web_search_preview`、Gemini 的 `server_search` 与 code execution 的同类写法；工具类型未知或缺名字时仍然丢弃并告警。
+- 搜索来源现在能回到 OpenAI 协议的客户端：网关从上游的 `web_search_tool_result` 结果块与 text 块上的 `citations` 中提取来源，同时回填 `message.annotations`（`url_citation` 形态，含 `cited_text` 与字符区间）与 `message.search_sources`（含 `title`、`page_age`），两者缺一时相互兜底，流式下随分片下发并在聚合时按 URL 去重。同时修正三处连带的丢失：响应侧 `citations` 是数组、而请求侧 document 块的同名字段是对象，此前一律按对象解析，带引用的整个响应体会解析失败；`web_search_result` 的 `url` / `page_age` / `encrypted_content` 不在内容块字段集里，解析即丢，多轮对话回放搜索结果时也一并丢失；OpenAI 响应的 `content` 里不再残留 `server_tool_use` / `server_tool_result` 空壳，只留正文文本。
+
 ## v1.9 - 2026-08-10
 
 - 渠道的「同步过滤正则」从「高级设置」移到「已选模型」下方，文案改成它的真实作用：过滤自动同步与手动刷新时上游返回的模型清单，只保留匹配项，自定义模型不受影响（此前写的是「用于匹配请求模型名称」，与实现不符，加上位置隐蔽，基本没人找得到）。输入时实时校验，非法正则会禁用刷新按钮并被后端以 400 拒绝——此前正则写错会让每轮自动同步在拉取阶段直接失败，只留一条 warn 日志，渠道从此静默不再同步。
