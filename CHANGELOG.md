@@ -1,5 +1,9 @@
 # 更新日志
 
+## v1.10.1 - 2026-08-12
+
+- 首页排行榜新增「总计」行：位于「按渠道 / 按模型」标签与列表之间，按当前激活标签对全部条目汇总——「金额」显示总花费（如 `0.60$`）、「次数」显示总请求数、「Tokens」显示总 token 数（中文界面按万/亿，如 `4.50亿`），「按渠道」与「按模型」两个维度均生效；列表为空时自动隐藏。
+
 ## v1.10.0 - 2026-08-12
 
 - 修复 Responses 协议渠道（如 opencode 对接的 DeepSeek v4 flash 兼容端点）调用工具时只发 `response.output_item.added` / `response.function_call_arguments.delta`、缺发 `response.function_call_arguments.done` / `response.output_item.done`，导致依赖 `output_item.done` 收集工具调用的客户端（如 Hermes 的 responses 模式）丢掉工具调用、回合提前结束（"请求一次就停"）的问题。Responses 同协议透传此前把上游事件原样转发，事件缺失也随之透传；现在透传流按 SSE 块逐事件检查，`response.completed` / `failed` / `incomplete` / `error` 到达时若仍有未关闭的 function_call，会在终态事件前自动补齐这两个 done 事件（含全量 arguments 与 `status: completed` 的完整 item），客户端可继续执行工具。上游已发 done 事件的完整流（如基元律动）逐字节原样透传、不受影响；标准转换链（Chat 客户端）本就依赖 delta + completed，本次也补了链路验证测试。
