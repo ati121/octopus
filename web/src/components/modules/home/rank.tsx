@@ -7,7 +7,7 @@ import { useLocale, useTranslations } from 'next-intl';
 import { TrendingUp } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContents, TabsContent } from '@/components/animate-ui/components/animate/tabs';
 import { useHomeViewStore, type RankSortMode } from '@/components/modules/home/store';
-import { formatCountCJK } from '@/lib/utils';
+import { formatCount, formatCountCJK, formatMoney } from '@/lib/utils';
 
 type ChannelData = NonNullable<ReturnType<typeof useChannelList>['data']>[number];
 type ModelData = NonNullable<ReturnType<typeof useStatsModel>['data']>[number];
@@ -59,10 +59,35 @@ export function Rank() {
         </div>
     );
 
+    // 总计：按当前激活标签（金额/次数/Tokens）对列表内全部条目求和。
+    const totalText = (items: ChannelData[] | ModelData[], mode: RankSortMode, isChannel: boolean): FormattedValue => {
+        const key = mode === 'count' ? 'request_count' : mode === 'tokens' ? 'total_token' : 'total_cost';
+        let sum = 0;
+        for (const item of items) {
+            const value = isChannel ? (item as ChannelData).formatted[key].raw : (item as ModelData)[key].raw;
+            sum += value || 0;
+        }
+        if (mode === 'count') return formatCount(sum).formatted;
+        if (mode === 'tokens') return tokenText({ raw: sum, formatted: formatCount(sum).formatted });
+        return formatMoney(sum).formatted;
+    };
+
+    const renderTotalRow = (total: FormattedValue) => (
+        <div className="flex items-center justify-between px-3 pb-2">
+            <span className="text-xs font-medium text-muted-foreground">{t('total')}</span>
+            <span className="text-sm font-semibold tabular-nums">
+                {total.value}
+                <span className="text-xs text-muted-foreground">{total.unit}</span>
+            </span>
+        </div>
+    );
+
     const renderChannelList = (channels: ChannelData[], mode: RankSortMode) => {
         if (channels.length === 0) return emptyState;
         return (
-            <div className="max-h-[300px] space-y-3 overflow-y-auto">
+            <div>
+                {renderTotalRow(totalText(channels, mode, true))}
+                <div className="max-h-[300px] space-y-3 overflow-y-auto">
                 {channels.map((channel, index) => {
                     const rank = index + 1;
                     const successCount = channel.formatted.request_success.raw;
@@ -112,6 +137,7 @@ export function Rank() {
                         </div>
                     );
                 })}
+                </div>
             </div>
         );
     };
@@ -119,7 +145,9 @@ export function Rank() {
     const renderModelList = (models: ModelData[], mode: RankSortMode) => {
         if (models.length === 0) return emptyState;
         return (
-            <div className="max-h-[300px] space-y-3 overflow-y-auto">
+            <div>
+                {renderTotalRow(totalText(models, mode, false))}
+                <div className="max-h-[300px] space-y-3 overflow-y-auto">
                 {models.map((row, index) => {
                     const rank = index + 1;
                     const success = row.request_success.raw;
@@ -171,6 +199,7 @@ export function Rank() {
                         </div>
                     );
                 })}
+                </div>
             </div>
         );
     };

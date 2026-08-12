@@ -158,7 +158,8 @@
             "noData": "暫無排行數據",
             "successRate": "成功率",
             "dimensionChannel": "按渠道",
-            "dimensionModel": "按模型"
+            "dimensionModel": "按模型",
+            "total": "總計"
         },
         "groupHealth": {
             "title": "分組健康",

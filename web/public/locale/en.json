@@ -158,7 +158,8 @@
             "noData": "No ranking data",
             "successRate": "Success Rate",
             "dimensionChannel": "By channel",
-            "dimensionModel": "By model"
+            "dimensionModel": "By model",
+            "total": "Total"
         },
         "groupHealth": {
             "title": "Group Health",
