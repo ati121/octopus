@@ -73,13 +73,9 @@ export function Rank() {
     };
 
     const renderTotalRow = (total: FormattedValue) => (
-        <div className="flex items-center gap-3 px-3 pb-2 text-muted-foreground">
-            {/* 留出与列表项奖杯等宽的占位（size-8 = 32px） */}
-            <div className="flex size-8 shrink-0 items-center justify-center" />
-            <div className="min-w-0 flex-1">
-                <span className="text-xs font-medium">{t('total')}</span>
-            </div>
+        <div className="flex items-center justify-end px-3 pb-2 text-muted-foreground">
             <div className="flex shrink-0 items-center gap-1 text-right">
+                <span className="text-sm font-medium mr-1">{t('total')}:</span>
                 <span className="text-base font-semibold">
                     {total.value}
                     <span className="text-xs">{total.unit}</span>
