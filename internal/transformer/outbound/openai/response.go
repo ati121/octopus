@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -897,6 +898,12 @@ func ConvertToResponsesRequest(req *model.InternalLLMRequest) *ResponsesRequest 
 	// (`prompt_cache_key` / `safety_identifier`) and omit the legacy field.
 	promptCacheKey, promptCacheRetention := anthropicCacheMetadataForResponses(req)
 	responsesOptions := req.GetOpenAIResponsesOptions()
+	// Responses API 只认 max_output_tokens；Chat 客户端（如 Hermes）发的是
+	// max_tokens，先回落再使用，避免长度上限在跨格式转换时被静默丢弃。
+	maxOutputTokens := req.MaxCompletionTokens
+	if maxOutputTokens == nil {
+		maxOutputTokens = req.MaxTokens
+	}
 	result := &ResponsesRequest{
 		Model:                req.Model,
 		Temperature:          req.Temperature,
@@ -906,7 +913,7 @@ func ConvertToResponsesRequest(req *model.InternalLLMRequest) *ResponsesRequest 
 		ServiceTier:          req.ServiceTier,
 		Truncation:           req.Truncation,
 		Metadata:             req.Metadata,
-		MaxOutputTokens:      req.MaxCompletionTokens,
+		MaxOutputTokens:      maxOutputTokens,
 		ParallelToolCalls:    req.ParallelToolCalls,
 		PromptCacheKey:       promptCacheKey,
 		PromptCacheRetention: promptCacheRetention,
@@ -986,6 +993,12 @@ func ConvertToResponsesRequest(req *model.InternalLLMRequest) *ResponsesRequest 
 	result.Conversation = responsesOptions.Conversation
 	result.ContextManagement = responsesOptions.ContextManagement
 	result.StreamOptions = responsesOptions.StreamOptions
+	// Chat 请求的 stream_options.include_usage 在 Responses API 里是同名字段；
+	// 只有 Responses 入站会带 StreamOptions，这里为 Chat 入站补齐，保证请求方
+	// 要求的最终 usage 分片不被跨格式转换丢掉。
+	if result.StreamOptions == nil && req.StreamOptions != nil && req.StreamOptions.IncludeUsage {
+		result.StreamOptions = json.RawMessage(`{"include_usage":true}`)
+	}
 	result.Include = req.Include
 	result.TopLogprobs = req.TopLogprobs
 
@@ -1860,6 +1873,142 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// ============================================================================
+// Passthrough 事件拦截器
+//
+// 部分 OpenAI 兼容 Responses 上游（如 opencode）的流式响应在调用工具时只发
+// response.output_item.added / response.function_call_arguments.delta，却缺
+// response.function_call_arguments.done 与 response.output_item.done。依赖
+// output_item.done 收集工具调用的客户端（如 Hermes）会丢掉工具调用并提前
+// 结束回合。透传路径（Responses→Responses）事件原样转发，这里在终态事件
+// 到达前为每个未关闭的 function_call 合成补齐；上游已发 done 的项不受影响。
+// ============================================================================
+
+// NewPassthroughInterceptor implements model.PassthroughEventInterceptor.
+func (o *ResponseOutbound) NewPassthroughInterceptor() model.PassthroughEventProcessor {
+	return &responsesPassthroughInterceptor{items: map[int]*responsesPassthroughItem{}}
+}
+
+// responsesPassthroughItem 跟踪一个 output item 的 function_call 完成状态。
+type responsesPassthroughItem struct {
+	item     ResponsesItem // 类型 / ID / CallID / Name / 累计 arguments
+	added    bool          // 已收到 response.output_item.added
+	argsDone bool          // 已收到 response.function_call_arguments.done
+	itemDone bool          // 已收到 response.output_item.done
+}
+
+// responsesPassthroughInterceptor 是 Responses 透传流的事件处理器（每请求新建）。
+type responsesPassthroughInterceptor struct {
+	items map[int]*responsesPassthroughItem
+}
+
+func (p *responsesPassthroughInterceptor) ensure(outputIndex int) *responsesPassthroughItem {
+	it := p.items[outputIndex]
+	if it == nil {
+		it = &responsesPassthroughItem{item: ResponsesItem{Type: "function_call"}}
+		p.items[outputIndex] = it
+	}
+	return it
+}
+
+func (p *responsesPassthroughInterceptor) Intercept(eventData []byte) ([][]byte, error) {
+	if len(bytes.TrimSpace(eventData)) == 0 {
+		return nil, nil
+	}
+	if bytes.HasPrefix(eventData, []byte("[DONE]")) {
+		return nil, nil
+	}
+	var ev ResponsesStreamEvent
+	if err := json.Unmarshal(eventData, &ev); err != nil {
+		// 非 JSON 载荷（如纯注释帧）不做拦截，原样放行。
+		return nil, nil
+	}
+	switch ev.Type {
+	case "response.output_item.added":
+		if ev.Item != nil && ev.Item.Type == "function_call" {
+			it := p.ensure(ev.OutputIndex)
+			it.added = true
+			it.item.ID = firstNonEmpty(it.item.ID, ev.Item.ID)
+			it.item.CallID = firstNonEmpty(it.item.CallID, ev.Item.CallID)
+			it.item.Name = firstNonEmpty(it.item.Name, ev.Item.Name)
+			it.item.Arguments = firstNonEmpty(it.item.Arguments, ev.Item.Arguments)
+		}
+	case "response.function_call_arguments.delta":
+		it := p.ensure(ev.OutputIndex)
+		it.item.CallID = firstNonEmpty(it.item.CallID, ev.CallID)
+		it.item.Name = firstNonEmpty(it.item.Name, ev.Name)
+		it.item.Arguments += ev.Delta
+	case "response.function_call_arguments.done":
+		if it := p.items[ev.OutputIndex]; it != nil {
+			it.argsDone = true
+			if ev.Arguments != "" {
+				it.item.Arguments = ev.Arguments
+			}
+		}
+	case "response.output_item.done":
+		if it := p.items[ev.OutputIndex]; it != nil {
+			it.itemDone = true
+			if ev.Item != nil {
+				it.item.ID = firstNonEmpty(it.item.ID, ev.Item.ID)
+				it.item.CallID = firstNonEmpty(it.item.CallID, ev.Item.CallID)
+				it.item.Name = firstNonEmpty(it.item.Name, ev.Item.Name)
+				if ev.Item.Arguments != "" {
+					it.item.Arguments = ev.Item.Arguments
+				}
+			}
+		}
+	case "response.completed", "response.failed", "response.incomplete", "error":
+		return p.synthesizeMissingDone(), nil
+	}
+	return nil, nil
+}
+
+// synthesizeMissingDone 为尚未收到 done 事件的 function_call 合成
+// response.function_call_arguments.done 与 response.output_item.done 两个载荷，
+// 按 output_index 升序输出以保证并行调用的顺序稳定。
+func (p *responsesPassthroughInterceptor) synthesizeMissingDone() [][]byte {
+	indexes := make([]int, 0, len(p.items))
+	for idx := range p.items {
+		indexes = append(indexes, idx)
+	}
+	sort.Ints(indexes)
+
+	var out [][]byte
+	for _, idx := range indexes {
+		it := p.items[idx]
+		if it == nil || it.item.Type != "function_call" {
+			continue
+		}
+		if it.item.ID == "" {
+			it.item.ID = generateResponsesItemID()
+		}
+		if !it.argsDone {
+			if payload, err := json.Marshal(ResponsesStreamEvent{
+				Type:        "response.function_call_arguments.done",
+				OutputIndex: idx,
+				ItemID:      lo.ToPtr(it.item.ID),
+				Arguments:   it.item.Arguments,
+			}); err == nil {
+				out = append(out, payload)
+				it.argsDone = true
+			}
+		}
+		if !it.itemDone {
+			item := cloneResponsesItem(it.item)
+			item.Status = lo.ToPtr("completed")
+			if payload, err := json.Marshal(ResponsesStreamEvent{
+				Type:        "response.output_item.done",
+				OutputIndex: idx,
+				Item:        &item,
+			}); err == nil {
+				out = append(out, payload)
+				it.itemDone = true
+			}
+		}
+	}
+	return out
 }
 
 // normalizeResponsesFinishReason maps an OpenAI Responses API `status` value

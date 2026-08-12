@@ -92,6 +92,31 @@ type PassthroughCapable interface {
 	PassthroughConfig() PassthroughConfig
 }
 
+// PassthroughEventInterceptor is an optional interface for PassthroughCapable
+// Outbound transformers that need per-SSE-event visibility during passthrough.
+//
+// Some OpenAI-compatible Responses upstreams (e.g. opencode) omit the standard
+// response.function_call_arguments.done / response.output_item.done events for
+// tool calls. Clients such as Hermes collect tool calls only from
+// output_item.done and end the turn early when those events are missing. The
+// interceptor lets the outbound adapter track each passthrough SSE data
+// payload and synthesise the missing done events before the terminal event is
+// forwarded. Upstreams that already emit the done events are unaffected.
+type PassthroughEventInterceptor interface {
+	// NewPassthroughInterceptor creates a per-request event processor.
+	NewPassthroughInterceptor() PassthroughEventProcessor
+}
+
+// PassthroughEventProcessor inspects one SSE event data payload during
+// passthrough. The original event is always forwarded verbatim; the processor
+// may only prepend synthesised payloads before it.
+type PassthroughEventProcessor interface {
+	// Intercept receives the data payload of one SSE event (without the
+	// "data: " prefix) and returns payloads to emit before this event.
+	// Return nil when nothing needs to be synthesised.
+	Intercept(eventData []byte) ([][]byte, error)
+}
+
 // PassthroughConfig provides protocol-specific settings for passthrough operation.
 type PassthroughConfig struct {
 	// TerminalEvents defines protocol-specific terminal event types for early completion detection.

@@ -1380,12 +1380,44 @@ func (ra *relayAttempt) handleStreamResponsePassthroughV2(ctx context.Context, r
 		firstTokenTimeout = time.Duration(ra.firstTokenTimeOutSec) * time.Second
 	}
 
+	// 默认纯字节透传（Transform: nil，事件不解析不改写）。当出站适配器实现
+	// PassthroughEventInterceptor（Responses 缺失 done 事件的兜底）时，改用
+	// 事件级读取，并在转发前补发合成事件；未实现接口的适配器（Anthropic 等）
+	// 保持原始字节透传不变。
+	source := stream.StreamSource(stream.NewRawSource(response.Body, 32*1024))
+	var transform func(ctx context.Context, data []byte) ([]byte, error)
+	if interceptor, ok := ra.outAdapter.(model.PassthroughEventInterceptor); ok {
+		eventProcessor := interceptor.NewPassthroughInterceptor()
+		source = stream.NewSSEBlockSource(response.Body, maxSSEEventSize)
+		transform = func(ctx context.Context, data []byte) ([]byte, error) {
+			payload := stream.SSEBlockDataPayload(data)
+			if payload == nil {
+				return data, nil // 注释帧 / 无 data 行原样放行
+			}
+			synths, err := eventProcessor.Intercept(payload)
+			if err != nil {
+				return nil, err
+			}
+			if len(synths) == 0 {
+				return data, nil
+			}
+			var out bytes.Buffer
+			for _, synth := range synths {
+				out.WriteString("data: ")
+				out.Write(synth)
+				out.WriteString("\n\n")
+			}
+			out.Write(data)
+			return out.Bytes(), nil
+		}
+	}
+
 	// Create StreamProcessor
 	deferredWriter := newDeferredStreamWriter(ra.getStreamWriter())
 	var writer StreamWriter = deferredWriter
 	processor := stream.NewStreamProcessor(stream.StreamConfig{
-		Source:            stream.NewRawSource(response.Body, 32*1024),
-		Transform:         nil, // Passthrough: no transformation
+		Source:            source,
+		Transform:         transform, // nil = 纯字节透传
 		Writer:            writer,
 		Context:           ctx,
 		FirstTokenTimeout: firstTokenTimeout,

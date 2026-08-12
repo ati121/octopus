@@ -1,5 +1,10 @@
 # 更新日志
 
+## v1.10.0 - 2026-08-12
+
+- 修复 Responses 协议渠道（如 opencode 对接的 DeepSeek v4 flash 兼容端点）调用工具时只发 `response.output_item.added` / `response.function_call_arguments.delta`、缺发 `response.function_call_arguments.done` / `response.output_item.done`，导致依赖 `output_item.done` 收集工具调用的客户端（如 Hermes 的 responses 模式）丢掉工具调用、回合提前结束（"请求一次就停"）的问题。Responses 同协议透传此前把上游事件原样转发，事件缺失也随之透传；现在透传流按 SSE 块逐事件检查，`response.completed` / `failed` / `incomplete` / `error` 到达时若仍有未关闭的 function_call，会在终态事件前自动补齐这两个 done 事件（含全量 arguments 与 `status: completed` 的完整 item），客户端可继续执行工具。上游已发 done 事件的完整流（如基元律动）逐字节原样透传、不受影响；标准转换链（Chat 客户端）本就依赖 delta + completed，本次也补了链路验证测试。
+- Chat 协议请求（`/v1/chat/completions`）打 Responses 协议渠道的转换补齐两处跨格式丢失：`max_tokens` 此前不会回落为 Responses 的 `max_output_tokens`，长度上限被静默丢弃（Hermes 等 Chat 客户端必现）；`stream_options.include_usage` 此前不会带过去，请求方要求的最终 usage 分片拿不到，现在按 Responses 同名字段映射。
+
 ## v1.9.1 - 2026-08-12
 
 - 修复 OpenAI Chat 入站（`/v1/chat/completions`）声明 `web_search` 打 Anthropic 协议渠道（MiniMax 官方等）时上游根本不执行搜索的问题。Anthropic 只接受带日期后缀的服务端工具类型（`web_search_20250305`），网关此前只在 Anthropic 入站保留客户端发来的原始 spec，其它入站没有 spec 就把整个服务端工具丢掉，只留一条 `transformer.anthropic.server_tool.missing_spec` warn 日志：请求照常成功，但答案没有任何来源，调用方据此判定搜索失败并降级到自己的兜底搜索（如 `fallback_reason: grok_sources_empty`）。现在出站会按类型补一份最小合法 spec 并带上对应 beta 头，覆盖 Chat 的 `web_search`、Responses 的 `web_search_preview`、Gemini 的 `server_search` 与 code execution 的同类写法；工具类型未知或缺名字时仍然丢弃并告警。
