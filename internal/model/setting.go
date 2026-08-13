@@ -52,6 +52,10 @@ const (
 	SettingKeyWebDAVIncludeStats               SettingKey = "webdav_include_stats"                 // WebDAV 备份是否包含统计数据
 	SettingKeyWebSearchEnabled                 SettingKey = "web_search_enabled"                   // 是否在网关侧执行 provider-native web search（0关闭/1开启）
 	SettingKeyWebSearchMaxRounds               SettingKey = "web_search_max_rounds"                // web search 重放最大轮数
+	SettingKeyUpstreamGlobalHeaders            SettingKey = "upstream_global_headers"              // 全局上游请求头（CustomHeader JSON 数组）
+	SettingKeyUpstreamModelHeaderRules         SettingKey = "upstream_model_header_rules"          // 按模型匹配的上游请求头规则（UpstreamHeaderRule JSON 数组）
+	SettingKeyUpstreamGlobalParamOverride      SettingKey = "upstream_global_param_override"       // 全局上游请求体参数覆盖（JSON 对象，不可含 model）
+	SettingKeyUpstreamModelParamRules          SettingKey = "upstream_model_param_rules"           // 按模型匹配的上游参数覆盖规则（UpstreamParamRule JSON 数组）
 )
 
 type Setting struct {
@@ -104,6 +108,10 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyWebDAVIncludeStats, Value: "true"},           // 默认包含统计数据
 		{Key: SettingKeyWebSearchEnabled, Value: "1"},                // 默认开启网关侧 web search 执行
 		{Key: SettingKeyWebSearchMaxRounds, Value: "3"},              // 默认最多重放 3 轮
+		{Key: SettingKeyUpstreamGlobalHeaders, Value: "[]"},          // 默认无全局请求头
+		{Key: SettingKeyUpstreamModelHeaderRules, Value: "[]"},       // 默认无模型请求头规则
+		{Key: SettingKeyUpstreamGlobalParamOverride, Value: "{}"},    // 默认无全局参数覆盖
+		{Key: SettingKeyUpstreamModelParamRules, Value: "[]"},        // 默认无模型参数覆盖规则
 	}
 }
 
@@ -190,6 +198,14 @@ func (s *Setting) Validate() error {
 			return fmt.Errorf("api base URL must have a host")
 		}
 		return nil
+	case SettingKeyUpstreamGlobalHeaders:
+		return validateUpstreamHeaders(s.Value)
+	case SettingKeyUpstreamModelHeaderRules:
+		return validateUpstreamHeaderRules(s.Value)
+	case SettingKeyUpstreamGlobalParamOverride:
+		return validateUpstreamParamOverride(s.Value)
+	case SettingKeyUpstreamModelParamRules:
+		return validateUpstreamParamRules(s.Value)
 	case SettingKeyWebDAVURL:
 		if s.Value == "" {
 			return nil

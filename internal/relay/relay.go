@@ -1116,9 +1116,14 @@ func (ra *relayAttempt) getStreamWriter() StreamWriter {
 	return ra.c.Writer
 }
 
-// applyParamOverride merges channel-level JSON request overrides and records the final upstream payload.
+// applyParamOverride 按「全局 → 模型规则 → 渠道覆盖」的顺序深合并 JSON 请求体覆盖，
+// 并记录最终上游载荷。匹配用解析后的上游模型名，全部为空时不触碰请求体。
 func (ra *relayAttempt) applyParamOverride(outboundRequest *http.Request) error {
-	if err := helper.ApplyParamOverride(outboundRequest, ra.channel.ParamOverride); err != nil {
+	overrides := op.UpstreamParamOverrideChain(ra.internalRequest.Model)
+	if ra.channel.ParamOverride != nil {
+		overrides = append(overrides, []byte(*ra.channel.ParamOverride))
+	}
+	if err := helper.ApplyParamOverrides(outboundRequest, overrides...); err != nil {
 		return err
 	}
 	if requestBody, readErr := readOutboundRequestBody(outboundRequest); readErr == nil {
@@ -1155,10 +1160,24 @@ func (ra *relayAttempt) copyHeaders(outboundRequest *http.Request) {
 	if outboundRequest.Header.Get("User-Agent") == "" {
 		outboundRequest.Header.Set("User-Agent", "")
 	}
+	// 优先级：全局 < 模型规则 < 渠道覆盖，渠道级仍然最后写入。
+	// 模型规则按解析后的上游模型名匹配（与参数覆盖口径一致）。
+	setUpstreamHeaders(outboundRequest, op.UpstreamGlobalHeaders())
+	setUpstreamHeaders(outboundRequest, op.UpstreamModelHeadersFor(ra.internalRequest.Model))
 	if len(ra.channel.CustomHeader) > 0 {
 		for _, header := range ra.channel.CustomHeader {
 			outboundRequest.Header.Set(header.HeaderKey, header.HeaderValue)
 		}
+	}
+}
+
+// setUpstreamHeaders 写入一组自定义请求头，跳过空的 header 名。
+func setUpstreamHeaders(outboundRequest *http.Request, headers []dbmodel.CustomHeader) {
+	for _, header := range headers {
+		if strings.TrimSpace(header.HeaderKey) == "" {
+			continue
+		}
+		outboundRequest.Header.Set(header.HeaderKey, header.HeaderValue)
 	}
 }
 
