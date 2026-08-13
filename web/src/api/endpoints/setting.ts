@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient, API_BASE_URL } from '../client';
 import { logger } from '@/lib/logger';
 import { useAuthStore } from './user';
+import type { CustomHeader } from './channel';
 
 /**
  * Setting 数据
@@ -48,7 +49,27 @@ export const SettingKey = {
     WebDAVBackupInterval: 'webdav_backup_interval',
     WebDAVRetentionCount: 'webdav_retention_count',
     WebDAVIncludeStats: 'webdav_include_stats',
+    UpstreamGlobalHeaders: 'upstream_global_headers',
+    UpstreamModelHeaderRules: 'upstream_model_header_rules',
+    UpstreamGlobalParamOverride: 'upstream_global_param_override',
+    UpstreamModelParamRules: 'upstream_model_param_rules',
 } as const;
+
+/**
+ * 上游请求头规则：models 为逗号分隔的通配符模式，按解析后的上游模型名匹配
+ */
+export interface UpstreamHeaderRule {
+    models: string;
+    headers: CustomHeader[];
+}
+
+/**
+ * 上游参数覆盖规则：param_override 为 JSON 对象，不可包含 model
+ */
+export interface UpstreamParamRule {
+    models: string;
+    param_override?: unknown;
+}
 
 /**
  * 获取 Setting 列表 Hook
