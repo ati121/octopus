@@ -224,6 +224,17 @@
             "compatibility": "部分客戶端可能錯誤處理 SSE 註解，如遇相容問題可關閉。",
             "placeholder": "0 = 禁用，建議 30-60"
         },
+        "webSearch": {
+            "enabled": {
+                "label": "閘道 Web Search",
+                "description": "上游模型只返回 web_search 工具呼叫時，Octopus 會存取外部 Bing 搜尋、回填結果後重放給模型；上游已自行完成的原生搜尋不走此流程。"
+            },
+            "maxRounds": {
+                "label": "最大搜尋重放輪數",
+                "description": "單次客戶端請求最多執行的「外部搜尋 + 模型重放」次數，超過後返回 502。範圍 1-100；數值越高，延遲、上游請求次數和費用可能越高。",
+                "placeholder": "1-100，預設 10"
+            }
+        },
         "groupHealth": {
             "label": "分組健康檢查",
             "description": "啟用後顯示首頁分組健康摘要、分組卡片健康狀態，並允許手動執行健康檢查。"

@@ -9,6 +9,11 @@ import (
 type SettingKey string
 
 const (
+	DefaultWebSearchMaxRounds = 10
+	MaxWebSearchMaxRounds     = 100
+)
+
+const (
 	SettingKeyProxyURL                         SettingKey = "proxy_url"
 	SettingKeyStatsSaveInterval                SettingKey = "stats_save_interval"                  // 将统计信息写入数据库的周期(分钟)
 	SettingKeyModelInfoUpdateInterval          SettingKey = "model_info_update_interval"           // 模型信息更新间隔(小时)
@@ -107,7 +112,7 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyWebDAVRetentionCount, Value: "10"},           // 默认保留10份
 		{Key: SettingKeyWebDAVIncludeStats, Value: "true"},           // 默认包含统计数据
 		{Key: SettingKeyWebSearchEnabled, Value: "1"},                // 默认开启网关侧 web search 执行
-		{Key: SettingKeyWebSearchMaxRounds, Value: "3"},              // 默认最多重放 3 轮
+		{Key: SettingKeyWebSearchMaxRounds, Value: "10"},             // 默认最多重放 10 轮
 		{Key: SettingKeyUpstreamGlobalHeaders, Value: "[]"},          // 默认无全局请求头
 		{Key: SettingKeyUpstreamModelHeaderRules, Value: "[]"},       // 默认无模型请求头规则
 		{Key: SettingKeyUpstreamGlobalParamOverride, Value: "{}"},    // 默认无全局参数覆盖
@@ -137,7 +142,9 @@ func (s *Setting) Validate() error {
 		SettingKeyWebDAVRetentionCount:
 		// 时间窗/样本/连击/间隔等：0 或负值无意义，下限为 1。
 		return validateIntMin(s.Value, 1)
-	case SettingKeySSEHeartbeatInterval, SettingKeySSEPreStreamHeartbeatDelay, SettingKeyWebDAVBackupInterval, SettingKeyRelayRequestTimeout, SettingKeyWebSearchMaxRounds:
+	case SettingKeyWebSearchMaxRounds:
+		return validateIntRange(s.Value, 1, MaxWebSearchMaxRounds)
+	case SettingKeySSEHeartbeatInterval, SettingKeySSEPreStreamHeartbeatDelay, SettingKeyWebDAVBackupInterval, SettingKeyRelayRequestTimeout:
 		value, err := strconv.Atoi(s.Value)
 		if err != nil {
 			return fmt.Errorf("setting value must be an integer")

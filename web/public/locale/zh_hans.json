@@ -224,6 +224,17 @@
             "compatibility": "部分客户端可能错误处理 SSE 注释，如遇兼容问题可关闭。",
             "placeholder": "0 = 禁用，建议 30-60"
         },
+        "webSearch": {
+            "enabled": {
+                "label": "网关 Web Search",
+                "description": "上游模型只返回 web_search 工具调用时，Octopus 会访问外部 Bing 搜索、把结果回填后重放给模型；上游已经自行完成的原生搜索不走此流程。"
+            },
+            "maxRounds": {
+                "label": "最大搜索重放轮数",
+                "description": "单次客户端请求最多执行的“外部搜索 + 模型重放”次数，超过后返回 502。范围 1-100；数值越高，延迟、上游请求次数和费用可能越高。",
+                "placeholder": "1-100，默认 10"
+            }
+        },
         "groupHealth": {
             "label": "分组健康检查",
             "description": "启用后显示首页分组健康摘要、分组卡片健康状态，并允许手动运行健康检查。"

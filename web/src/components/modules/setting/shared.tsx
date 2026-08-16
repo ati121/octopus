@@ -66,7 +66,7 @@ export function useSettingToggle(key: string) {
         if (!settings || initialized.current) return;
         const found = settings.find((s) => s.key === key);
         if (found) {
-            const v = found.value === 'true';
+            const v = ['true', '1', 'on'].includes(found.value.trim().toLowerCase());
             queueMicrotask(() => setEnabled(v));
             initial.current = v;
         }

@@ -2,17 +2,26 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { Activity, Globe, Link, Network, Radio, Shield, X } from 'lucide-react';
+import { Activity, Globe, Link, Network, Radio, RefreshCw, Search, Shield, X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useSettingList, useSetSetting, SettingKey } from '@/api/endpoints/setting';
 import { toast } from '@/components/common/Toast';
 import type { ApiError } from '@/api/types';
-import { SettingCard, SettingRow, useSettingField } from './shared';
+import { SettingCard, SettingRow, useSettingField, useSettingToggle } from './shared';
 
 // SSE 心跳间隔与流建立前首次心跳延迟统一为一个值（通常配置相同），回显以心跳间隔为准
 const SSE_MIRROR_KEYS = [SettingKey.SSEPreStreamHeartbeatDelay] as const;
+const WEB_SEARCH_DEFAULT_MAX_ROUNDS = 10;
+const WEB_SEARCH_MAX_ROUNDS = 100;
+
+function normalizeWebSearchMaxRounds(raw: string): string {
+    const value = Number(raw);
+    if (!Number.isInteger(value)) return String(WEB_SEARCH_DEFAULT_MAX_ROUNDS);
+    return String(Math.min(WEB_SEARCH_MAX_ROUNDS, Math.max(1, value)));
+}
 
 // enabled + defaultMode 两个 key 收敛为四个有效状态：
 // enabled=false 时 mode 无意义；enabled=true 时 mode 为渠道未覆盖时的默认值
@@ -86,6 +95,8 @@ export function SettingNetwork() {
     const apiBaseUrl = useSettingField(SettingKey.ApiBaseUrl);
     const cors = useSettingField(SettingKey.CORSAllowOrigins);
     const sseHeartbeat = useSettingField(SettingKey.SSEHeartbeatInterval, SSE_MIRROR_KEYS);
+    const webSearchEnabled = useSettingToggle(SettingKey.WebSearchEnabled);
+    const webSearchMaxRounds = useSettingField(SettingKey.WebSearchMaxRounds);
     const responsesWS = useResponsesWSMode();
 
     const [corsInputValue, setCorsInputValue] = useState('');
@@ -208,6 +219,26 @@ export function SettingNetwork() {
                         </div>
                     </PopoverContent>
                 </Popover>
+            </SettingRow>
+
+            {/* 网关 Web Search：外部搜索开关与单次请求的最大重放轮数 */}
+            <SettingRow icon={Search} label={t('webSearch.enabled.label')} tooltip={t('webSearch.enabled.description')}>
+                <Switch checked={webSearchEnabled.enabled} onCheckedChange={webSearchEnabled.toggle} />
+            </SettingRow>
+
+            <SettingRow icon={RefreshCw} label={t('webSearch.maxRounds.label')} tooltip={t('webSearch.maxRounds.description')}>
+                <Input
+                    type="number"
+                    min="1"
+                    max={WEB_SEARCH_MAX_ROUNDS}
+                    step="1"
+                    value={webSearchMaxRounds.value}
+                    onChange={(e) => webSearchMaxRounds.setValue(e.target.value)}
+                    onBlur={() => webSearchMaxRounds.commit(normalizeWebSearchMaxRounds(webSearchMaxRounds.value))}
+                    placeholder={t('webSearch.maxRounds.placeholder')}
+                    disabled={!webSearchEnabled.enabled}
+                    className="w-48 rounded-xl"
+                />
             </SettingRow>
 
             {/* SSE 心跳：同一个值写入流中心跳间隔与流建立前首次心跳延迟 */}

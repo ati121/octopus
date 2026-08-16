@@ -384,14 +384,14 @@ func webSearchEnabled() bool {
 	return value != "" && value != "0" && value != "false" && value != "off"
 }
 
-// webSearchMaxRounds 读取最大重放轮数（默认 3，上限 10）。
+// webSearchMaxRounds 读取最大重放轮数（默认 10，上限 100）。
 func webSearchMaxRounds() int {
 	value, err := op.SettingGetInt(dbmodel.SettingKeyWebSearchMaxRounds)
 	if err != nil || value <= 0 {
-		return 3
+		return dbmodel.DefaultWebSearchMaxRounds
 	}
-	if value > 10 {
-		return 10
+	if value > dbmodel.MaxWebSearchMaxRounds {
+		return dbmodel.MaxWebSearchMaxRounds
 	}
 	return int(value)
 }

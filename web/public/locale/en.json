@@ -224,6 +224,17 @@
             "compatibility": "Some clients may mishandle SSE comments, so disable it if compatibility issues occur.",
             "placeholder": "0 = disabled, recommend 30-60"
         },
+        "webSearch": {
+            "enabled": {
+                "label": "Gateway Web Search",
+                "description": "When the upstream model only returns a web_search tool call, Octopus queries the external Bing search engine and replays the results to the model. Provider-native searches that already completed upstream do not use this flow."
+            },
+            "maxRounds": {
+                "label": "Maximum Search Replay Rounds",
+                "description": "Maximum external search and model replay cycles per client request. Exceeding it returns 502. Range: 1-100; higher values may increase latency, upstream requests, and cost.",
+                "placeholder": "1-100, default 10"
+            }
+        },
         "groupHealth": {
             "label": "Group Health Checks",
             "description": "When enabled, show the home health summary, group-card health status, and allow manual health checks."

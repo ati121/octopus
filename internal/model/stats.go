@@ -18,7 +18,7 @@ type StatsTotal struct {
 }
 
 type StatsHourly struct {
-	Hour int    `json:"hour" gorm:"primaryKey"`
+	Hour int    `json:"hour" gorm:"primaryKey;autoIncrement:false"`
 	Date string `json:"date" gorm:"not null"` // 记录最后更新日期，格式：20060102
 	StatsMetrics
 }
