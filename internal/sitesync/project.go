@@ -532,7 +532,7 @@ func syncProjectedModelPrices(ctx context.Context, modelsByGroup map[string][]mo
 }
 
 func platformOutboundType(site *model.Site) outbound.OutboundType {
-	if site.Platform == model.SitePlatformAPI {
+	if site.Platform == model.SitePlatformAPI || site.Platform == model.SitePlatformSiliconFlow || site.Platform == model.SitePlatformOther {
 		switch site.ResolveDefaultRouteType() {
 		case model.SiteModelRouteTypeAnthropic:
 			return outbound.OutboundTypeAnthropic

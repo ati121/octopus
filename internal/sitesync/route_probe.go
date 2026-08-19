@@ -87,7 +87,7 @@ func detectSiteModelRoutes(
 	case model.SitePlatformAnyRouter:
 		return detectAnyRouterPricingRoutes(ctx, siteRecord, account, accessToken, platformUserID, modelFilter)
 	default:
-		if siteRecord.Platform == model.SitePlatformAPI && len(siteRecord.RouteBaseURLs) > 0 {
+		if (siteRecord.Platform == model.SitePlatformAPI || siteRecord.Platform == model.SitePlatformOther) && len(siteRecord.RouteBaseURLs) > 0 {
 			return detectManagedPricingRoutes(ctx, siteRecord, account, accessToken, modelToken, modelFilter)
 		}
 		return nil
@@ -479,7 +479,8 @@ func pickPreferredDetectedRouteType(modelName string, values []model.SiteModelRo
 	case model.SiteModelRouteTypeAnthropic,
 		model.SiteModelRouteTypeGemini,
 		model.SiteModelRouteTypeVolcengine,
-		model.SiteModelRouteTypeOpenAIEmbedding:
+		model.SiteModelRouteTypeOpenAIEmbedding,
+		model.SiteModelRouteTypeRerank:
 		for _, value := range values {
 			if value == nativeRouteType {
 				return value
@@ -488,12 +489,13 @@ func pickPreferredDetectedRouteType(modelName string, values []model.SiteModelRo
 	}
 
 	fallbackOrder := []model.SiteModelRouteType{
+		model.SiteModelRouteTypeRerank,
+		model.SiteModelRouteTypeOpenAIEmbedding,
 		model.SiteModelRouteTypeAnthropic,
 		model.SiteModelRouteTypeOpenAIResponse,
 		model.SiteModelRouteTypeOpenAIChat,
 		model.SiteModelRouteTypeGemini,
 		model.SiteModelRouteTypeVolcengine,
-		model.SiteModelRouteTypeOpenAIEmbedding,
 	}
 	for _, preferred := range fallbackOrder {
 		for _, value := range values {
@@ -508,18 +510,20 @@ func pickPreferredDetectedRouteType(modelName string, values []model.SiteModelRo
 
 func detectedRouteTypePriority(routeType model.SiteModelRouteType) int {
 	switch routeType {
-	case model.SiteModelRouteTypeOpenAIEmbedding:
+	case model.SiteModelRouteTypeRerank:
 		return 0
-	case model.SiteModelRouteTypeOpenAIResponse:
+	case model.SiteModelRouteTypeOpenAIEmbedding:
 		return 1
-	case model.SiteModelRouteTypeAnthropic:
+	case model.SiteModelRouteTypeOpenAIResponse:
 		return 2
-	case model.SiteModelRouteTypeGemini:
+	case model.SiteModelRouteTypeAnthropic:
 		return 3
-	case model.SiteModelRouteTypeVolcengine:
+	case model.SiteModelRouteTypeGemini:
 		return 4
-	case model.SiteModelRouteTypeOpenAIChat:
+	case model.SiteModelRouteTypeVolcengine:
 		return 5
+	case model.SiteModelRouteTypeOpenAIChat:
+		return 6
 	default:
 		return 99
 	}
@@ -531,6 +535,10 @@ func mapSupportedEndpointType(value string) (model.SiteModelRouteType, bool) {
 	case normalized == "",
 		normalized == "none":
 		return "", false
+	case normalized == "rerank",
+		normalized == "reranker",
+		strings.Contains(normalized, "/v1/rerank"):
+		return model.SiteModelRouteTypeRerank, true
 	case normalized == "embedding",
 		normalized == "embeddings",
 		normalized == "openai_embedding",

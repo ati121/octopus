@@ -34,6 +34,11 @@ func TestBuildProjectedChannelBaseURL(t *testing.T) {
 			expected: "https://example.com/openai/v1",
 		},
 		{
+			name:     "other platform preserves custom path and appends v1",
+			site:     &model.Site{Platform: model.SitePlatformOther, BaseURL: "https://token.sensenova.cn/openai"},
+			expected: "https://token.sensenova.cn/openai/v1",
+		},
+		{
 			name:     "api platform with anthropic default appends v1",
 			site:     &model.Site{Platform: model.SitePlatformAPI, DefaultRouteType: model.SiteModelRouteTypeAnthropic, BaseURL: "https://api.anthropic.com"},
 			expected: "https://api.anthropic.com/v1",
@@ -107,6 +112,7 @@ func TestProjectAccountSupportsAllConfiguredRouteBuckets(t *testing.T) {
 	extraModels := []model.SiteModel{
 		{SiteAccountID: account.ID, GroupKey: model.SiteDefaultGroupKey, ModelName: "text-embedding-3-large", Source: "sync", RouteType: model.SiteModelRouteTypeOpenAIEmbedding},
 		{SiteAccountID: account.ID, GroupKey: model.SiteDefaultGroupKey, ModelName: "doubao-seed-1-6", Source: "sync", RouteType: model.SiteModelRouteTypeVolcengine},
+		{SiteAccountID: account.ID, GroupKey: model.SiteDefaultGroupKey, ModelName: "Pro/BAAI/bge-reranker-v2-m3", Source: "sync", RouteType: model.SiteModelRouteTypeRerank},
 	}
 	if err := dbpkg.GetDB().WithContext(ctx).Create(&extraModels).Error; err != nil {
 		t.Fatalf("create extra site models failed: %v", err)
@@ -116,13 +122,13 @@ func TestProjectAccountSupportsAllConfiguredRouteBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProjectAccount returned error: %v", err)
 	}
-	if len(channelIDs) != 5 {
-		t.Fatalf("expected 5 managed channels for 5 route buckets, got %d", len(channelIDs))
+	if len(channelIDs) != 6 {
+		t.Fatalf("expected 6 managed channels for 6 route buckets, got %d", len(channelIDs))
 	}
 
 	channelsByGroup := loadProjectedChannelsByGroupKey(t, ctx, account.ID)
-	if len(channelsByGroup) != 5 {
-		t.Fatalf("expected 5 bindings, got %d", len(channelsByGroup))
+	if len(channelsByGroup) != 6 {
+		t.Fatalf("expected 6 bindings, got %d", len(channelsByGroup))
 	}
 
 	assertProjectedChannel(t, channelsByGroup, "default", outbound.OutboundTypeOpenAIChat, "gpt-4o-mini", false)
@@ -130,6 +136,7 @@ func TestProjectAccountSupportsAllConfiguredRouteBuckets(t *testing.T) {
 	assertProjectedChannel(t, channelsByGroup, "default::gemini", outbound.OutboundTypeGemini, "gemini-2.0-flash", true)
 	assertProjectedChannel(t, channelsByGroup, "default::volcengine", outbound.OutboundTypeVolcengine, "doubao-seed-1-6", true)
 	assertProjectedChannel(t, channelsByGroup, "default::openai-embedding", outbound.OutboundTypeOpenAIEmbedding, "text-embedding-3-large", true)
+	assertProjectedChannel(t, channelsByGroup, "default::rerank", outbound.OutboundTypeRerank, "Pro/BAAI/bge-reranker-v2-m3", true)
 }
 
 func TestProjectAccountRewritesGroupItemsBeforeRemovingStaleManagedBindings(t *testing.T) {
@@ -777,6 +784,90 @@ func TestBuildChannelKeysAppliesPlatformPrefix(t *testing.T) {
 	if apiKeys[0].ChannelKey != "key-primary" || apiKeys[1].ChannelKey != "sk-key-backup" {
 		t.Fatalf("expected api keys to stay verbatim, got %q and %q", apiKeys[0].ChannelKey, apiKeys[1].ChannelKey)
 	}
+
+	siliconFlowKeys := buildChannelKeys(tokens, model.SitePlatformSiliconFlow)
+	if siliconFlowKeys[0].ChannelKey != "key-primary" || siliconFlowKeys[1].ChannelKey != "sk-key-backup" {
+		t.Fatalf("expected SiliconFlow keys to stay verbatim, got %q and %q", siliconFlowKeys[0].ChannelKey, siliconFlowKeys[1].ChannelKey)
+	}
+
+	otherKeys := buildChannelKeys(tokens, model.SitePlatformOther)
+	if otherKeys[0].ChannelKey != "key-primary" || otherKeys[1].ChannelKey != "sk-key-backup" {
+		t.Fatalf("expected Other-platform keys to stay verbatim, got %q and %q", otherKeys[0].ChannelKey, otherKeys[1].ChannelKey)
+	}
+}
+
+func TestSiliconFlowProjectionSplitsEmbeddingAndRerankRoutes(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+	site := &model.Site{
+		Name:     "SiliconFlow",
+		Platform: model.SitePlatformSiliconFlow,
+		BaseURL:  "https://api.siliconflow.cn",
+		Enabled:  true,
+	}
+	if err := op.SiteCreate(site, ctx); err != nil {
+		t.Fatalf("SiteCreate failed: %v", err)
+	}
+	account := &model.SiteAccount{
+		SiteID:         site.ID,
+		Name:           "Primary",
+		CredentialType: model.SiteCredentialTypeAPIKey,
+		APIKey:         "sf-secret",
+		Enabled:        true,
+	}
+	if err := op.SiteAccountCreate(account, ctx); err != nil {
+		t.Fatalf("SiteAccountCreate failed: %v", err)
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&model.SiteToken{
+		SiteAccountID: account.ID,
+		Name:          "default",
+		Token:         "sf-secret",
+		GroupKey:      model.SiteDefaultGroupKey,
+		GroupName:     model.SiteDefaultGroupName,
+		Enabled:       true,
+	}).Error; err != nil {
+		t.Fatalf("create SiliconFlow token failed: %v", err)
+	}
+	models := []model.SiteModel{
+		{SiteAccountID: account.ID, GroupKey: model.SiteDefaultGroupKey, ModelName: "deepseek-ai/DeepSeek-V3", RouteType: model.SiteModelRouteTypeOpenAIChat, Source: "sync"},
+		{SiteAccountID: account.ID, GroupKey: model.SiteDefaultGroupKey, ModelName: "Pro/BAAI/bge-m3", RouteType: model.SiteModelRouteTypeOpenAIEmbedding, Source: "sync"},
+		{SiteAccountID: account.ID, GroupKey: model.SiteDefaultGroupKey, ModelName: "Pro/BAAI/bge-reranker-v2-m3", RouteType: model.SiteModelRouteTypeRerank, Source: "sync"},
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&models).Error; err != nil {
+		t.Fatalf("create SiliconFlow models failed: %v", err)
+	}
+
+	channelIDs, err := ProjectAccount(ctx, account.ID)
+	if err != nil {
+		t.Fatalf("ProjectAccount failed: %v", err)
+	}
+	if len(channelIDs) != 3 {
+		t.Fatalf("expected three protocol-specific channels, got %d", len(channelIDs))
+	}
+	channelsByGroup := loadProjectedChannelsByGroupKey(t, ctx, account.ID)
+	checks := []struct {
+		bindingKey  string
+		channelType outbound.OutboundType
+		modelName   string
+	}{
+		{bindingKey: "default", channelType: outbound.OutboundTypeOpenAIChat, modelName: "deepseek-ai/DeepSeek-V3"},
+		{bindingKey: "default::openai-embedding", channelType: outbound.OutboundTypeOpenAIEmbedding, modelName: "Pro/BAAI/bge-m3"},
+		{bindingKey: "default::rerank", channelType: outbound.OutboundTypeRerank, modelName: "Pro/BAAI/bge-reranker-v2-m3"},
+	}
+	for _, check := range checks {
+		channel, ok := channelsByGroup[check.bindingKey]
+		if !ok {
+			t.Fatalf("missing projected binding %q: %#v", check.bindingKey, channelsByGroup)
+		}
+		if channel.Type != check.channelType || channel.Model != check.modelName {
+			t.Fatalf("unexpected channel for %q: type=%d model=%q", check.bindingKey, channel.Type, channel.Model)
+		}
+		if len(channel.BaseUrls) != 1 || channel.BaseUrls[0].URL != "https://api.siliconflow.cn/v1" {
+			t.Fatalf("unexpected base URL for %q: %#v", check.bindingKey, channel.BaseUrls)
+		}
+		if len(channel.Keys) != 1 || channel.Keys[0].ChannelKey != "sf-secret" {
+			t.Fatalf("expected SiliconFlow key to stay verbatim for %q, got %#v", check.bindingKey, channel.Keys)
+		}
+	}
 }
 
 func createProjectionFixture(t *testing.T, ctx context.Context) (*model.Site, *model.SiteAccount) {
@@ -1181,6 +1272,7 @@ func assertProjectedChannel(t *testing.T, channelsByGroup map[string]model.Chann
 		"default::gemini":           "Projection Site/Primary Account/default-Gemini",
 		"default::volcengine":       "Projection Site/Primary Account/default-Volcengine",
 		"default::openai-embedding": "Projection Site/Primary Account/default-Embedding",
+		"default::rerank":           "Projection Site/Primary Account/default-Rerank",
 	}
 	if expectedName, ok := expectedNames[groupKey]; ok && channel.Name != expectedName {
 		t.Fatalf("expected channel %q name %q, got %q", groupKey, expectedName, channel.Name)

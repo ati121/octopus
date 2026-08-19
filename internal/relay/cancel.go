@@ -80,6 +80,9 @@ func streamResponseCompleted(resp *model.InternalLLMResponse) bool {
 	if len(resp.EmbeddingData) > 0 {
 		return true
 	}
+	if len(resp.RerankPayload) > 0 {
+		return true
+	}
 	if len(resp.Choices) == 0 {
 		return false
 	}

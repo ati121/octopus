@@ -11,7 +11,8 @@ export type SiteModelRouteType =
     | 'anthropic'
     | 'gemini'
     | 'volcengine'
-    | 'openai_embedding';
+    | 'openai_embedding'
+    | 'rerank';
 
 export type SiteModelRouteSource =
     | 'sync_inferred'
@@ -191,6 +192,7 @@ const SITE_MODEL_ROUTE_TYPES = new Set<SiteModelRouteType>([
     'gemini',
     'volcengine',
     'openai_embedding',
+    'rerank',
 ]);
 
 function normalizeSiteModelRouteType(value: string | null | undefined): SiteModelRouteType {

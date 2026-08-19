@@ -214,12 +214,8 @@ outer:
 			}
 
 			// 类型兼容性检查
-			if internalRequest.IsEmbeddingRequest() && !outbound.IsEmbeddingChannelType(channel.Type) {
-				iter.Skip(channel.ID, 0, channel.Name, "channel type not compatible with embedding request")
-				continue
-			}
-			if internalRequest.IsChatRequest() && !outbound.IsChatChannelType(channel.Type) {
-				iter.Skip(channel.ID, 0, channel.Name, "channel type not compatible with chat request")
+			if reason := channelTypeIncompatibilityReason(internalRequest, channel.Type); reason != "" {
+				iter.Skip(channel.ID, 0, channel.Name, reason)
 				continue
 			}
 
@@ -1650,10 +1646,26 @@ func isEmptyUpstreamResponse(resp *model.InternalLLMResponse) bool {
 	if resp == nil || resp.Error != nil {
 		return resp == nil
 	}
-	if len(resp.Choices) > 0 || len(resp.EmbeddingData) > 0 || len(resp.RawResponsesOutputItems) > 0 {
+	if len(resp.Choices) > 0 || len(resp.EmbeddingData) > 0 || len(resp.RerankPayload) > 0 || len(resp.RawResponsesOutputItems) > 0 {
 		return false
 	}
 	return true
+}
+
+func channelTypeIncompatibilityReason(request *model.InternalLLMRequest, channelType outbound.OutboundType) string {
+	if request == nil {
+		return ""
+	}
+	if request.IsEmbeddingRequest() && !outbound.IsEmbeddingChannelType(channelType) {
+		return "channel type not compatible with embedding request"
+	}
+	if request.IsRerankRequest() && !outbound.IsRerankChannelType(channelType) {
+		return "channel type not compatible with rerank request"
+	}
+	if request.IsChatRequest() && !outbound.IsChatChannelType(channelType) {
+		return "channel type not compatible with chat request"
+	}
+	return ""
 }
 
 // collectResponse 收集响应信息

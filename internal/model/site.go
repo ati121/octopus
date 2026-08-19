@@ -14,13 +14,15 @@ import (
 type SitePlatform string
 
 const (
-	SitePlatformNewAPI    SitePlatform = "new-api"
-	SitePlatformAnyRouter SitePlatform = "anyrouter"
-	SitePlatformOneAPI    SitePlatform = "one-api"
-	SitePlatformOneHub    SitePlatform = "one-hub"
-	SitePlatformDoneHub   SitePlatform = "done-hub"
-	SitePlatformSub2API SitePlatform = "sub2api"
-	SitePlatformAPI     SitePlatform = "api"
+	SitePlatformNewAPI      SitePlatform = "new-api"
+	SitePlatformAnyRouter   SitePlatform = "anyrouter"
+	SitePlatformOneAPI      SitePlatform = "one-api"
+	SitePlatformOneHub      SitePlatform = "one-hub"
+	SitePlatformDoneHub     SitePlatform = "done-hub"
+	SitePlatformSub2API     SitePlatform = "sub2api"
+	SitePlatformAPI         SitePlatform = "api"
+	SitePlatformSiliconFlow SitePlatform = "siliconflow"
+	SitePlatformOther       SitePlatform = "other"
 )
 
 type SiteCredentialType string
@@ -63,6 +65,7 @@ const (
 	SiteModelRouteTypeGemini          SiteModelRouteType = "gemini"
 	SiteModelRouteTypeVolcengine      SiteModelRouteType = "volcengine"
 	SiteModelRouteTypeOpenAIEmbedding SiteModelRouteType = "openai_embedding"
+	SiteModelRouteTypeRerank          SiteModelRouteType = "rerank"
 	SiteModelRouteTypeUnknown         SiteModelRouteType = "unknown"
 )
 
@@ -550,7 +553,7 @@ func NormalizeSiteSyncTokenValue(value string) string {
 // their keys verbatim, so they must never have a prefix forced on them.
 func (p SitePlatform) usesSyncTokenSkPrefix() bool {
 	switch p {
-	case SitePlatformAPI:
+	case SitePlatformAPI, SitePlatformSiliconFlow, SitePlatformOther:
 		return false
 	default:
 		return true
@@ -644,6 +647,7 @@ func NormalizeSiteModelRouteType(routeType SiteModelRouteType) SiteModelRouteTyp
 		SiteModelRouteTypeGemini,
 		SiteModelRouteTypeVolcengine,
 		SiteModelRouteTypeOpenAIEmbedding,
+		SiteModelRouteTypeRerank,
 		SiteModelRouteTypeUnknown:
 		return routeType
 	default:
@@ -658,7 +662,8 @@ func IsProjectedSiteModelRouteType(routeType SiteModelRouteType) bool {
 		SiteModelRouteTypeAnthropic,
 		SiteModelRouteTypeGemini,
 		SiteModelRouteTypeVolcengine,
-		SiteModelRouteTypeOpenAIEmbedding:
+		SiteModelRouteTypeOpenAIEmbedding,
+		SiteModelRouteTypeRerank:
 		return true
 	default:
 		return false
@@ -683,11 +688,15 @@ func NormalizeSiteModelRouteSource(routeSource SiteModelRouteSource, manualOverr
 func InferSiteModelRouteType(modelName string) SiteModelRouteType {
 	lower := strings.ToLower(strings.TrimSpace(modelName))
 	switch {
+	case strings.Contains(lower, "reranker"), strings.Contains(lower, "rerank"):
+		return SiteModelRouteTypeRerank
 	case strings.HasPrefix(lower, "claude"):
 		return SiteModelRouteTypeAnthropic
 	case strings.HasPrefix(lower, "gemini"):
 		return SiteModelRouteTypeGemini
 	case strings.Contains(lower, "embedding"):
+		return SiteModelRouteTypeOpenAIEmbedding
+	case strings.Contains(lower, "bge-"):
 		return SiteModelRouteTypeOpenAIEmbedding
 	default:
 		return SiteModelRouteTypeOpenAIChat
@@ -706,6 +715,8 @@ func SiteModelRouteTypeSuffix(routeType SiteModelRouteType) string {
 		return "volcengine"
 	case SiteModelRouteTypeOpenAIEmbedding:
 		return "openai-embedding"
+	case SiteModelRouteTypeRerank:
+		return "rerank"
 	default:
 		return ""
 	}
@@ -723,6 +734,8 @@ func SiteModelRouteTypeName(routeType SiteModelRouteType) string {
 		return "Volcengine"
 	case SiteModelRouteTypeOpenAIEmbedding:
 		return "OpenAI Embedding"
+	case SiteModelRouteTypeRerank:
+		return "Rerank"
 	case SiteModelRouteTypeUnknown:
 		return "Unsupported"
 	default:
@@ -744,6 +757,8 @@ func CompactSiteModelRouteTypeName(routeType SiteModelRouteType) string {
 		return "Volcengine"
 	case SiteModelRouteTypeOpenAIEmbedding:
 		return "Embedding"
+	case SiteModelRouteTypeRerank:
+		return "Rerank"
 	case SiteModelRouteTypeUnknown:
 		return "Unsupported"
 	default:
@@ -778,6 +793,8 @@ func ParseSiteChannelBindingKey(groupKey string) (string, SiteModelRouteType) {
 		return baseKey, SiteModelRouteTypeVolcengine
 	case "openai-embedding":
 		return baseKey, SiteModelRouteTypeOpenAIEmbedding
+	case "rerank":
+		return baseKey, SiteModelRouteTypeRerank
 	default:
 		return baseKey, SiteModelRouteTypeOpenAIChat
 	}
@@ -785,7 +802,7 @@ func ParseSiteChannelBindingKey(groupKey string) (string, SiteModelRouteType) {
 
 func ShouldSplitSiteChannelRoutes(platform SitePlatform) bool {
 	switch platform {
-	case SitePlatformAPI:
+	case SitePlatformAPI, SitePlatformOther:
 		return false
 	default:
 		return true
@@ -804,6 +821,8 @@ func (t SiteModelRouteType) ToOutboundType() outbound.OutboundType {
 		return outbound.OutboundTypeVolcengine
 	case SiteModelRouteTypeOpenAIEmbedding:
 		return outbound.OutboundTypeOpenAIEmbedding
+	case SiteModelRouteTypeRerank:
+		return outbound.OutboundTypeRerank
 	default:
 		return outbound.OutboundTypeOpenAIChat
 	}
@@ -821,6 +840,8 @@ func SiteModelRouteTypeFromOutboundType(t outbound.OutboundType) SiteModelRouteT
 		return SiteModelRouteTypeVolcengine
 	case outbound.OutboundTypeOpenAIEmbedding:
 		return SiteModelRouteTypeOpenAIEmbedding
+	case outbound.OutboundTypeRerank:
+		return SiteModelRouteTypeRerank
 	default:
 		return SiteModelRouteTypeOpenAIChat
 	}
@@ -829,7 +850,7 @@ func SiteModelRouteTypeFromOutboundType(t outbound.OutboundType) SiteModelRouteT
 func (p SitePlatform) Validate() error {
 	switch p {
 	case SitePlatformNewAPI, SitePlatformAnyRouter, SitePlatformOneAPI, SitePlatformOneHub, SitePlatformDoneHub,
-		SitePlatformSub2API, SitePlatformAPI:
+		SitePlatformSub2API, SitePlatformAPI, SitePlatformSiliconFlow, SitePlatformOther:
 		return nil
 	default:
 		return fmt.Errorf("unsupported site platform: %s", p)

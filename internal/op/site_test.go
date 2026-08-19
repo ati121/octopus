@@ -854,7 +854,7 @@ func TestSiteImportAllAPIHubImportsAndUpdatesAccounts(t *testing.T) {
 	}
 
 	var compatSite model.Site
-	if err := dbpkg.GetDB().Where("platform = ? AND base_url = ?", model.SitePlatformAPI, "https://compat.example.com").First(&compatSite).Error; err != nil {
+	if err := dbpkg.GetDB().Where("platform = ? AND base_url = ?", model.SitePlatformOther, "https://compat.example.com").First(&compatSite).Error; err != nil {
 		t.Fatalf("query compat site failed: %v", err)
 	}
 

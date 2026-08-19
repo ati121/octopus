@@ -19,6 +19,7 @@ const (
 	APIFormatOpenAIResponse        APIFormat = "openai/responses"
 	APIFormatOpenAIImageGeneration APIFormat = "openai/image_generation"
 	APIFormatOpenAIEmbedding       APIFormat = "openai/embeddings"
+	APIFormatRerank                APIFormat = "rerank"
 	APIFormatGeminiContents        APIFormat = "gemini/contents"
 	APIFormatAnthropicMessage      APIFormat = "anthropic/messages"
 	APIFormatAiSDKText             APIFormat = "aisdk/text"
@@ -66,6 +67,12 @@ type InternalLLMRequest struct {
 	// EmbeddingEncodingFormat is the format of the embedding output.
 	// Can be "float" or "base64". Defaults to "float".
 	EmbeddingEncodingFormat *string `json:"embedding_encoding_format,omitempty"`
+
+	// RerankPayload preserves the complete rerank request object. Rerank
+	// providers expose query/document values in multiple text and multimodal
+	// shapes, so keeping the wire payload avoids dropping provider extensions.
+	// The outbound adapter only replaces the routed model name.
+	RerankPayload json.RawMessage `json:"-"`
 
 	// Model is the model ID used to generate the response.
 	Model string `json:"model" validator:"required"`
@@ -425,16 +432,23 @@ func (r *InternalLLMRequest) Validate() error {
 		}
 	}
 
-	// 检查是否是 embedding 请求
+	// 请求类型必须互斥。Rerank 使用原始 JSON 载荷承载 query、documents
+	// 及供应商扩展字段，因此单独作为第三种请求类型参与校验。
 	isEmbeddingRequest := r.EmbeddingInput != nil
 	isChatRequest := r.IsChatRequest()
+	isRerankRequest := r.IsRerankRequest()
 
-	if isEmbeddingRequest && isChatRequest {
-		return errors.New("cannot specify both messages and input")
+	requestTypeCount := 0
+	for _, present := range []bool{isEmbeddingRequest, isChatRequest, isRerankRequest} {
+		if present {
+			requestTypeCount++
+		}
 	}
-
-	if !isEmbeddingRequest && !isChatRequest {
-		return errors.New("either messages or input is required")
+	if requestTypeCount > 1 {
+		return errors.New("messages, embedding input, and rerank payload are mutually exclusive")
+	}
+	if requestTypeCount == 0 {
+		return errors.New("messages, embedding input, or rerank payload is required")
 	}
 
 	// 验证 embedding 请求
@@ -447,6 +461,10 @@ func (r *InternalLLMRequest) Validate() error {
 	// 验证 chat 请求
 	if isChatRequest && len(r.Messages) == 0 && len(r.RawInputItems) == 0 {
 		return errors.New("messages are required")
+	}
+
+	if isRerankRequest && !json.Valid(r.RerankPayload) {
+		return errors.New("rerank payload must be valid JSON")
 	}
 
 	if len(r.Messages) > 0 {
@@ -594,6 +612,11 @@ func (r *InternalLLMRequest) fillMissingToolCallIDsFromToolMessages() {
 // IsEmbeddingRequest returns true if this is an embedding request.
 func (r *InternalLLMRequest) IsEmbeddingRequest() bool {
 	return r.EmbeddingInput != nil
+}
+
+// IsRerankRequest returns true if this is a rerank request.
+func (r *InternalLLMRequest) IsRerankRequest() bool {
+	return len(r.RerankPayload) > 0
 }
 
 // IsChatRequest returns true if this is a chat completion request.
@@ -1426,6 +1449,10 @@ type InternalLLMResponse struct {
 	// It is an internal helper field for exact replay reconstruction and is not part of API output.
 	RawResponsesOutputItems json.RawMessage `json:"-"`
 
+	// RerankPayload preserves the provider rerank response so the originating
+	// rerank endpoint can return every result/meta extension unchanged.
+	RerankPayload json.RawMessage `json:"-"`
+
 	// A list of chat completion choices. Can be more than one if `n` is greater
 	// than 1.
 	// For chat completion responses, this field is required.
@@ -1484,6 +1511,11 @@ func (r *InternalLLMResponse) ClearHelpFields() {
 // IsEmbeddingResponse returns true if this is an embedding response.
 func (r *InternalLLMResponse) IsEmbeddingResponse() bool {
 	return len(r.EmbeddingData) > 0
+}
+
+// IsRerankResponse returns true if this is a rerank response.
+func (r *InternalLLMResponse) IsRerankResponse() bool {
+	return len(r.RerankPayload) > 0
 }
 
 // IsChatResponse returns true if this is a chat completion response.

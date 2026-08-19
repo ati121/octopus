@@ -6,6 +6,7 @@ import (
 	"github.com/bestruirui/octopus/internal/transformer/outbound/codex"
 	"github.com/bestruirui/octopus/internal/transformer/outbound/gemini"
 	"github.com/bestruirui/octopus/internal/transformer/outbound/openai"
+	"github.com/bestruirui/octopus/internal/transformer/outbound/rerank"
 	"github.com/bestruirui/octopus/internal/transformer/outbound/volcengine"
 )
 
@@ -21,11 +22,18 @@ const (
 	// OutboundTypeCodex 走 ChatGPT Codex 线路：协议与 OpenAI Responses 基本一致，
 	// 仅额外注入 Codex 特征请求头。追加在枚举末尾以保持已持久化的类型值稳定。
 	OutboundTypeCodex
+	// OutboundTypeRerank 追加在末尾，避免改变已持久化渠道类型的数值。
+	OutboundTypeRerank
 )
 
 // EmbeddingChannelTypes 定义支持 embedding 请求的 channel 类型集合
 var EmbeddingChannelTypes = map[OutboundType]bool{
 	OutboundTypeOpenAIEmbedding: true,
+}
+
+// RerankChannelTypes 定义支持 rerank 请求的 channel 类型集合。
+var RerankChannelTypes = map[OutboundType]bool{
+	OutboundTypeRerank: true,
 }
 
 // ChatChannelTypes 定义支持 chat 请求的 channel 类型集合
@@ -49,7 +57,8 @@ var outboundAPIFormats = map[OutboundType]model.APIFormat{
 	// Volcengine 走 OpenAI Responses 线路（内部内嵌 openai.ResponseOutbound）。
 	OutboundTypeVolcengine: model.APIFormatOpenAIResponse,
 	// Codex 走 OpenAI Responses 线路（内部内嵌 openai.ResponseOutbound，仅额外注入特征头）。
-	OutboundTypeCodex: model.APIFormatOpenAIResponse,
+	OutboundTypeCodex:  model.APIFormatOpenAIResponse,
+	OutboundTypeRerank: model.APIFormatRerank,
 }
 
 // APIFormatOf 返回出站 channel 类型对应的 provider APIFormat。
@@ -61,6 +70,11 @@ func APIFormatOf(channelType OutboundType) model.APIFormat {
 // IsEmbeddingChannelType 判断 channel 类型是否支持 embedding 请求
 func IsEmbeddingChannelType(channelType OutboundType) bool {
 	return EmbeddingChannelTypes[channelType]
+}
+
+// IsRerankChannelType 判断 channel 类型是否支持 rerank 请求。
+func IsRerankChannelType(channelType OutboundType) bool {
+	return RerankChannelTypes[channelType]
 }
 
 // IsChatChannelType 判断 channel 类型是否支持 chat 请求
@@ -76,6 +90,7 @@ var outboundFactories = map[OutboundType]func() model.Outbound{
 	OutboundTypeGemini:          func() model.Outbound { return &gemini.MessagesOutbound{} },
 	OutboundTypeVolcengine:      func() model.Outbound { return &volcengine.ResponseOutbound{} },
 	OutboundTypeCodex:           func() model.Outbound { return &codex.ResponseOutbound{} },
+	OutboundTypeRerank:          func() model.Outbound { return &rerank.Outbound{} },
 }
 
 func Get(outboundType OutboundType) model.Outbound {

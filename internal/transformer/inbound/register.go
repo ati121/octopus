@@ -3,6 +3,7 @@ package inbound
 import (
 	"github.com/bestruirui/octopus/internal/transformer/inbound/anthropic"
 	"github.com/bestruirui/octopus/internal/transformer/inbound/openai"
+	"github.com/bestruirui/octopus/internal/transformer/inbound/rerank"
 	"github.com/bestruirui/octopus/internal/transformer/model"
 )
 
@@ -13,6 +14,7 @@ const (
 	InboundTypeOpenAIResponse
 	InboundTypeAnthropic
 	InboundTypeOpenAIEmbedding
+	InboundTypeRerank
 )
 
 var inboundFactories = map[InboundType]func() model.Inbound{
@@ -20,6 +22,7 @@ var inboundFactories = map[InboundType]func() model.Inbound{
 	InboundTypeOpenAIResponse:  func() model.Inbound { return &openai.ResponseInbound{} },
 	InboundTypeOpenAIEmbedding: func() model.Inbound { return &openai.EmbeddingInbound{} },
 	InboundTypeAnthropic:       func() model.Inbound { return &anthropic.MessagesInbound{} },
+	InboundTypeRerank:          func() model.Inbound { return &rerank.Inbound{} },
 }
 
 func Get(inboundType InboundType) model.Inbound {

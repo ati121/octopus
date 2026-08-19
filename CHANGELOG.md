@@ -1,5 +1,12 @@
 # 更新日志
 
+## v1.21.0 - 2026-08-20
+
+- 新增 SiliconFlow 站点与 Rerank 协议支持。站点可自动识别 `api.siliconflow.cn`，API Key 保持原值并通过 `/v1/models` 同步模型；`Pro/BAAI/bge-m3` 自动归入 Embedding，`Pro/BAAI/bge-reranker-v2-m3` 自动归入 Rerank，并按 Chat、Embedding、Rerank 分别投影渠道。
+- 新增 `/v1/rerank` 网关入口和独立的 Rerank 入站、出站转换，支持 SiliconFlow / Cohere 风格的非流式 JSON 请求，使用 Bearer 鉴权，保留未建模请求与响应字段，并从 `meta.tokens`、`meta.billed_units` 解析用量；健康探测、渠道类型选择与前端配置同步支持 Rerank。
+- 站点平台新增“其他”分类。自动检测无法命中 API 直连、New API、AnyRouter、One API、One Hub、Done Hub、Sub2API 或 SiliconFlow 时，不再报错或默认归为 New API，而是按通用 OpenAI-compatible 直连站点处理：密钥原样使用、默认 OpenAI Chat、不支持自动签到且默认保持单协议投影；未知导入平台与自定义兼容 API 凭据同样归入“其他”。
+- Rerank 当前不支持流式请求，也不会在不同供应商的非兼容响应结构之间转换；“其他”平台不会猜测站点私有的登录、签到、余额或模型列表协议，需要时可通过默认协议、模型路由和协议路径覆盖手动调整。
+
 ## v1.20.1 - 2026-08-20
 
 - 修复商汤 SenseNova 的 Anthropic 兼容接口返回 `401 Authorization Not Found` 的问题。Octopus 现在会精确识别官方 `token.sensenova.cn` API 域名，并在普通转换、Anthropic 同协议直通和模型列表获取时，使用当前实际选中的渠道 Key 发送 `Authorization: Bearer`，不再发送商汤不识别的 `X-API-Key`；标准 Anthropic 渠道的鉴权方式保持不变。

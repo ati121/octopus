@@ -561,7 +561,7 @@ func stringSliceContainsFold(values []string, target string) bool {
 }
 
 func sitePlatformUsesV1ModelEndpoint(site *model.Site) bool {
-	if site.Platform == model.SitePlatformAPI {
+	if site.Platform == model.SitePlatformAPI || site.Platform == model.SitePlatformSiliconFlow || site.Platform == model.SitePlatformOther {
 		rt := site.ResolveDefaultRouteType()
 		return rt == model.SiteModelRouteTypeOpenAIChat || rt == ""
 	}
@@ -573,7 +573,13 @@ func buildSiteModels(names []string, groupKey string, source string) []model.Sit
 	models := make([]model.SiteModel, 0, len(names))
 	groupKey = model.NormalizeSiteGroupKey(groupKey)
 	for _, name := range names {
-		models = append(models, model.SiteModel{GroupKey: groupKey, ModelName: name, Source: source})
+		models = append(models, model.SiteModel{
+			GroupKey:    groupKey,
+			ModelName:   name,
+			Source:      source,
+			RouteType:   model.InferSiteModelRouteType(name),
+			RouteSource: model.SiteModelRouteSourceSyncInferred,
+		})
 	}
 	return models
 }
