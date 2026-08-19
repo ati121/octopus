@@ -50,6 +50,59 @@ func TestTransformRequestRawRewritesModel(t *testing.T) {
 	}
 }
 
+func TestSenseNovaRequestsUseBearerAuth(t *testing.T) {
+	message := "hello"
+	maxTokens := int64(16)
+	outbound := &MessageOutbound{}
+
+	standardReq, err := outbound.TransformRequest(
+		context.Background(),
+		&model.InternalLLMRequest{
+			Model:     "sensenova-6.8-flash-lite",
+			MaxTokens: &maxTokens,
+			Messages: []model.Message{{
+				Role:    "user",
+				Content: model.MessageContent{Content: &message},
+			}},
+		},
+		"https://token.sensenova.cn/v1",
+		"sense-standard-key",
+	)
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+	if got := standardReq.Header.Get("Authorization"); got != "Bearer sense-standard-key" {
+		t.Fatalf("standard Authorization = %q", got)
+	}
+	if got := standardReq.Header.Get("X-API-Key"); got != "" {
+		t.Fatalf("standard X-API-Key should be empty, got %q", got)
+	}
+	if got := standardReq.URL.String(); got != "https://token.sensenova.cn/v1/messages" {
+		t.Fatalf("standard URL = %q", got)
+	}
+
+	rawReq, err := outbound.TransformRequestRaw(
+		context.Background(),
+		[]byte(`{"model":"alias","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`),
+		"sensenova-6.8-flash-lite",
+		"https://token.sensenova.cn/v1",
+		"sense-raw-key",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("TransformRequestRaw() error = %v", err)
+	}
+	if got := rawReq.Header.Get("Authorization"); got != "Bearer sense-raw-key" {
+		t.Fatalf("raw Authorization = %q", got)
+	}
+	if got := rawReq.Header.Get("X-API-Key"); got != "" {
+		t.Fatalf("raw X-API-Key should be empty, got %q", got)
+	}
+	if got := rawReq.URL.String(); got != "https://token.sensenova.cn/v1/messages" {
+		t.Fatalf("raw URL = %q", got)
+	}
+}
+
 // TestCollectBetaHeadersAutomation covers A-H7 — each new signal drives a
 // specific anthropic-beta header. The test is table-driven so adding a
 // future trigger only needs a new row, not a whole test function.

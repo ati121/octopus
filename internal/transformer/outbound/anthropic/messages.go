@@ -13,6 +13,7 @@ import (
 
 	"github.com/samber/lo"
 
+	"github.com/bestruirui/octopus/internal/providercompat"
 	"github.com/bestruirui/octopus/internal/transformer/compat"
 	anthropicModel "github.com/bestruirui/octopus/internal/transformer/inbound/anthropic"
 	"github.com/bestruirui/octopus/internal/transformer/model"
@@ -68,7 +69,7 @@ func (o *MessageOutbound) TransformRequest(ctx context.Context, request *model.I
 		req.Header.Set("Accept", "application/json")
 	}
 	req.Header.Set("Anthropic-Version", "2023-06-01")
-	req.Header.Set("X-API-Key", key)
+	providercompat.SetAnthropicAuthHeader(req.Header, baseUrl, key)
 	if betas := collectAnthropicBetaHeaders(anthropicReq, request); len(betas) > 0 {
 		req.Header.Set("anthropic-beta", strings.Join(betas, ","))
 	}
@@ -129,7 +130,7 @@ func (o *MessageOutbound) TransformRequestRaw(ctx context.Context, rawBody []byt
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Anthropic-Version", "2023-06-01")
 	req.Header.Set("anthropic-beta", DefaultAnthropicPassthroughBeta)
-	req.Header.Set("X-API-Key", key)
+	providercompat.SetAnthropicAuthHeader(req.Header, baseUrl, key)
 
 	parsedUrl, err := url.Parse(strings.TrimSuffix(baseUrl, "/"))
 	if err != nil {
