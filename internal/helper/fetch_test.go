@@ -2,6 +2,7 @@ package helper
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -120,6 +121,45 @@ func TestFetchAnthropicModelsRejectsRepeatedLastID(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "repeated last_id") {
 		t.Fatalf("expected repeated last_id error, got %v", err)
+	}
+}
+
+type modelFetchRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f modelFetchRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestFetchAnthropicModelsUsesSenseNovaBearerAuth(t *testing.T) {
+	var authorization string
+	var apiKey string
+	client := &http.Client{Transport: modelFetchRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		authorization = req.Header.Get("Authorization")
+		apiKey = req.Header.Get("X-API-Key")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"sensenova-6.8-flash-lite"}],"has_more":false}`)),
+			Request:    req,
+		}, nil
+	})}
+
+	models, err := fetchAnthropicModels(client, context.Background(), model.Channel{
+		Type:     outbound.OutboundTypeAnthropic,
+		BaseUrls: []model.BaseUrl{{URL: "https://token.sensenova.cn/v1"}},
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "sense-model-key"}},
+	})
+	if err != nil {
+		t.Fatalf("fetchAnthropicModels() error = %v", err)
+	}
+	if len(models) != 1 || models[0] != "sensenova-6.8-flash-lite" {
+		t.Fatalf("models = %v", models)
+	}
+	if authorization != "Bearer sense-model-key" {
+		t.Fatalf("Authorization = %q", authorization)
+	}
+	if apiKey != "" {
+		t.Fatalf("X-API-Key should be empty, got %q", apiKey)
 	}
 }
 

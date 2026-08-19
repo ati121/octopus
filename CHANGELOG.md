@@ -1,5 +1,10 @@
 # 更新日志
 
+## v1.20.1 - 2026-08-20
+
+- 修复商汤 SenseNova 的 Anthropic 兼容接口返回 `401 Authorization Not Found` 的问题。Octopus 现在会精确识别官方 `token.sensenova.cn` API 域名，并在普通转换、Anthropic 同协议直通和模型列表获取时，使用当前实际选中的渠道 Key 发送 `Authorization: Bearer`，不再发送商汤不识别的 `X-API-Key`；标准 Anthropic 渠道的鉴权方式保持不变。
+- 升级后，曾为商汤渠道手工添加静态 `Authorization` 自定义请求头的用户应删除该临时配置，让多 Key 选择、禁用和轮换始终使用当前实际 Key。自建反向代理或非官方域名不会触发自动兼容，仍需自行配置请求头。
+
 ## v1.20.0 - 2026-08-17
 
 - 设置页「网络与服务」新增网关 Web Search 配置：可开关网关侧外部搜索，并配置单次请求的最大搜索重放轮数。默认 10 轮，支持 1-100 轮；上游模型只返回 `web_search` 工具调用时，网关访问 Bing 获取结果并回填重放，已由上游完成的原生搜索不走此流程。
