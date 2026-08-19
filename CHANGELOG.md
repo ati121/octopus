@@ -1,5 +1,9 @@
 # 更新日志
 
+## v1.21.1 - 2026-08-20
+
+- 修复请求转换到 Anthropic Messages 协议时，多段 `system` 文本内容被丢失的问题。此前转换器只读取字符串形式的系统提示，遇到内容块数组时会向上游发送空文本块，导致系统提示失效或被严格上游拒绝；现在会按原顺序展开全部文本块、保留各块的 `cache_control`，并忽略 Anthropic 系统提示不支持的非文本块，不再生成空系统提示。
+
 ## v1.21.0 - 2026-08-20
 
 - 新增 SiliconFlow 站点与 Rerank 协议支持。站点可自动识别 `api.siliconflow.cn`，API Key 保持原值并通过 `/v1/models` 同步模型；`Pro/BAAI/bge-m3` 自动归入 Embedding，`Pro/BAAI/bge-reranker-v2-m3` 自动归入 Rerank，并按 Chat、Embedding、Rerank 分别投影渠道。

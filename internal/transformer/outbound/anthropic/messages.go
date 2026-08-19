@@ -1008,35 +1008,37 @@ func resolveMaxTokens(req *model.InternalLLMRequest) int64 {
 }
 
 func convertSystemPrompt(req *model.InternalLLMRequest) *anthropicModel.SystemPrompt {
-	var systemMessages []model.Message
+	parts := make([]anthropicModel.SystemPromptPart, 0)
 	for _, msg := range req.Messages {
-		if msg.Role == "system" {
-			systemMessages = append(systemMessages, msg)
+		if msg.Role != "system" {
+			continue
+		}
+
+		if msg.Content.Content != nil && *msg.Content.Content != "" {
+			parts = append(parts, anthropicModel.SystemPromptPart{
+				Type:         "text",
+				Text:         *msg.Content.Content,
+				CacheControl: convertCacheControl(msg.CacheControl),
+			})
+			continue
+		}
+
+		for _, part := range msg.Content.MultipleContent {
+			if part.Type != "text" || part.Text == nil || *part.Text == "" {
+				continue
+			}
+			parts = append(parts, anthropicModel.SystemPromptPart{
+				Type:         "text",
+				Text:         *part.Text,
+				CacheControl: convertCacheControl(part.CacheControl),
+			})
 		}
 	}
 
-	if len(systemMessages) == 0 {
+	if len(parts) == 0 {
 		return nil
 	}
 
-	if len(systemMessages) == 1 {
-		return &anthropicModel.SystemPrompt{
-			MultiplePrompts: []anthropicModel.SystemPromptPart{{
-				Type:         "text",
-				Text:         lo.FromPtr(systemMessages[0].Content.Content),
-				CacheControl: convertCacheControl(systemMessages[0].CacheControl),
-			}},
-		}
-	}
-
-	parts := make([]anthropicModel.SystemPromptPart, 0, len(systemMessages))
-	for _, msg := range systemMessages {
-		parts = append(parts, anthropicModel.SystemPromptPart{
-			Type:         "text",
-			Text:         lo.FromPtr(msg.Content.Content),
-			CacheControl: convertCacheControl(msg.CacheControl),
-		})
-	}
 	return &anthropicModel.SystemPrompt{
 		MultiplePrompts: parts,
 	}
