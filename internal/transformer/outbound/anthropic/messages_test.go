@@ -103,6 +103,62 @@ func TestSenseNovaRequestsUseBearerAuth(t *testing.T) {
 	}
 }
 
+func TestConvertSystemPromptPreservesTextBlocks(t *testing.T) {
+	cache1h := &model.CacheControl{Type: model.CacheControlTypeEphemeral, TTL: model.CacheTTL1h}
+	cache5m := &model.CacheControl{Type: model.CacheControlTypeEphemeral, TTL: model.CacheTTL5m}
+	req := &model.InternalLLMRequest{Messages: []model.Message{
+		{
+			Role:         "system",
+			Content:      model.MessageContent{Content: stringPtr("字符串系统提示")},
+			CacheControl: cache5m,
+		},
+		{
+			Role: "system",
+			Content: model.MessageContent{MultipleContent: []model.MessageContentPart{
+				{Type: "text", Text: stringPtr("第一段系统提示"), CacheControl: cache1h},
+				{Type: "image_url", ImageURL: &model.ImageURL{URL: "https://example.com/system.png"}},
+				{Type: "text", Text: stringPtr("第二段系统提示"), CacheControl: cache5m},
+			}},
+		},
+		{Role: "user", Content: model.MessageContent{Content: stringPtr("hello")}},
+	}}
+
+	system := convertSystemPrompt(req)
+	if system == nil {
+		t.Fatal("expected system prompt")
+	}
+	got := system.MultiplePrompts
+	if len(got) != 3 {
+		t.Fatalf("system prompts = %+v, want three text blocks", got)
+	}
+	if got[0].Text != "字符串系统提示" || got[1].Text != "第一段系统提示" || got[2].Text != "第二段系统提示" {
+		t.Fatalf("system prompts = %+v, want text blocks in message order", got)
+	}
+	if got[0].CacheControl == nil || got[0].CacheControl.TTL != model.CacheTTL5m {
+		t.Fatalf("string system cache control = %+v, want 5m", got[0].CacheControl)
+	}
+	if got[1].CacheControl == nil || got[1].CacheControl.TTL != model.CacheTTL1h {
+		t.Fatalf("first block cache control = %+v, want 1h", got[1].CacheControl)
+	}
+	if got[2].CacheControl == nil || got[2].CacheControl.TTL != model.CacheTTL5m {
+		t.Fatalf("second block cache control = %+v, want 5m", got[2].CacheControl)
+	}
+}
+
+func TestConvertSystemPromptIgnoresUnsupportedBlocks(t *testing.T) {
+	req := &model.InternalLLMRequest{Messages: []model.Message{{
+		Role: "system",
+		Content: model.MessageContent{MultipleContent: []model.MessageContentPart{
+			{Type: "image_url", ImageURL: &model.ImageURL{URL: "https://example.com/system.png"}},
+			{Type: "text", Text: stringPtr("")},
+		}},
+	}}}
+
+	if got := convertSystemPrompt(req); got != nil {
+		t.Fatalf("system prompt = %+v, want nil when there are no text blocks", got)
+	}
+}
+
 // TestCollectBetaHeadersAutomation covers A-H7 — each new signal drives a
 // specific anthropic-beta header. The test is table-driven so adding a
 // future trigger only needs a new row, not a whole test function.
