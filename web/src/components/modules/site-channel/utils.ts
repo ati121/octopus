@@ -95,6 +95,8 @@ export function routeTypeLabel(routeType: SiteModelRouteType) {
             return 'Volcengine';
         case 'openai_embedding':
             return 'OpenAI Embedding';
+        case 'rerank':
+            return 'Rerank';
         default:
             return 'OpenAI Chat';
     }
@@ -129,6 +131,10 @@ export function platformLabel(platform: SiteChannelCard['platform']) {
             return 'Sub2API';
         case 'api':
             return 'API 直连';
+        case 'siliconflow':
+            return 'SiliconFlow';
+        case 'other':
+            return '其他';
         default:
             return platform;
     }

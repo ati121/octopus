@@ -41,6 +41,82 @@ func TestParseRequestReturnsBadRequestForInvalidPayload(t *testing.T) {
 	}
 }
 
+func TestParseRequestAcceptsRerankPayload(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	body := `{"model":"Pro/BAAI/bge-reranker-v2-m3","query":"octopus","documents":["first","second"],"top_n":1}`
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/rerank?trace=1", strings.NewReader(body))
+
+	rawBody, request, adapter, err := parseRequest(inbound.InboundTypeRerank, c)
+	if err != nil {
+		t.Fatalf("parseRequest returned error: %v", err)
+	}
+	if string(rawBody) != body {
+		t.Fatalf("expected raw request body to be preserved, got %s", rawBody)
+	}
+	if request.Model != "Pro/BAAI/bge-reranker-v2-m3" || request.RawAPIFormat != transformerModel.APIFormatRerank {
+		t.Fatalf("unexpected rerank request: %+v", request)
+	}
+	if request.Query.Get("trace") != "1" {
+		t.Fatalf("expected query parameters to be preserved, got %v", request.Query)
+	}
+	if adapter == nil {
+		t.Fatal("expected rerank inbound adapter")
+	}
+}
+
+func TestChannelTypeCompatibilitySeparatesChatEmbeddingAndRerank(t *testing.T) {
+	chatRequest := &transformerModel.InternalLLMRequest{
+		Model:    "chat-model",
+		Messages: []transformerModel.Message{{Role: "user"}},
+	}
+	embeddingRequest := &transformerModel.InternalLLMRequest{
+		Model:          "embedding-model",
+		EmbeddingInput: &transformerModel.EmbeddingInput{Multiple: []string{"hello"}},
+	}
+	rerankRequest := &transformerModel.InternalLLMRequest{
+		Model:         "rerank-model",
+		RerankPayload: json.RawMessage(`{"query":"q","documents":["d"]}`),
+	}
+
+	tests := []struct {
+		name        string
+		request     *transformerModel.InternalLLMRequest
+		channelType outbound.OutboundType
+		compatible  bool
+	}{
+		{name: "chat to chat", request: chatRequest, channelType: outbound.OutboundTypeOpenAIChat, compatible: true},
+		{name: "chat to embedding", request: chatRequest, channelType: outbound.OutboundTypeOpenAIEmbedding},
+		{name: "chat to rerank", request: chatRequest, channelType: outbound.OutboundTypeRerank},
+		{name: "embedding to embedding", request: embeddingRequest, channelType: outbound.OutboundTypeOpenAIEmbedding, compatible: true},
+		{name: "embedding to chat", request: embeddingRequest, channelType: outbound.OutboundTypeOpenAIChat},
+		{name: "embedding to rerank", request: embeddingRequest, channelType: outbound.OutboundTypeRerank},
+		{name: "rerank to rerank", request: rerankRequest, channelType: outbound.OutboundTypeRerank, compatible: true},
+		{name: "rerank to chat", request: rerankRequest, channelType: outbound.OutboundTypeOpenAIChat},
+		{name: "rerank to embedding", request: rerankRequest, channelType: outbound.OutboundTypeOpenAIEmbedding},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason := channelTypeIncompatibilityReason(tt.request, tt.channelType)
+			if tt.compatible && reason != "" {
+				t.Fatalf("expected compatible channel, got %q", reason)
+			}
+			if !tt.compatible && reason == "" {
+				t.Fatal("expected incompatible channel")
+			}
+		})
+	}
+}
+
+func TestIsEmptyUpstreamResponseAcceptsRerankPayload(t *testing.T) {
+	response := &transformerModel.InternalLLMResponse{RerankPayload: json.RawMessage(`{"results":[]}`)}
+	if isEmptyUpstreamResponse(response) {
+		t.Fatal("expected rerank payload to count as a non-empty upstream response")
+	}
+}
+
 func TestHandleStreamResponsePassthroughAnthropicPreservesRawSSE(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

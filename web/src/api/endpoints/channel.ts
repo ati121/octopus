@@ -15,6 +15,7 @@ export enum ChannelType {
     Volcengine = 4,
     OpenAIEmbedding = 5,
     Codex = 6,
+    Rerank = 7,
 }
 
 /**

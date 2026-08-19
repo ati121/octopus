@@ -1,6 +1,7 @@
 package sitesync
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bestruirui/octopus/internal/model"
@@ -42,6 +43,18 @@ func TestPickPreferredDetectedRouteType(t *testing.T) {
 			modelName: "gpt-4o-mini",
 			values:    []model.SiteModelRouteType{model.SiteModelRouteTypeOpenAIChat, model.SiteModelRouteTypeOpenAIResponse},
 			expected:  model.SiteModelRouteTypeOpenAIResponse,
+		},
+		{
+			name:      "reranker prefers rerank when available",
+			modelName: "Pro/BAAI/bge-reranker-v2-m3",
+			values:    []model.SiteModelRouteType{model.SiteModelRouteTypeOpenAIChat, model.SiteModelRouteTypeRerank},
+			expected:  model.SiteModelRouteTypeRerank,
+		},
+		{
+			name:      "embedding bge prefers embedding when available",
+			modelName: "Pro/BAAI/bge-m3",
+			values:    []model.SiteModelRouteType{model.SiteModelRouteTypeOpenAIChat, model.SiteModelRouteTypeOpenAIEmbedding},
+			expected:  model.SiteModelRouteTypeOpenAIEmbedding,
 		},
 	}
 
@@ -99,6 +112,12 @@ func TestBuildSiteModelRouteDetectionGuessesRouteFromModelName(t *testing.T) {
 			expected:               model.SiteModelRouteTypeOpenAIEmbedding,
 		},
 		{
+			name:                   "unmappable endpoint types fall back to rerank guess",
+			modelName:              "Pro/BAAI/bge-reranker-v2-m3",
+			supportedEndpointTypes: []string{"/vendor/custom"},
+			expected:               model.SiteModelRouteTypeRerank,
+		},
+		{
 			name:                   "unmappable endpoint types fall back to anthropic guess",
 			modelName:              "claude-3-5-sonnet",
 			supportedEndpointTypes: []string{"/vendor/custom"},
@@ -119,7 +138,7 @@ func TestBuildSiteModelRouteDetectionGuessesRouteFromModelName(t *testing.T) {
 				tt.enableGroups,
 				tt.supportedEndpointTypes,
 				"/api/pricing",
-				map[string]struct{}{tt.modelName: {}},
+				map[string]struct{}{strings.ToLower(tt.modelName): {}},
 			)
 			if !ok {
 				t.Fatalf("expected guessed detection to be produced")
@@ -142,6 +161,15 @@ func TestBuildSiteModelRouteDetectionGuessesRouteFromModelName(t *testing.T) {
 				t.Fatalf("expected guessed metadata route type %q, got %q", tt.expected, metadata.RouteType)
 			}
 		})
+	}
+}
+
+func TestMapSupportedEndpointTypeRecognizesRerank(t *testing.T) {
+	for _, value := range []string{"rerank", "reranker", "/v1/rerank"} {
+		routeType, ok := mapSupportedEndpointType(value)
+		if !ok || routeType != model.SiteModelRouteTypeRerank {
+			t.Fatalf("expected %q to map to rerank, got %q ok=%v", value, routeType, ok)
+		}
 	}
 }
 

@@ -973,6 +973,7 @@
             "typeGemini": "Gemini",
             "typeVolcengine": "Volcengine",
             "typeCodex": "Codex",
+            "typeRerank": "Rerank",
             "autoSync": "Auto Sync",
             "skipHealthProbe": "Skip health probes",
             "autoGroup": "Auto Group",

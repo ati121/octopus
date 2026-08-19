@@ -123,6 +123,12 @@ func buildProbeInternalRequest(channelType outbound.OutboundType, modelName stri
 	one := int64(1)
 
 	switch channelType {
+	case outbound.OutboundTypeRerank:
+		return &transformerModel.InternalLLMRequest{
+			Model:         modelName,
+			RawAPIFormat:  transformerModel.APIFormatRerank,
+			RerankPayload: []byte(`{"model":"probe","query":"ping","documents":["ping"]}`),
+		}
 	case outbound.OutboundTypeOpenAIEmbedding:
 		return &transformerModel.InternalLLMRequest{
 			Model:        modelName,

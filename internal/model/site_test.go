@@ -60,6 +60,8 @@ func TestNormalizeSiteSyncTokenValueForPlatform(t *testing.T) {
 		{name: "api keeps verbatim", platform: SitePlatformAPI, input: "abc123", expected: "abc123"},
 		{name: "api keeps verbatim 2", platform: SitePlatformAPI, input: "AIzaXXXX", expected: "AIzaXXXX"},
 		{name: "api keeps verbatim and trims", platform: SitePlatformAPI, input: "  sk-ant-abc  ", expected: "sk-ant-abc"},
+		{name: "siliconflow keeps verbatim", platform: SitePlatformSiliconFlow, input: "  sf-secret  ", expected: "sf-secret"},
+		{name: "other keeps verbatim", platform: SitePlatformOther, input: "  sensenova-secret  ", expected: "sensenova-secret"},
 	}
 
 	for _, tt := range tests {
@@ -123,6 +125,11 @@ func TestValidateSiteRouteBaseURLs(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "valid rerank override",
+			items:   []SiteRouteBaseURL{{RouteType: SiteModelRouteTypeRerank, BaseURL: "https://api.siliconflow.cn/v1"}},
+			wantErr: false,
+		},
+		{
 			name:    "unsupported route type",
 			items:   []SiteRouteBaseURL{{RouteType: SiteModelRouteTypeUnknown, BaseURL: "https://example.com/v1"}},
 			wantErr: true,
@@ -160,6 +167,7 @@ func TestCompactSiteModelRouteTypeName(t *testing.T) {
 		{name: "anthropic", routeType: SiteModelRouteTypeAnthropic, expected: "Anthropic"},
 		{name: "gemini", routeType: SiteModelRouteTypeGemini, expected: "Gemini"},
 		{name: "embedding", routeType: SiteModelRouteTypeOpenAIEmbedding, expected: "Embedding"},
+		{name: "rerank", routeType: SiteModelRouteTypeRerank, expected: "Rerank"},
 		{name: "unknown", routeType: SiteModelRouteTypeUnknown, expected: "Unsupported"},
 	}
 
@@ -181,6 +189,9 @@ func TestInferSiteModelRouteType(t *testing.T) {
 		{name: "anthropic models stay anthropic", modelName: "claude-3-5-sonnet", expected: SiteModelRouteTypeAnthropic},
 		{name: "gemini models stay gemini", modelName: "gemini-2.0-flash", expected: SiteModelRouteTypeGemini},
 		{name: "embedding models use embedding route", modelName: "text-embedding-3-large", expected: SiteModelRouteTypeOpenAIEmbedding},
+		{name: "siliconflow bge m3 uses embedding route", modelName: "Pro/BAAI/bge-m3", expected: SiteModelRouteTypeOpenAIEmbedding},
+		{name: "siliconflow bge reranker uses rerank route", modelName: "Pro/BAAI/bge-reranker-v2-m3", expected: SiteModelRouteTypeRerank},
+		{name: "generic rerank models use rerank route", modelName: "vendor-rerank-v1", expected: SiteModelRouteTypeRerank},
 		{name: "gpt 4o defaults to chat without metadata", modelName: "gpt-4o-mini", expected: SiteModelRouteTypeOpenAIChat},
 		{name: "gpt 4.1 defaults to chat without metadata", modelName: "gpt-4.1", expected: SiteModelRouteTypeOpenAIChat},
 		{name: "gpt 5 defaults to chat without metadata", modelName: "gpt-5-mini", expected: SiteModelRouteTypeOpenAIChat},
@@ -195,5 +206,20 @@ func TestInferSiteModelRouteType(t *testing.T) {
 				t.Fatalf("expected %q, got %q", tt.expected, actual)
 			}
 		})
+	}
+}
+
+func TestShouldSplitSiteChannelRoutesForSiliconFlow(t *testing.T) {
+	if ShouldSplitSiteChannelRoutes(SitePlatformAPI) {
+		t.Fatal("expected generic API platform to keep its single-protocol channel behavior")
+	}
+	if ShouldSplitSiteChannelRoutes(SitePlatformOther) {
+		t.Fatal("expected Other platform to keep its single-protocol channel behavior")
+	}
+	if !ShouldSplitSiteChannelRoutes(SitePlatformSiliconFlow) {
+		t.Fatal("expected SiliconFlow to split projected channels by route type")
+	}
+	if err := SitePlatformOther.Validate(); err != nil {
+		t.Fatalf("expected Other platform to validate: %v", err)
 	}
 }

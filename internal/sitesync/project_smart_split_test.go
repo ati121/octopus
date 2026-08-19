@@ -59,6 +59,20 @@ func TestShouldSplitForAccount(t *testing.T) {
 			reason:   "所有模型都是自动推断的同一类型，不需要拆分",
 		},
 		{
+			name: "Other platform with mixed auto-inferred route types - no split",
+			site: &model.Site{
+				Platform: model.SitePlatformOther,
+			},
+			account: &model.SiteAccount{
+				Models: []model.SiteModel{
+					{ModelName: "SenseChat-5", RouteType: model.SiteModelRouteTypeOpenAIChat, ManualOverride: false, Disabled: false},
+					{ModelName: "sensenova-embedding", RouteType: model.SiteModelRouteTypeOpenAIEmbedding, ManualOverride: false, Disabled: false},
+				},
+			},
+			expected: false,
+			reason:   "其他平台默认保持单协议渠道，自动推断不会强制拆分",
+		},
+		{
 			name: "API platform with single manual override route type - no split",
 			site: &model.Site{
 				Platform: model.SitePlatformAPI,

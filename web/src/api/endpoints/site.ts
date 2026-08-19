@@ -12,6 +12,8 @@ export enum SitePlatform {
   DoneHub = "done-hub",
   Sub2API = "sub2api",
   API = "api",
+  SiliconFlow = "siliconflow",
+  Other = "other",
 }
 
 export enum SiteCredentialType {

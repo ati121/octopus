@@ -557,6 +557,14 @@ func ChannelLLMList(ctx context.Context) ([]model.LLMChannel, error) {
 				endpointType = "anthropic"
 			case model2.OutboundTypeGemini:
 				endpointType = "gemini"
+			case model2.OutboundTypeOpenAIResponse:
+				endpointType = "openai_response"
+			case model2.OutboundTypeVolcengine:
+				endpointType = "volcengine"
+			case model2.OutboundTypeOpenAIEmbedding:
+				endpointType = "openai_embedding"
+			case model2.OutboundTypeRerank:
+				endpointType = "rerank"
 			default:
 				endpointType = "openai"
 			}

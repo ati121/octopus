@@ -51,22 +51,32 @@ type metAPIImportAccountData struct {
 }
 
 var supportedImportPlatforms = map[string]model.SitePlatform{
-	"new-api":   model.SitePlatformNewAPI,
-	"newapi":    model.SitePlatformNewAPI,
-	"one-api":   model.SitePlatformOneAPI,
-	"oneapi":    model.SitePlatformOneAPI,
-	"anyrouter": model.SitePlatformAnyRouter,
-	"one-hub":   model.SitePlatformOneHub,
-	"onehub":    model.SitePlatformOneHub,
-	"done-hub":  model.SitePlatformDoneHub,
-	"donehub":   model.SitePlatformDoneHub,
-	"sub2api":   model.SitePlatformSub2API,
-	"openai":    model.SitePlatformAPI,
-	"anthropic": model.SitePlatformAPI,
-	"claude":    model.SitePlatformAPI,
-	"google":    model.SitePlatformAPI,
-	"gemini":    model.SitePlatformAPI,
-	"api":       model.SitePlatformAPI,
+	"new-api":           model.SitePlatformNewAPI,
+	"newapi":            model.SitePlatformNewAPI,
+	"new api":           model.SitePlatformNewAPI,
+	"one-api":           model.SitePlatformOneAPI,
+	"oneapi":            model.SitePlatformOneAPI,
+	"one api":           model.SitePlatformOneAPI,
+	"anyrouter":         model.SitePlatformAnyRouter,
+	"any router":        model.SitePlatformAnyRouter,
+	"one-hub":           model.SitePlatformOneHub,
+	"onehub":            model.SitePlatformOneHub,
+	"one hub":           model.SitePlatformOneHub,
+	"done-hub":          model.SitePlatformDoneHub,
+	"donehub":           model.SitePlatformDoneHub,
+	"done hub":          model.SitePlatformDoneHub,
+	"sub2api":           model.SitePlatformSub2API,
+	"siliconflow":       model.SitePlatformSiliconFlow,
+	"silicon-flow":      model.SitePlatformSiliconFlow,
+	"silicon flow":      model.SitePlatformSiliconFlow,
+	"other":             model.SitePlatformOther,
+	"openai-compatible": model.SitePlatformOther,
+	"openai":            model.SitePlatformAPI,
+	"anthropic":         model.SitePlatformAPI,
+	"claude":            model.SitePlatformAPI,
+	"google":            model.SitePlatformAPI,
+	"gemini":            model.SitePlatformAPI,
+	"api":               model.SitePlatformAPI,
 }
 
 var unsupportedImportHints = []string{
@@ -77,7 +87,9 @@ var unsupportedImportHints = []string{
 }
 
 var directImportPlatforms = map[model.SitePlatform]struct{}{
-	model.SitePlatformAPI: {},
+	model.SitePlatformAPI:         {},
+	model.SitePlatformSiliconFlow: {},
+	model.SitePlatformOther:       {},
 }
 
 func SiteImportAllAPIHub(ctx context.Context, body []byte) (*model.AllAPIHubImportResult, []int, error) {
@@ -1073,9 +1085,9 @@ func resolveImportedPlatform(rawPlatform any, rawURL string) (model.SitePlatform
 		return model.SitePlatformAnyRouter, true
 	}
 	if value == "" {
-		return model.SitePlatformNewAPI, true
+		return model.SitePlatformOther, true
 	}
-	return model.SitePlatformNewAPI, true
+	return model.SitePlatformOther, true
 }
 
 func resolveImportedProfilePlatform(rawType any, baseURL string) (model.SitePlatform, bool) {
@@ -1086,14 +1098,14 @@ func resolveImportedProfilePlatform(rawType any, baseURL string) (model.SitePlat
 	}
 
 	switch strings.ToLower(strings.TrimSpace(asString(rawType))) {
-	case "openai", "openai-compatible", "":
+	case "openai":
 		return model.SitePlatformAPI, true
 	case "anthropic":
 		return model.SitePlatformAPI, true
-	case "google":
+	case "google", "gemini":
 		return model.SitePlatformAPI, true
 	default:
-		return model.SitePlatformAPI, true
+		return model.SitePlatformOther, true
 	}
 }
 
@@ -1113,6 +1125,8 @@ func detectSupportedPlatform(values ...any) (model.SitePlatform, bool) {
 	}
 
 	switch {
+	case strings.Contains(combined, "api.siliconflow.cn"), strings.Contains(combined, "siliconflow"), strings.Contains(combined, "silicon-flow"), strings.Contains(combined, "silicon flow"):
+		return model.SitePlatformSiliconFlow, false
 	case strings.Contains(combined, "api.openai.com"):
 		return model.SitePlatformAPI, false
 	case strings.Contains(combined, "api.anthropic.com"), strings.Contains(combined, "anthropic.com/v1"):
@@ -1121,16 +1135,18 @@ func detectSupportedPlatform(values ...any) (model.SitePlatform, bool) {
 		strings.Contains(combined, "googleapis.com/v1beta/openai"),
 		strings.Contains(combined, "gemini.google.com"):
 		return model.SitePlatformAPI, false
-	case strings.Contains(combined, "anyrouter"):
+	case strings.Contains(combined, "anyrouter"), strings.Contains(combined, "any router"):
 		return model.SitePlatformAnyRouter, false
-	case strings.Contains(combined, "donehub"), strings.Contains(combined, "done-hub"):
+	case strings.Contains(combined, "donehub"), strings.Contains(combined, "done-hub"), strings.Contains(combined, "done hub"):
 		return model.SitePlatformDoneHub, false
-	case strings.Contains(combined, "onehub"), strings.Contains(combined, "one-hub"):
+	case strings.Contains(combined, "onehub"), strings.Contains(combined, "one-hub"), strings.Contains(combined, "one hub"):
 		return model.SitePlatformOneHub, false
-	case strings.Contains(combined, "oneapi"), strings.Contains(combined, "one-api"):
+	case strings.Contains(combined, "oneapi"), strings.Contains(combined, "one-api"), strings.Contains(combined, "one api"):
 		return model.SitePlatformOneAPI, false
 	case strings.Contains(combined, "sub2api"):
 		return model.SitePlatformSub2API, false
+	case strings.Contains(combined, "newapi"), strings.Contains(combined, "new-api"), strings.Contains(combined, "new api"):
+		return model.SitePlatformNewAPI, false
 	}
 	return "", false
 }
@@ -1142,7 +1158,7 @@ func isDirectImportPlatform(platform model.SitePlatform) bool {
 
 func platformSupportsCheckin(platform model.SitePlatform) bool {
 	switch platform {
-	case model.SitePlatformDoneHub, model.SitePlatformSub2API, model.SitePlatformAPI:
+	case model.SitePlatformDoneHub, model.SitePlatformSub2API, model.SitePlatformAPI, model.SitePlatformSiliconFlow, model.SitePlatformOther:
 		return false
 	default:
 		return true

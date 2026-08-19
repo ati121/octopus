@@ -16,6 +16,7 @@ var urlPlatformHints = []struct {
 	platform         model.SitePlatform
 	defaultRouteType model.SiteModelRouteType
 }{
+	{"api.siliconflow.cn", model.SitePlatformSiliconFlow, model.SiteModelRouteTypeOpenAIChat},
 	{"api.openai.com", model.SitePlatformAPI, model.SiteModelRouteTypeOpenAIChat},
 	{"api.anthropic.com", model.SitePlatformAPI, model.SiteModelRouteTypeAnthropic},
 	{"anthropic.com/v1", model.SitePlatformAPI, model.SiteModelRouteTypeAnthropic},
@@ -64,7 +65,7 @@ func DetectPlatform(ctx context.Context, rawURL string) (model.SitePlatform, mod
 		return platform, "", nil
 	}
 
-	return "", "", fmt.Errorf("could not detect platform for %s", normalizedURL)
+	return model.SitePlatformOther, model.SiteModelRouteTypeOpenAIChat, nil
 }
 
 func detectByPageTitle(ctx context.Context, baseURL string) (model.SitePlatform, error) {
