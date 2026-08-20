@@ -1,6 +1,7 @@
 'use client';
 
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslations } from 'next-intl';
 import { motion } from 'motion/react';
@@ -69,6 +70,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/animate-ui/components/animate/tooltip';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/components/common/Toast';
 import { cn, formatCount, formatMoney } from '@/lib/utils';
@@ -952,8 +954,17 @@ type SiteChannelTableHandle = { scrollToModelKey: (key: string) => void };
 // 10 columns: checkbox / 模型 / 分组 / 端点格式 / 来源 / Key / 状态 / 最近请求 / 渠道 / 操作.
 // Shared by the sticky header row and every body row so columns stay aligned, and
 // the explicit widths drive horizontal scroll inside the min-w-[74rem] block.
-const SITE_CHANNEL_GRID_TEMPLATE =
-    '3rem minmax(13rem,1.4fr) minmax(10rem,1fr) 9rem 6rem 5.5rem 7.5rem 9rem 6rem 7.5rem';
+const MODEL_COLUMN_MIN_WIDTH = 208;
+const MODEL_COLUMN_MAX_WIDTH = 560;
+
+function clampModelColumnWidth(width: number) {
+    return Math.min(MODEL_COLUMN_MAX_WIDTH, Math.max(MODEL_COLUMN_MIN_WIDTH, width));
+}
+
+function siteChannelGridTemplate(modelColumnWidth: number) {
+    const width = clampModelColumnWidth(modelColumnWidth);
+    return `3rem ${width}px minmax(10rem,1fr) 9rem 6rem 5.5rem 7.5rem 9rem 6rem 7.5rem`;
+}
 
 // Match VirtualizedGrid: measure layout height (offsetHeight) rather than the
 // transformed visual height, so animations/scale don't shrink row measurements.
@@ -971,11 +982,13 @@ const SiteChannelTableView = forwardRef<
         pendingModelKeys: Set<string>;
         selectedModelKeys: Set<string>;
         compactMode: boolean;
+        modelColumnWidth: number;
         tableSort: SiteChannelTableSort;
         highlightedModelKey: string | null;
         onToggleModelSelection: (modelKey: string, checked: boolean) => void;
         onToggleAllVisible: (checked: boolean) => void;
         onSortChange: (field: SiteChannelTableSortField) => void;
+        onModelColumnWidthChange: (width: number) => void;
         onMoveModel: (model: SiteModelView, routeType: SiteModelRouteType) => void;
         onToggleDisabled: (model: SiteModelView) => void;
         onDeleteManualModel: (model: SiteModelView) => void;
@@ -988,11 +1001,13 @@ const SiteChannelTableView = forwardRef<
     pendingModelKeys,
     selectedModelKeys,
     compactMode,
+    modelColumnWidth,
     tableSort,
     highlightedModelKey,
     onToggleModelSelection,
     onToggleAllVisible,
     onSortChange,
+    onModelColumnWidthChange,
     onMoveModel,
     onToggleDisabled,
     onDeleteManualModel,
@@ -1046,6 +1061,47 @@ const SiteChannelTableView = forwardRef<
     );
 
     const cellPaddingClass = compactMode ? 'py-2' : 'py-3';
+    const [liveModelColumnWidth, setLiveModelColumnWidth] = useState(() => clampModelColumnWidth(modelColumnWidth));
+    const dragWidthRef = useRef(liveModelColumnWidth);
+
+    useEffect(() => {
+        setLiveModelColumnWidth(clampModelColumnWidth(modelColumnWidth));
+    }, [modelColumnWidth]);
+
+    const gridTemplate = siteChannelGridTemplate(liveModelColumnWidth);
+
+    const resizeModelColumn = (event: ReactPointerEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        const startX = event.clientX;
+        const startWidth = clampModelColumnWidth(liveModelColumnWidth);
+        dragWidthRef.current = startWidth;
+        const previousCursor = document.body.style.cursor;
+        const previousUserSelect = document.body.style.userSelect;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        const handleMove = (moveEvent: PointerEvent) => {
+            const nextWidth = clampModelColumnWidth(startWidth + moveEvent.clientX - startX);
+            dragWidthRef.current = nextWidth;
+            setLiveModelColumnWidth(nextWidth);
+        };
+        const stopResize = () => {
+            document.body.style.cursor = previousCursor;
+            document.body.style.userSelect = previousUserSelect;
+            document.removeEventListener('pointermove', handleMove);
+            document.removeEventListener('pointerup', handleUp);
+            document.removeEventListener('pointercancel', handleCancel);
+        };
+        const handleUp = () => {
+            stopResize();
+            onModelColumnWidthChange(dragWidthRef.current);
+        };
+        const handleCancel = () => stopResize();
+
+        document.addEventListener('pointermove', handleMove);
+        document.addEventListener('pointerup', handleUp, { once: true });
+        document.addEventListener('pointercancel', handleCancel, { once: true });
+    };
 
     return (
         <div
@@ -1057,7 +1113,7 @@ const SiteChannelTableView = forwardRef<
                 <div
                     role="row"
                     className="sticky top-0 z-10 grid items-center gap-2 border-b border-border/70 bg-card px-4 py-2.5"
-                    style={{ gridTemplateColumns: SITE_CHANNEL_GRID_TEMPLATE }}
+                    style={{ gridTemplateColumns: gridTemplate }}
                 >
                     <div role="columnheader">
                         <SelectionCheckbox
@@ -1067,7 +1123,21 @@ const SiteChannelTableView = forwardRef<
                             onCheckedChange={onToggleAllVisible}
                         />
                     </div>
-                    <div role="columnheader">{renderSortHead('model_name', '模型')}</div>
+                    <div role="columnheader" className="relative min-w-0 pr-2">
+                        {renderSortHead('model_name', '模型')}
+                        <button
+                            type="button"
+                            aria-label="调整模型列宽"
+                            title="拖动调整模型列宽"
+                            onPointerDown={resizeModelColumn}
+                            onKeyDown={(event) => {
+                                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                                event.preventDefault();
+                                onModelColumnWidthChange(clampModelColumnWidth(liveModelColumnWidth + (event.key === 'ArrowRight' ? 16 : -16)));
+                            }}
+                            className="absolute -right-1.5 -top-2.5 z-20 h-[calc(100%+1.25rem)] w-3 cursor-col-resize rounded-sm border-0 bg-transparent p-0 outline-none transition hover:bg-primary/15 focus-visible:bg-primary/20"
+                        />
+                    </div>
                     <div role="columnheader">{renderSortHead('group_name', '分组')}</div>
                     <div role="columnheader">{renderSortHead('route_type', '端点格式')}</div>
                     <div role="columnheader" className="text-xs font-medium text-muted-foreground">来源</div>
@@ -1103,7 +1173,7 @@ const SiteChannelTableView = forwardRef<
                                 )}
                                 style={{
                                     top: `${virtualRow.start}px`,
-                                    gridTemplateColumns: SITE_CHANNEL_GRID_TEMPLATE,
+                                    gridTemplateColumns: gridTemplate,
                                 }}
                             >
                                 <div role="cell" className="min-w-0">
@@ -1119,7 +1189,16 @@ const SiteChannelTableView = forwardRef<
                                         <ModelAvatar size={18} />
                                         <div className="min-w-0 flex-1">
                                             <div className="flex min-w-0 items-center gap-1.5">
-                                                <span className="min-w-0 truncate text-sm font-medium">{model.model_name}</span>
+                                                <Tooltip side="top" align="start">
+                                                    <TooltipTrigger asChild>
+                                                        <span className="block min-w-0 truncate text-sm font-medium">{model.model_name}</span>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent
+                                                        className="max-w-[min(36rem,calc(100vw-2rem))] break-all"
+                                                    >
+                                                        {model.model_name}
+                                                    </TooltipContent>
+                                                </Tooltip>
                                                 {model.source === 'manual' ? (
                                                     <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px] border-primary/30 bg-primary/10 text-primary">自定义</Badge>
                                                 ) : null}
@@ -1315,10 +1394,17 @@ function SiteAccountPanel({
     const tableHandleRef = useRef<SiteChannelTableHandle | null>(null);
     const panelKey = `${siteId}:${account.account_id}`;
 
-    const panelPreferences = useSiteChannelPanelViewStore(
-        (state) => state.panels[panelKey] ?? DEFAULT_SITE_CHANNEL_PANEL_PREFERENCES,
-    );
+    const storedPanelPreferences = useSiteChannelPanelViewStore((state) => state.panels[panelKey]);
+    const panelPreferences = useMemo(() => ({
+        ...DEFAULT_SITE_CHANNEL_PANEL_PREFERENCES,
+        ...storedPanelPreferences,
+        tableSort: {
+            ...DEFAULT_SITE_CHANNEL_PANEL_PREFERENCES.tableSort,
+            ...storedPanelPreferences?.tableSort,
+        },
+    }), [storedPanelPreferences]);
     const setCompactMode = useSiteChannelPanelViewStore((state) => state.setCompactMode);
+    const setModelColumnWidth = useSiteChannelPanelViewStore((state) => state.setModelColumnWidth);
     const setQuickFilters = useSiteChannelPanelViewStore((state) => state.setQuickFilters);
     const setTableSort = useSiteChannelPanelViewStore((state) => state.setTableSort);
 
@@ -2616,11 +2702,13 @@ function SiteAccountPanel({
                         pendingModelKeys={pendingModelKeys}
                         selectedModelKeys={selectedModelKeys}
                         compactMode={panelPreferences.compactMode}
+                        modelColumnWidth={panelPreferences.modelColumnWidth}
                         tableSort={panelPreferences.tableSort}
                         highlightedModelKey={highlightedModelKey}
                         onToggleModelSelection={handleToggleModelSelection}
                         onToggleAllVisible={handleToggleAllVisible}
                         onSortChange={handleSortChange}
+                        onModelColumnWidthChange={(width) => setModelColumnWidth(panelKey, width)}
                         onMoveModel={(model, nextRouteType) => applyRouteChange([model], nextRouteType)}
                         onToggleDisabled={handleToggleDisabled}
                         onDeleteManualModel={handleDeleteManualModel}
