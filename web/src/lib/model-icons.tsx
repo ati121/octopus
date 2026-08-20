@@ -84,6 +84,8 @@ function createOfficialOrgAvatar(path: string, fallbackColor: string) {
 }
 
 const OFFICIAL_ORG_AVATARS = {
+    agnes: createOfficialOrgAvatar('/model-icons/agnes.png', '#3248AF'),
+    mimo: createOfficialOrgAvatar('/model-icons/mimo.png', '#111111'),
     paddlepaddle: createOfficialOrgAvatar('/model-icons/paddlepaddle.png', '#2D9CDB'),
     openmoss: createOfficialOrgAvatar('/model-icons/openmoss.png', '#334155'),
     inclusionai: createOfficialOrgAvatar('/model-icons/inclusionai.png', '#111827'),
@@ -97,6 +99,10 @@ const OFFICIAL_ORG_AVATARS = {
  */
 const MODEL_ICON_PATTERNS: ModelIconConfig[] = [
     // Official model organizations without a bundled LobeHub icon.
+    // Agnes AI gateway / first-party models (agnes-ai.com).
+    { prefixes: ['agnes', 'pavo', 'echo'], Avatar: OFFICIAL_ORG_AVATARS.agnes, color: '#3248AF' },
+    // Xiaomi MiMo series.
+    { prefixes: ['mimo', 'xiaomi'], Avatar: OFFICIAL_ORG_AVATARS.mimo, color: '#111111' },
     { prefixes: ['paddlepaddle'], Avatar: OFFICIAL_ORG_AVATARS.paddlepaddle, color: '#2D9CDB' },
     { prefixes: ['fnlp', 'moss'], Avatar: OFFICIAL_ORG_AVATARS.openmoss, color: '#334155' },
     { prefixes: ['inclusionai', 'ling-'], Avatar: OFFICIAL_ORG_AVATARS.inclusionai, color: '#111827' },

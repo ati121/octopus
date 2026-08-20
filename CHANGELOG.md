@@ -3,6 +3,7 @@
 ## v1.22.0 - 2026-08-21
 
 - 改进模型图标识别：未匹配模型不再统一误用 OpenAI 图标，而是继续交给 `@lobehub/icons` 识别或显示中性模型图标；支持逐段识别 `Pro/BAAI/*`、`LoRA/Qwen/*` 等多层模型路径，并补充 BAAI、PaddlePaddle、FunAudioLLM、OpenMOSS、InclusionAI、Nex-AGI、TeleAI、Tongyi-MAI、Wan-AI、LongCat、Kolors、SenseNova、CosyVoice、SenseVoice 与腾讯混元 3（`hy3`）等模型族。缺少内置图标的官方组织头像已作为本地静态资源随版本发布，不依赖部署环境在线访问 GitHub。
+- 补齐 Agnes AI（`agnes` / `pavo` / `echo`）与小米 MiMo（`mimo` / `xiaomi`）模型图标：将官网/官方组织头像缓存为本地静态资源并加入前缀识别，覆盖如 `agnes-2.5-flash`、`MiMo-7B-RL` 等命名。
 - 改进站点渠道模型表格：模型名称截断时可悬停查看完整名称；模型列支持鼠标拖拽和键盘方向键调整宽度，限制在 208-560 像素，并按站点账号持久化；升级后会为旧版页面偏好自动补齐默认列宽。拖拽过程中仅更新即时布局，结束时才写入本地偏好，取消拖拽也会恢复页面光标与文本选择状态。
 
 ## v1.21.1 - 2026-08-20
