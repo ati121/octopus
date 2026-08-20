@@ -16,6 +16,7 @@ export type SiteChannelPanelPreferences = {
     compactMode: boolean;
     quickFilters: SiteChannelQuickFilter[];
     tableSort: SiteChannelTableSort;
+    modelColumnWidth: number;
 };
 
 export const DEFAULT_SITE_CHANNEL_PANEL_PREFERENCES: SiteChannelPanelPreferences = {
@@ -25,6 +26,7 @@ export const DEFAULT_SITE_CHANNEL_PANEL_PREFERENCES: SiteChannelPanelPreferences
         field: 'model_name',
         order: 'asc',
     },
+    modelColumnWidth: 280,
 };
 
 type SiteChannelPanelState = {
@@ -32,6 +34,7 @@ type SiteChannelPanelState = {
     setCompactMode: (panelKey: string, compactMode: boolean) => void;
     setQuickFilters: (panelKey: string, quickFilters: SiteChannelQuickFilter[]) => void;
     setTableSort: (panelKey: string, tableSort: SiteChannelTableSort) => void;
+    setModelColumnWidth: (panelKey: string, modelColumnWidth: number) => void;
 };
 
 function updatePanel(
@@ -39,7 +42,10 @@ function updatePanel(
     panelKey: string,
     updater: (current: SiteChannelPanelPreferences) => SiteChannelPanelPreferences,
 ) {
-    const current = panels[panelKey] ?? DEFAULT_SITE_CHANNEL_PANEL_PREFERENCES;
+    const current = {
+        ...DEFAULT_SITE_CHANNEL_PANEL_PREFERENCES,
+        ...(panels[panelKey] ?? {}),
+    };
 
     return {
         ...panels,
@@ -70,6 +76,13 @@ export const useSiteChannelPanelViewStore = create<SiteChannelPanelState>()(
                     panels: updatePanel(state.panels, panelKey, (current) => ({
                         ...current,
                         tableSort,
+                    })),
+                })),
+            setModelColumnWidth: (panelKey, modelColumnWidth) =>
+                set((state) => ({
+                    panels: updatePanel(state.panels, panelKey, (current) => ({
+                        ...current,
+                        modelColumnWidth,
                     })),
                 })),
         }),
