@@ -360,6 +360,11 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	normalizeChannelProxyFields(&channel)
 	channelCache.Set(req.ID, channel)
 	resetBalancerStateForChannel(req.ID)
+	if !existingChannel.Enabled && channel.Enabled {
+		if err := appendChannelGroupItemsToEnd(req.ID, ctx); err != nil {
+			log.Warnf("failed to append re-enabled channel %d to group tails: %v", req.ID, err)
+		}
+	}
 	return &channel, nil
 }
 
@@ -376,10 +381,16 @@ func ChannelEnabled(id int, enabled bool, ctx context.Context) error {
 	if err := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).Update("enabled", enabled).Error; err != nil {
 		return err
 	}
+	wasDisabled := !oldChannel.Enabled && enabled
 	oldChannel.Enabled = enabled
 	normalizeChannelProxyFields(&oldChannel)
 	channelCache.Set(id, oldChannel)
 	resetBalancerStateForChannel(id)
+	if wasDisabled {
+		if err := appendChannelGroupItemsToEnd(id, ctx); err != nil {
+			log.Warnf("failed to append re-enabled channel %d to group tails: %v", id, err)
+		}
+	}
 	return nil
 }
 
@@ -391,11 +402,129 @@ func ChannelEnabledManaged(id int, enabled bool, ctx context.Context) error {
 	if err := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).Update("enabled", enabled).Error; err != nil {
 		return err
 	}
+	wasDisabled := !oldChannel.Enabled && enabled
 	oldChannel.Enabled = enabled
 	normalizeChannelProxyFields(&oldChannel)
 	channelCache.Set(id, oldChannel)
 	resetBalancerStateForChannel(id)
+	if wasDisabled {
+		if err := appendChannelGroupItemsToEnd(id, ctx); err != nil {
+			log.Warnf("failed to append re-enabled managed channel %d to group tails: %v", id, err)
+		}
+	}
 	return nil
+}
+
+// appendChannelGroupItemsToEnd moves a channel's existing group items behind
+// the current tail when the channel is re-enabled. Disabled items remain in
+// storage so disabling a channel does not destroy the user's group config.
+func appendChannelGroupItemsToEnd(channelID int, ctx context.Context) error {
+	if channelID <= 0 {
+		return nil
+	}
+	var items []model.GroupItem
+	if err := db.GetDB().WithContext(ctx).
+		Where("channel_id = ?", channelID).
+		Order("priority ASC, id ASC").
+		Find(&items).Error; err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	groupIDs := make(map[int]struct{}, len(items))
+	itemsByGroup := make(map[int][]model.GroupItem)
+	for _, item := range items {
+		groupIDs[item.GroupID] = struct{}{}
+		itemsByGroup[item.GroupID] = append(itemsByGroup[item.GroupID], item)
+	}
+	groupIDList := make([]int, 0, len(groupIDs))
+	for id := range groupIDs {
+		groupIDList = append(groupIDList, id)
+	}
+	var otherItems []model.GroupItem
+	if err := db.GetDB().WithContext(ctx).
+		Where("group_id IN ? AND channel_id <> ?", groupIDList, channelID).
+		Find(&otherItems).Error; err != nil {
+		return err
+	}
+	otherChannelIDs := make([]int, 0)
+	seenChannelIDs := make(map[int]struct{})
+	for _, item := range otherItems {
+		if _, ok := seenChannelIDs[item.ChannelID]; ok {
+			continue
+		}
+		seenChannelIDs[item.ChannelID] = struct{}{}
+		otherChannelIDs = append(otherChannelIDs, item.ChannelID)
+	}
+	bindingMap, err := SiteChannelBindingMapByChannelIDs(otherChannelIDs, ctx)
+	if err != nil {
+		return err
+	}
+	managedAvailability, err := managedChannelAvailabilityByChannelIDs(otherChannelIDs, ctx)
+	if err != nil {
+		return err
+	}
+	maxVisiblePriority := make(map[int]int, len(groupIDs))
+	for _, item := range otherItems {
+		channel, ok := channelCache.Get(item.ChannelID)
+		if !ok || !channel.Enabled {
+			continue
+		}
+		if _, managed := bindingMap[item.ChannelID]; managed && !managedAvailability[item.ChannelID] {
+			continue
+		}
+		if item.Priority > maxVisiblePriority[item.GroupID] {
+			maxVisiblePriority[item.GroupID] = item.Priority
+		}
+	}
+
+	err = db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for groupID, groupItems := range itemsByGroup {
+			for index, item := range groupItems {
+				if err := tx.Model(&model.GroupItem{}).
+					Where("id = ?", item.ID).
+					Update("priority", maxVisiblePriority[groupID]+index+1).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if err := groupRefreshCacheByIDs(groupIDList, ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func managedChannelAvailabilityByChannelIDs(channelIDs []int, ctx context.Context) (map[int]bool, error) {
+	result := make(map[int]bool)
+	if len(channelIDs) == 0 {
+		return result, nil
+	}
+	type row struct {
+		ChannelID      int  `gorm:"column:channel_id"`
+		SiteEnabled    bool `gorm:"column:site_enabled"`
+		AccountEnabled bool `gorm:"column:account_enabled"`
+	}
+	var rows []row
+	if err := db.GetDB().WithContext(ctx).
+		Table("site_channel_bindings AS bindings").
+		Select("bindings.channel_id, sites.enabled AS site_enabled, site_accounts.enabled AS account_enabled").
+		Joins("JOIN sites ON sites.id = bindings.site_id").
+		Joins("JOIN site_accounts ON site_accounts.id = bindings.site_account_id").
+		Where("bindings.channel_id IN ?", channelIDs).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, item := range rows {
+		result[item.ChannelID] = item.SiteEnabled && item.AccountEnabled
+	}
+	return result, nil
 }
 
 func ChannelDel(id int, ctx context.Context) error {
@@ -504,15 +633,25 @@ func ChannelLLMList(ctx context.Context) ([]model.LLMChannel, error) {
 	if err != nil {
 		return nil, err
 	}
+	managedAvailability, err := managedChannelAvailabilityByChannelIDs(channelIDs, ctx)
+	if err != nil {
+		return nil, err
+	}
 	siteCache := make(map[int]*model.Site)
 	accountCache := make(map[int]*model.SiteAccount)
 
 	models := []model.LLMChannel{}
 	for _, channel := range channelsByID {
+		if !channel.Enabled {
+			continue
+		}
 		var binding *model.SiteChannelBinding
 		if item, ok := bindingMap[channel.ID]; ok {
 			copy := item
 			binding = &copy
+			if available, ok := managedAvailability[channel.ID]; !ok || !available {
+				continue
+			}
 		}
 		siteName := ""
 		siteAccountName := ""

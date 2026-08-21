@@ -323,6 +323,7 @@ export function useEnableChannel() {
             queryClient.invalidateQueries({ queryKey: ['channels', 'list'] });
             queryClient.invalidateQueries({ queryKey: ['models', 'channel'] });
             queryClient.invalidateQueries({ queryKey: ['groups', 'list'] });
+            queryClient.invalidateQueries({ queryKey: ['groups', 'auto-group', 'config'] });
         },
         onError: (error) => {
             logger.error('渠道状态更新失败:', error);

@@ -44,28 +44,35 @@ export function PresetEditorContent({ preset }: PresetEditorContentProps) {
     const initialMembers = useMemo<SelectedMember[]>(() => {
         return [...preset.items]
             .sort((a, b) => a.priority - b.priority)
-            .map((item) => {
+            .flatMap((item) => {
                 const key = modelChannelKey(item.channel_id, item.model_name);
                 const mc = modelChannelByKey.get(key);
-                return {
+                if (!mc) return [];
+                return [{
                     ...mc,
                     id: key,
                     name: item.model_name,
-                    enabled: mc?.enabled ?? true,
+                    enabled: mc.enabled,
                     channel_id: item.channel_id,
-                    channel_name: mc?.channel_name ?? `Channel ${item.channel_id}`,
+                    channel_name: mc.channel_name,
                     weight: item.weight,
-                };
+                }];
             });
     }, [preset.items, modelChannelByKey]);
 
     const handleSubmit = useCallback((values: GroupEditorValues) => {
-        const items: GroupPresetItem[] = values.members.map((m, idx) => ({
+        const visibleItems: GroupPresetItem[] = values.members.map((m, idx) => ({
             channel_id: m.channel_id,
             model_name: m.name,
             priority: idx + 1,
             weight: m.weight ?? 1,
         }));
+        const visibleKeys = new Set(visibleItems.map((item) => modelChannelKey(item.channel_id, item.model_name)));
+        const unavailableItems = preset.items
+            .filter((item) => !modelChannelByKey.has(modelChannelKey(item.channel_id, item.model_name)))
+            .filter((item) => !visibleKeys.has(modelChannelKey(item.channel_id, item.model_name)))
+            .map((item, index) => ({ ...item, priority: visibleItems.length + index + 1 }));
+        const items = [...visibleItems, ...unavailableItems];
         updatePreset.mutate(
             {
                 presetID: preset.id,
@@ -89,7 +96,7 @@ export function PresetEditorContent({ preset }: PresetEditorContentProps) {
                 onError: (error) => toast.error(t('preset.toast.updateFailed'), { description: error.message }),
             },
         );
-    }, [preset.id, preset.group_id, updatePreset, t, setIsOpen]);
+    }, [preset.id, preset.group_id, preset.items, modelChannelByKey, updatePreset, t, setIsOpen]);
 
     return (
         <>

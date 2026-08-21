@@ -2,6 +2,7 @@ package op
 
 import (
 	"path/filepath"
+	"sort"
 	"strconv"
 	"testing"
 
@@ -66,6 +67,141 @@ func containsAllModels(models []string, expected ...string) bool {
 		}
 	}
 	return true
+}
+
+func TestChannelEnabledAppendsExistingGroupItemsToTail(t *testing.T) {
+	setupAutoGroupTestDB(t)
+	ctx := t.Context()
+	first := autoGroupTestChannel("first", "model-a,model-b", model.AutoGroupTypeNone)
+	second := autoGroupTestChannel("second", "model-c", model.AutoGroupTypeNone)
+	hidden := autoGroupTestChannel("hidden", "model-d", model.AutoGroupTypeNone)
+	if err := ChannelCreate(first, ctx); err != nil {
+		t.Fatalf("ChannelCreate(first) failed: %v", err)
+	}
+	if err := ChannelCreate(second, ctx); err != nil {
+		t.Fatalf("ChannelCreate(second) failed: %v", err)
+	}
+	if err := ChannelCreate(hidden, ctx); err != nil {
+		t.Fatalf("ChannelCreate(hidden) failed: %v", err)
+	}
+	group := &model.Group{
+		Name: "tail-order",
+		Mode: model.GroupModeFailover,
+		Items: []model.GroupItem{
+			{ChannelID: first.ID, ModelName: "model-a", Priority: 1, Weight: 1},
+			{ChannelID: first.ID, ModelName: "model-b", Priority: 2, Weight: 1},
+			{ChannelID: second.ID, ModelName: "model-c", Priority: 3, Weight: 1},
+			{ChannelID: hidden.ID, ModelName: "model-d", Priority: 10, Weight: 1},
+		},
+	}
+	if err := GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+	if err := ChannelEnabled(first.ID, false, ctx); err != nil {
+		t.Fatalf("ChannelEnabled(false) failed: %v", err)
+	}
+	if err := ChannelEnabled(hidden.ID, false, ctx); err != nil {
+		t.Fatalf("ChannelEnabled(hidden, false) failed: %v", err)
+	}
+	if err := ChannelEnabled(first.ID, true, ctx); err != nil {
+		t.Fatalf("ChannelEnabled(true) failed: %v", err)
+	}
+
+	reloaded, err := GroupGet(group.ID, ctx)
+	if err != nil {
+		t.Fatalf("GroupGet failed: %v", err)
+	}
+	items := append([]model.GroupItem(nil), reloaded.Items...)
+	sort.Slice(items, func(i, j int) bool { return items[i].Priority < items[j].Priority })
+	got := make([]string, 0, len(items))
+	for _, item := range items {
+		got = append(got, item.ModelName)
+	}
+	want := []string{"model-c", "model-a", "model-b", "model-d"}
+	if len(got) != len(want) {
+		t.Fatalf("group item count = %d, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("group item order = %v, want %v", got, want)
+		}
+	}
+	if items[1].Priority != 4 || items[2].Priority != 5 {
+		t.Fatalf("re-enabled priorities = %d,%d, want 4,5", items[1].Priority, items[2].Priority)
+	}
+}
+
+func TestManagedChannelListsHideDisabledSiteImmediately(t *testing.T) {
+	setupAutoGroupTestDB(t)
+	ctx := t.Context()
+	site := &model.Site{
+		Name:     "disabled-source-site",
+		Platform: model.SitePlatformNewAPI,
+		BaseURL:  "https://example.com",
+		Enabled:  true,
+	}
+	if err := SiteCreate(site, ctx); err != nil {
+		t.Fatalf("SiteCreate failed: %v", err)
+	}
+	account := &model.SiteAccount{
+		SiteID:         site.ID,
+		Name:           "account",
+		CredentialType: model.SiteCredentialTypeAccessToken,
+		AccessToken:    "token",
+		Enabled:        true,
+	}
+	if err := SiteAccountCreate(account, ctx); err != nil {
+		t.Fatalf("SiteAccountCreate failed: %v", err)
+	}
+	channel := autoGroupTestChannel("managed", "hidden-model", model.AutoGroupTypeNone)
+	if err := ChannelCreate(channel, ctx); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+	binding := model.SiteChannelBinding{
+		SiteID:        site.ID,
+		SiteAccountID: account.ID,
+		GroupKey:      model.SiteDefaultGroupKey,
+		ChannelID:     channel.ID,
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&binding).Error; err != nil {
+		t.Fatalf("create binding failed: %v", err)
+	}
+	group := &model.Group{
+		Name:  "hidden-model",
+		Mode:  model.GroupModeFailover,
+		Items: []model.GroupItem{{ChannelID: channel.ID, ModelName: "hidden-model", Priority: 1, Weight: 1}},
+	}
+	if err := GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+
+	if err := SiteEnabled(site.ID, false, ctx); err != nil {
+		t.Fatalf("SiteEnabled(false) failed: %v", err)
+	}
+	if cached, err := ChannelGet(channel.ID, ctx); err != nil || !cached.Enabled {
+		t.Fatalf("expected cached channel to still be enabled before projection, got channel=%+v err=%v", cached, err)
+	}
+	models, err := ChannelLLMList(ctx)
+	if err != nil {
+		t.Fatalf("ChannelLLMList failed: %v", err)
+	}
+	if len(models) != 0 {
+		t.Fatalf("disabled site models should be hidden, got %+v", models)
+	}
+	groups, err := GroupListAvailable(ctx)
+	if err != nil {
+		t.Fatalf("GroupListAvailable failed: %v", err)
+	}
+	if len(groups) != 1 || len(groups[0].Items) != 0 {
+		t.Fatalf("disabled site group items should be hidden, got %+v", groups)
+	}
+	routable, err := GroupGetEnabledMap(group.Name, ctx)
+	if err != nil {
+		t.Fatalf("GroupGetEnabledMap failed: %v", err)
+	}
+	if len(routable.Items) != 0 {
+		t.Fatalf("disabled site group items should not be routable, got %+v", routable.Items)
+	}
 }
 
 func TestChannelAutoGroupRegexPrunesNonMatchingModels(t *testing.T) {
