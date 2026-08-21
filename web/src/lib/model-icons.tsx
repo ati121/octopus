@@ -46,6 +46,7 @@ import {
     Kolors,
     SenseNova,
 } from '@lobehub/icons';
+import { modelMappings } from '@lobehub/icons/es/features/modelConfig';
 import { memo, type ComponentProps } from 'react';
 
 type AvatarComponent = typeof OpenAI.Avatar;
@@ -180,12 +181,24 @@ const MODEL_ICON_PATTERNS: ModelIconConfig[] = [
 ];
 
 // Default configuration
-// Bind the model name so the library can resolve additional providers that are
-// not covered by the local prefix table. Unknown models render its neutral
-// brain icon instead of being mistaken for OpenAI.
+// Models covered by the library still resolve its brand avatar; models unknown
+// to both the prefix table and the library render the neutral LLM artwork
+// instead of the library's plain gray default.
+const UNKNOWN_MODEL_AVATAR = createOfficialOrgAvatar('/model-icons/llm-fallback.png', '#FFFFFF');
+
+/** Mirror ModelIcon's own keyword matching so detection cannot drift from rendering. */
+function lobeHubHasMapping(modelName: string): boolean {
+    const model = modelName.toLowerCase();
+    return modelMappings.some(({ keywords }) =>
+        keywords.some((keyword) => new RegExp(keyword, 'i').test(model)),
+    );
+}
+
 const fallbackAvatarCache = new Map<string, AvatarComponent>();
 
 function getFallbackAvatar(modelName: string): AvatarComponent {
+    if (!lobeHubHasMapping(modelName)) return UNKNOWN_MODEL_AVATAR;
+
     const cachedAvatar = fallbackAvatarCache.get(modelName);
     if (cachedAvatar) return cachedAvatar;
 
