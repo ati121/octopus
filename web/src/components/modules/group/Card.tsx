@@ -94,25 +94,25 @@ export function GroupCard({ group }: { group: Group }) {
         return map;
     }, [modelChannels]);
 
-    const displayMembers = useMemo((): SelectedMember[] =>
-        [...(group.items || [])]
-            .sort((a, b) => a.priority - b.priority)
-            .map((item) => {
-                const key = modelChannelKey(item.channel_id, item.model_name);
-                const modelChannel = modelChannelByKey.get(key);
-                return {
-                    ...modelChannel,
-                    id: key,
-                    name: item.model_name,
-                    enabled: modelChannel?.enabled ?? true,
-                    channel_id: item.channel_id,
-                    channel_name: modelChannel?.channel_name ?? `Channel ${item.channel_id}`,
-                    item_id: item.id,
-                    weight: item.weight,
-                };
-            }),
-        [group.items, modelChannelByKey]
-    );
+    const displayMembers = useMemo((): SelectedMember[] => {
+        const members: SelectedMember[] = [];
+        for (const item of [...(group.items || [])].sort((a, b) => a.priority - b.priority)) {
+            const key = modelChannelKey(item.channel_id, item.model_name);
+            const modelChannel = modelChannelByKey.get(key);
+            if (!modelChannel) continue;
+            members.push({
+                ...modelChannel,
+                id: key,
+                name: item.model_name,
+                enabled: modelChannel.enabled,
+                channel_id: item.channel_id,
+                channel_name: modelChannel.channel_name,
+                item_id: item.id,
+                weight: item.weight,
+            });
+        }
+        return members;
+    }, [group.items, modelChannelByKey]);
 
     const effectiveDisplayMembers = useMemo(
         () => displayMembers.map((member) => {
@@ -230,7 +230,14 @@ export function GroupCard({ group }: { group: Group }) {
         const newIds = new Set<number>();
         values.members.forEach((m) => { if (typeof m.item_id === 'number') newIds.add(m.item_id); });
 
-        const items_to_delete = Array.from(originalIds).filter((id) => !newIds.has(id));
+        const items_to_delete = originalItems
+            .filter((item) => {
+                if (typeof item.id !== 'number' || newIds.has(item.id)) return false;
+                // Keep items whose source is currently unavailable. They will
+                // reappear at the tail when the source is enabled again.
+                return modelChannelByKey.has(modelChannelKey(item.channel_id, item.model_name));
+            })
+            .map((item) => item.id!);
 
         const items_to_add = values.members
             .map((m, idx) => ({ m, priority: idx + 1 }))
@@ -284,7 +291,7 @@ export function GroupCard({ group }: { group: Group }) {
             },
             onError,
         });
-    }, [group.first_token_time_out, group.session_keep_time, group.retry_enabled, group.max_retries, group.id, group.items, group.match_regex, group.mode, group.name, onSuccess, onError, updateGroup]);
+    }, [group.first_token_time_out, group.session_keep_time, group.retry_enabled, group.max_retries, group.id, group.items, group.match_regex, group.mode, group.name, modelChannelByKey, onSuccess, onError, updateGroup]);
 
     return (
         <article className="relative group/card flex flex-col rounded-3xl border border-border bg-card text-card-foreground p-4 custom-shadow">

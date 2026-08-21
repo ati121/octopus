@@ -26,12 +26,22 @@ func GroupAutoGroupConfigGet(ctx context.Context) (*model.GroupAutoGroupConfig, 
 	if err != nil {
 		return nil, err
 	}
+	managedAvailability, err := managedChannelAvailabilityByChannelIDs(channelIDs, ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	globalMode := ProjectedChannelGlobalAutoGroupMode()
 	sources := make([]model.GroupAutoGroupSource, 0, len(channels))
 	for _, channel := range channels {
-		models := splitChannelModelNames(channel.Model, channel.CustomModel)
+		if !channel.Enabled {
+			continue
+		}
 		binding, managed := bindingMap[channel.ID]
+		if managed && !managedAvailability[channel.ID] {
+			continue
+		}
+		models := splitChannelModelNames(channel.Model, channel.CustomModel)
 		effective := ResolveChannelAutoGroup(channel.AutoGroup, managed)
 		globalOverride := managed && globalMode != model.AutoGroupTypeNone
 
@@ -198,9 +208,19 @@ func RunGroupAutoGroup(channelIDs []int, ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	managedAvailability, err := managedChannelAvailabilityByChannelIDs(targetIDs, ctx)
+	if err != nil {
+		return err
+	}
 
 	for id, channel := range targets {
+		if !channel.Enabled {
+			continue
+		}
 		_, managed := bindingMap[id]
+		if managed && !managedAvailability[id] {
+			continue
+		}
 		mode := ResolveChannelAutoGroup(channel.AutoGroup, managed)
 		if mode == model.AutoGroupTypeNone {
 			continue

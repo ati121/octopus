@@ -23,9 +23,60 @@ func GroupList(ctx context.Context) ([]model.Group, error) {
 	return groups, nil
 }
 
+// GroupListAvailable returns groups with only currently available items. Items
+// backed by a disabled channel or managed site/account stay persisted but are
+// omitted until their source becomes available again.
+func GroupListAvailable(ctx context.Context) ([]model.Group, error) {
+	groups, err := GroupList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	channelIDs := make([]int, 0)
+	seen := make(map[int]struct{})
+	for _, group := range groups {
+		for _, item := range group.Items {
+			if _, ok := seen[item.ChannelID]; ok {
+				continue
+			}
+			seen[item.ChannelID] = struct{}{}
+			channelIDs = append(channelIDs, item.ChannelID)
+		}
+	}
+	bindingMap, err := SiteChannelBindingMapByChannelIDs(channelIDs, ctx)
+	if err != nil {
+		return nil, err
+	}
+	managedAvailability, err := managedChannelAvailabilityByChannelIDs(channelIDs, ctx)
+	if err != nil {
+		return nil, err
+	}
+	for index := range groups {
+		items := make([]model.GroupItem, 0, len(groups[index].Items))
+		for _, item := range groups[index].Items {
+			channel, ok := channelCache.Get(item.ChannelID)
+			if !ok || !channel.Enabled {
+				continue
+			}
+			if _, managed := bindingMap[item.ChannelID]; managed && !managedAvailability[item.ChannelID] {
+				continue
+			}
+			items = append(items, item)
+		}
+		groups[index].Items = items
+	}
+	return groups, nil
+}
+
 func GroupListModel(ctx context.Context) ([]string, error) {
+	groups, err := GroupListAvailable(ctx)
+	if err != nil {
+		return nil, err
+	}
 	models := []string{}
-	for _, group := range groupCache.GetAll() {
+	for _, group := range groups {
+		if len(group.Items) == 0 {
+			continue
+		}
 		models = append(models, group.Name)
 	}
 	return models, nil
@@ -48,11 +99,31 @@ func GroupGetEnabledMap(name string, ctx context.Context) (model.Group, error) {
 		group.Items = nil
 		return group, nil
 	}
+	channelIDs := make([]int, 0, len(group.Items))
+	seen := make(map[int]struct{}, len(group.Items))
+	for _, item := range group.Items {
+		if _, ok := seen[item.ChannelID]; ok {
+			continue
+		}
+		seen[item.ChannelID] = struct{}{}
+		channelIDs = append(channelIDs, item.ChannelID)
+	}
+	bindingMap, err := SiteChannelBindingMapByChannelIDs(channelIDs, ctx)
+	if err != nil {
+		return model.Group{}, err
+	}
+	managedAvailability, err := managedChannelAvailabilityByChannelIDs(channelIDs, ctx)
+	if err != nil {
+		return model.Group{}, err
+	}
 
 	enabledItems := make([]model.GroupItem, 0, len(group.Items))
 	for _, item := range group.Items {
 		channel, ok := channelCache.Get(item.ChannelID)
 		if !ok || !channel.Enabled {
+			continue
+		}
+		if _, managed := bindingMap[item.ChannelID]; managed && !managedAvailability[item.ChannelID] {
 			continue
 		}
 		enabledItems = append(enabledItems, item)
