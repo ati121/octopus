@@ -722,11 +722,11 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                 ) : null}
                                 <div className="flex items-center gap-1.5">
                                     <Zap className={cn('size-3.5 shrink-0 text-amber-500', log.processing && 'animate-pulse')} />
-                                    <span>
-                                        {t('duration')}{' '}
-                                        {liveElapsedMs != null
-                                            ? formatDurationPair(log.ftut, liveElapsedMs)
-                                            : `${formatDurationCompact(log.ftut)} / ${formatDurationCompact(log.use_time)}`}
+                                    <span
+                                        className="whitespace-nowrap"
+                                        title={`${t('duration')}: ${t('firstToken')} / ${t('totalTime')}`}
+                                    >
+                                        {formatDurationPair(log.ftut, liveElapsedMs ?? log.use_time)}
                                     </span>
                                 </div>
                                 <div className="flex min-w-0 items-center gap-1.5">
@@ -1042,10 +1042,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                             <div className="flex items-center gap-1.5">
                                 <Zap className={cn('size-3.5 text-amber-500', displayLog.processing && 'animate-pulse')} />
                                 <span>
-                                    {t('duration')}:{' '}
-                                    {dialogLiveElapsedMs != null
-                                        ? formatDurationPair(displayLog.ftut, dialogLiveElapsedMs)
-                                        : `${formatDurationCompact(displayLog.ftut)} / ${formatDurationCompact(displayLog.use_time)}`}
+                                    {t('duration')}: {formatDurationPair(displayLog.ftut, dialogLiveElapsedMs ?? displayLog.use_time)}
                                 </span>
                             </div>
                             <div className="flex items-center gap-1.5">
