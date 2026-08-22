@@ -64,6 +64,23 @@ function formatDurationCompact(ms: number): string {
     return `${Math.round(s)}s`;
 }
 
+function formatDurationPair(ftutMs: number, useTimeMs: number): string {
+    return `${ftutMs > 0 ? formatDurationCompact(ftutMs) : '--'} / ${formatDurationCompact(useTimeMs)}`;
+}
+
+// useLiveProcessingMs 在请求进行中每秒刷新时钟并返回已流逝毫秒数；结束后返回 null。
+function useLiveProcessingMs(log: RelayLog): number | null {
+    const [now, setNow] = useState(() => Date.now());
+    const processing = log.processing;
+    useEffect(() => {
+        if (!processing) return;
+        const timer = window.setInterval(() => setNow(Date.now()), 1000);
+        return () => window.clearInterval(timer);
+    }, [processing]);
+    if (!processing) return null;
+    return Math.max(0, now - log.time * 1000);
+}
+
 function sanitizeErrorMessage(raw: string | undefined | null): string {
     if (!raw) return '';
     let text = raw.replace(/^upstream error:\s*(\d+):\s*/i, (_m, code) => `[HTTP ${code}] `);
@@ -560,6 +577,8 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
     const diagnosticIcon = hasAttempts ? RotateCw : AlertCircle;
     const DiagnosticIcon = diagnosticIcon;
     const displayLog = detailLog ?? log;
+    const liveElapsedMs = useLiveProcessingMs(log);
+    const dialogLiveElapsedMs = useLiveProcessingMs(displayLog);
 
     useEffect(() => {
         if (detailRequestID === 0 || detailLog) return;
@@ -702,8 +721,13 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                     </div>
                                 ) : null}
                                 <div className="flex items-center gap-1.5">
-                                    <Zap className="size-3.5 shrink-0 text-amber-500" />
-                                    <span>{t('duration')} {formatDurationCompact(log.ftut)} / {formatDurationCompact(log.use_time)}</span>
+                                    <Zap className={cn('size-3.5 shrink-0 text-amber-500', log.processing && 'animate-pulse')} />
+                                    <span>
+                                        {t('duration')}{' '}
+                                        {liveElapsedMs != null
+                                            ? formatDurationPair(log.ftut, liveElapsedMs)
+                                            : `${formatDurationCompact(log.ftut)} / ${formatDurationCompact(log.use_time)}`}
+                                    </span>
                                 </div>
                                 <div className="flex min-w-0 items-center gap-1.5">
                                     <ArrowDownToLine className={cn('size-3.5 shrink-0', hasCacheTokens(log) ? 'text-sky-500' : 'text-green-500')} />
@@ -1016,8 +1040,13 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                 </div>
                             ) : null}
                             <div className="flex items-center gap-1.5">
-                                <Zap className="size-3.5 text-amber-500" />
-                                <span>{t('duration')}: {formatDurationCompact(log.ftut)} / {formatDurationCompact(log.use_time)}</span>
+                                <Zap className={cn('size-3.5 text-amber-500', displayLog.processing && 'animate-pulse')} />
+                                <span>
+                                    {t('duration')}:{' '}
+                                    {dialogLiveElapsedMs != null
+                                        ? formatDurationPair(displayLog.ftut, dialogLiveElapsedMs)
+                                        : `${formatDurationCompact(displayLog.ftut)} / ${formatDurationCompact(displayLog.use_time)}`}
+                                </span>
                             </div>
                             <div className="flex items-center gap-1.5">
                                 <DollarSign className="size-3.5 text-emerald-500" />

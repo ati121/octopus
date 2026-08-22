@@ -277,6 +277,19 @@ func (m *imagesRelayMetrics) StartLog() {
 func (m *imagesRelayMetrics) SetFirstTokenTime(t time.Time) {
 	if m.FirstToken.IsZero() {
 		m.FirstToken = t
+		if m.LogID != 0 {
+			actualModel := m.ActualModel
+			if actualModel == "" {
+				actualModel = m.RequestModel
+			}
+			op.RelayLogProgress(model.RelayLog{
+				ID:               m.LogID,
+				Time:             m.StartTime.Unix(),
+				RequestModelName: m.RequestModel,
+				ActualModelName:  actualModel,
+				Ftut:             int(m.FirstToken.Sub(m.StartTime).Milliseconds()),
+			})
+		}
 	}
 }
 

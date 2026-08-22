@@ -396,6 +396,24 @@ func RelayLogUpdate(ctx context.Context, relayLog model.RelayLog) error {
 	return nil
 }
 
+// RelayLogProgress 推送运行中日志的中间进度（如首字已到达）。
+// 仅刷新在途记录并通知订阅者，不落库；ID 不在途时忽略。
+func RelayLogProgress(relayLog model.RelayLog) {
+	if relayLog.ID == 0 {
+		return
+	}
+	relayLog.Processing = true
+
+	relayLogInFlightLock.Lock()
+	if _, ok := relayLogInFlight[relayLog.ID]; ok {
+		relayLogInFlight[relayLog.ID] = relayLog
+	}
+	relayLogInFlightLock.Unlock()
+
+	appendRelayLogRecent(relayLog)
+	notifySubscribers(relayLog)
+}
+
 func RelayLogSaveDBTask(ctx context.Context) error {
 	log.Debugf("relay log save db task started")
 	startTime := time.Now()

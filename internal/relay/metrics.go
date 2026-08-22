@@ -67,6 +67,26 @@ func NewRelayMetrics(apiKeyID int, requestModel string, rawBody []byte, req *tra
 
 func (m *RelayMetrics) SetFirstTokenTime(t time.Time) {
 	m.FirstTokenTime = t
+	m.publishFirstTokenProgress()
+}
+
+// publishFirstTokenProgress 在首字到达时向实时日志推送中间进度，
+// 让前端在请求结束前即可显示真实首字耗时并持续跳动总耗时。
+func (m *RelayMetrics) publishFirstTokenProgress() {
+	if m.LogID == 0 || m.FirstTokenTime.IsZero() {
+		return
+	}
+	actualModel := m.ActualModel
+	if actualModel == "" {
+		actualModel = m.RequestModel
+	}
+	op.RelayLogProgress(model.RelayLog{
+		ID:               m.LogID,
+		Time:             m.StartTime.Unix(),
+		RequestModelName: m.RequestModel,
+		ActualModelName:  actualModel,
+		Ftut:             int(m.FirstTokenTime.Sub(m.StartTime).Milliseconds()),
+	})
 }
 
 func (m *RelayMetrics) ResetAttemptResponse() {
