@@ -82,7 +82,10 @@ function durationPairText(ftutMs: number, liveMs: number | null, useTimeMs: numb
 }
 
 // useLiveProcessingMs 在请求进行中每秒刷新时钟并返回已流逝毫秒数；结束后返回 null。
+// 基准取「服务端记录的起始时间」与「本地首次观察到该请求的时刻」中较晚者：
+// 浏览器与服务器时钟存在偏差时，新请求不会一出现就显示偏差值（从 0 开始跳动）。
 function useLiveProcessingMs(log: RelayLog): number | null {
+    const [seenAt] = useState(() => Date.now());
     const [now, setNow] = useState(() => Date.now());
     const processing = log.processing;
     useEffect(() => {
@@ -91,7 +94,7 @@ function useLiveProcessingMs(log: RelayLog): number | null {
         return () => window.clearInterval(timer);
     }, [processing]);
     if (!processing) return null;
-    return Math.max(0, now - log.time * 1000);
+    return Math.max(0, now - Math.max(log.time * 1000, seenAt));
 }
 
 function sanitizeErrorMessage(raw: string | undefined | null): string {
