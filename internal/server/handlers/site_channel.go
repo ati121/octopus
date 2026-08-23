@@ -32,6 +32,7 @@ func init() {
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/keys", http.MethodPost).Handle(createSiteChannelKey)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/source-keys", http.MethodPut).Handle(updateSiteSourceKeys)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/group-projection", http.MethodPut).Handle(updateSiteGroupProjection)).
+		AddRoute(router.NewRoute("/:siteId/account/:accountId/group-model-filter", http.MethodPut).Handle(updateSiteGroupModelFilter)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/model-routes", http.MethodPut).Handle(updateSiteChannelModelRoutes)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/model-disabled", http.MethodPut).Handle(updateSiteChannelModelDisabled)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/projected-channel-settings", http.MethodPut).Handle(updateSiteProjectedChannelSettings)).
@@ -170,6 +171,39 @@ func updateSiteGroupProjection(c *gin.Context) {
 	if err := op.UpdateSiteGroupProjection(siteID, accountID, &req, c.Request.Context()); err != nil {
 		status := siteChannelMutationErrorStatus(err)
 		resp.ErrorWithAppError(c, status, apperror.Wrap(op.CodeSiteChannelProjectedSettingsFailed, "site group projection update failed", err).WithStatus(status))
+		return
+	}
+	if err := reprojectSiteChannelAccount(c.Request.Context(), accountID); err != nil {
+		resp.ErrorWithAppError(c, http.StatusInternalServerError, apperror.Wrap(op.CodeSiteChannelProjectFailed, "site channel project failed", err).WithStatus(http.StatusInternalServerError))
+		return
+	}
+	data, err := op.SiteChannelAccountGet(siteID, accountID, c.Request.Context())
+	if err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp.Success(c, data)
+}
+
+// updateSiteGroupModelFilter 保存分组级模型正则筛选。写错的正则会让之后每一轮同步都
+// 按脏数据处理，因此在入口先编译校验再落库。
+func updateSiteGroupModelFilter(c *gin.Context) {
+	siteID, accountID, ok := parseSiteChannelIDs(c)
+	if !ok {
+		return
+	}
+	var req model.SiteGroupModelFilterUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.InvalidJSON(c)
+		return
+	}
+	if err := model.ValidateSiteModelFilterRegex(req.ModelFilterRegex); err != nil {
+		resp.ErrorWithAppError(c, http.StatusBadRequest, apperror.New(op.CodeSiteChannelInvalidModelFilter, err.Error()).WithStatus(http.StatusBadRequest))
+		return
+	}
+	if err := op.UpdateSiteGroupModelFilter(siteID, accountID, &req, c.Request.Context()); err != nil {
+		status := siteChannelMutationErrorStatus(err)
+		resp.ErrorWithAppError(c, status, apperror.Wrap(op.CodeSiteChannelModelFilterUpdateFailed, "site group model filter update failed", err).WithStatus(status))
 		return
 	}
 	if err := reprojectSiteChannelAccount(c.Request.Context(), accountID); err != nil {

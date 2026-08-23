@@ -30,6 +30,7 @@ import {
     Plus,
     Power,
     RefreshCw,
+    Regex,
     Search,
     Settings,
     SlidersHorizontal,
@@ -92,6 +93,7 @@ import {
     useResetSiteChannelModelRoutes,
     useSiteChannelList,
     useUpdateSiteProjectedChannelSettings,
+    useUpdateSiteGroupModelFilter,
     useUpdateSiteGroupProjection,
     useUpdateAnySiteSourceKeys,
     useUpdateSiteSourceKeys,
@@ -117,6 +119,7 @@ import {
     buildSourceKeyFormItems,
     buildSourceKeyUpdatePayload,
     collectPendingCompletionSites,
+    compileModelFilterRegex,
     filterGroups,
     flattenAccountModels,
     formatHistoryTime,
@@ -129,6 +132,7 @@ import {
     routeSourceLabel,
     routeTypeLabel,
     summarizeHistory,
+    validateModelFilterRegex,
 } from './utils';
 import { useJumpStore, type JumpTarget, type PendingJump, type SiteChannelJumpTarget, isSiteChannelJumpTarget } from '@/stores/jump';
 import { useEnableSiteAccount } from '@/api/endpoints/site';
@@ -1391,6 +1395,8 @@ function SiteAccountPanel({
     const [modelSearchTerm, setModelSearchTerm] = useState('');
     const [bulkMoveTarget, setBulkMoveTarget] = useState<SiteModelRouteType>('openai_chat');
     const [deletingManualModelKey, setDeletingManualModelKey] = useState<string | null>(null);
+    const [modelFilterOpen, setModelFilterOpen] = useState(false);
+    const [modelFilterDraft, setModelFilterDraft] = useState('');
     const tableHandleRef = useRef<SiteChannelTableHandle | null>(null);
     const panelKey = `${siteId}:${account.account_id}`;
 
@@ -1412,6 +1418,7 @@ function SiteAccountPanel({
     const sourceKeyMutation = useUpdateSiteSourceKeys(siteId, account.account_id);
     const advancedMutation = useUpdateSiteProjectedChannelSettings(siteId, account.account_id);
     const groupProjectionMutation = useUpdateSiteGroupProjection(siteId, account.account_id);
+    const groupModelFilterMutation = useUpdateSiteGroupModelFilter(siteId, account.account_id);
     const addManualModelsMutation = useAddSiteManualModels(siteId, account.account_id);
     const deleteManualModelMutation = useDeleteSiteManualModel(siteId, account.account_id);
     const routeMutation = useUpdateSiteChannelModelRoutes(siteId, account.account_id);
@@ -1967,8 +1974,60 @@ function SiteAccountPanel({
         [visibleModels],
     );
 
+    const activeGroupModelFilter = activeGroup?.model_filter_regex ?? '';
+    const activeGroupEnabledModelCount = useMemo(
+        () => (activeGroup?.models ?? []).filter((item) => !item.disabled).length,
+        [activeGroup],
+    );
+    // 与后端 regexp2 的 ECMAScript 模式对齐：支持 (?i)(?s)(?m) 内联 flag。
+    const modelFilterDraftError = useMemo(
+        () => validateModelFilterRegex(modelFilterDraft),
+        [modelFilterDraft],
+    );
+    // 弹层里实时预览：草稿正则会命中该分组里的多少个模型。
+    const modelFilterPreview = useMemo(() => {
+        const models = activeGroup?.models ?? [];
+        const pattern = modelFilterDraft.trim();
+        if (!pattern || modelFilterDraftError) {
+            return { matched: models.length, total: models.length };
+        }
+        const regex = compileModelFilterRegex(pattern);
+        if (!regex) return { matched: models.length, total: models.length };
+        return {
+            matched: models.filter((item) => regex.test(item.model_name)).length,
+            total: models.length,
+        };
+    }, [activeGroup, modelFilterDraft, modelFilterDraftError]);
+
+    const handleModelFilterOpenChange = useCallback((open: boolean) => {
+        setModelFilterOpen(open);
+        if (open) {
+            setModelFilterDraft(activeGroupModelFilter);
+        }
+    }, [activeGroupModelFilter]);
+
+    const handleSaveModelFilter = useCallback((pattern: string) => {
+        if (!activeGroup) return;
+        const nextPattern = pattern.trim();
+        groupModelFilterMutation.mutate({
+            group_key: activeGroup.group_key,
+            model_filter_regex: nextPattern,
+        }, {
+            onSuccess: () => {
+                setModelFilterOpen(false);
+                setModelFilterDraft(nextPattern);
+                toast.success(nextPattern ? '已按正则重算该分组模型的启用状态' : '已清除正则，该分组模型已全部启用');
+            },
+            onError: (error) => {
+                toast.error(translateSiteError(error, '保存模型正则筛选失败'));
+            },
+        });
+    }, [activeGroup, groupModelFilterMutation, translateSiteError]);
+
     const handleGroupFilterChange = useCallback((value: string) => {
         setActiveFilter(value === SITE_GROUP_FILTER_ALL_VALUE ? SITE_GROUP_FILTER_ALL : createGroupFilter(value));
+        // 正则是按分组保存的，切组后弹层里的草稿就不再属于当前分组了。
+        setModelFilterOpen(false);
     }, []);
 
     const handleClearQuickFilters = useCallback(() => {
@@ -2257,132 +2316,202 @@ function SiteAccountPanel({
                     </div>
                 </div>
 
-                {pendingKeyGroups.length > 0 || projectedGroups.length > 0 || unsupportedRouteCount > 0 || selectedVisibleCount > 0 ? (
-                    <div className="flex min-h-8 flex-wrap items-center gap-2">
-                        {pendingKeyGroups.length > 0 ? (
-                            <Popover>
-                                <PopoverTrigger asChild>
-                                    <button
-                                        type="button"
-                                        className="inline-flex h-8 items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 text-xs font-medium text-amber-800 transition hover:bg-amber-500/15 dark:text-amber-200"
-                                    >
-                                        <CircleAlert className="size-3.5" />
-                                        待建 Key {pendingKeyGroups.length} 组
-                                    </button>
-                                </PopoverTrigger>
-                                <PopoverContent align="start" className="w-72 rounded-2xl border border-amber-500/30 bg-card p-3 shadow-xl">
-                                    <div className="space-y-2">
-                                        <div className="text-xs font-medium text-muted-foreground">未创建 Key 的分组</div>
-                                        <div className="flex flex-wrap gap-2">
-                                            {pendingKeyGroups.map((group) => (
-                                                <Button
-                                                    key={group.group_key}
-                                                    type="button"
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="rounded-full border-amber-500/30 bg-white/60 text-amber-800 hover:bg-white dark:bg-background/40 dark:text-amber-200"
-                                                    onClick={() => handleOpenCreateKey(group)}
-                                                    disabled={createKeyMutation.isPending}
-                                                >
-                                                    {group.group_name || group.group_key}
-                                                    <span className="text-[10px] text-amber-700/80 dark:text-amber-200/80">
-                                                        {createKeyMutation.isPending && creatingGroup?.group_key === group.group_key ? '创建中...' : '快捷创建'}
-                                                    </span>
-                                                </Button>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </PopoverContent>
-                            </Popover>
-                        ) : null}
-
-                        {visibleGroups.some((group) => group.masked_pending_key_count > 0 && group.enabled_key_count === 0) ? (
-                            <button
-                                type="button"
-                                onClick={handleFocusAttention}
-                                className="inline-flex h-8 items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 text-xs font-medium text-amber-800 transition hover:bg-amber-500/15 dark:text-amber-200"
-                            >
-                                <CircleAlert className="size-3.5" />
-                                待补全文明文 Key
-                            </button>
-                        ) : null}
-
-                        {projectedGroups.length > 0 ? (
-                            <Popover>
-                                <PopoverTrigger asChild>
-                                    <button
-                                        type="button"
-                                        className="inline-flex h-8 items-center gap-2 rounded-full border border-border/70 bg-background/70 px-3 text-xs font-medium text-foreground transition hover:bg-muted/60"
-                                    >
-                                        <KeyRound className="size-3.5 text-primary" />
-                                        投影 Key {projectedGroups.length} 组
-                                    </button>
-                                </PopoverTrigger>
-                                <PopoverContent align="start" className="w-72 rounded-2xl border border-border/70 bg-card p-3 shadow-xl">
-                                    <div className="space-y-2">
-                                        <div className="text-xs font-medium text-muted-foreground">投影渠道 Key 管理</div>
-                                        <div className="flex flex-wrap gap-2">
-                                            {projectedGroups.map((group) => (
-                                                <Button
-                                                    key={`projected-${group.group_key}`}
-                                                    type="button"
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="rounded-full"
-                                                    onClick={() => handleOpenProjectedKeys(group)}
-                                                >
-                                                    {group.group_name || group.group_key}
-                                                    <span className="text-[10px] text-muted-foreground">{group.projected_keys.length} Keys</span>
-                                                </Button>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </PopoverContent>
-                            </Popover>
-                        ) : null}
-
-                        {unsupportedRouteCount > 0 ? (
-                            <button
-                                type="button"
-                                onClick={handleFocusAttention}
-                                className="inline-flex h-8 items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 text-xs font-medium text-amber-800 transition hover:bg-amber-500/15 dark:text-amber-200"
-                            >
-                                <CircleAlert className="size-3.5" />
-                                未识别端点 {unsupportedRouteCount}
-                            </button>
-                        ) : null}
-
-                        {selectedVisibleCount > 0 ? (
-                            <div className="ml-auto flex flex-wrap items-center gap-2">
-                                <span className="text-xs font-medium text-foreground">已选 {selectedVisibleCount} 个</span>
-                                <Select value={bulkMoveTarget} onValueChange={(value) => setBulkMoveTarget(value as SiteModelRouteType)}>
-                                    <SelectTrigger className="h-7 w-[10rem] rounded-xl text-xs">
-                                        <SelectValue placeholder="目标端点" />
-                                    </SelectTrigger>
-                                    <SelectContent className="rounded-xl">
-                                        {SITE_ROUTE_COLUMN_ORDER.map((routeType) => (
-                                            <SelectItem key={routeType} value={routeType}>
-                                                {routeTypeLabel(routeType)}
-                                            </SelectItem>
+                <div className="flex min-h-8 flex-wrap items-center gap-2">
+                    {pendingKeyGroups.length > 0 ? (
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <button
+                                    type="button"
+                                    className="inline-flex h-8 items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 text-xs font-medium text-amber-800 transition hover:bg-amber-500/15 dark:text-amber-200"
+                                >
+                                    <CircleAlert className="size-3.5" />
+                                    待建 Key {pendingKeyGroups.length} 组
+                                </button>
+                            </PopoverTrigger>
+                            <PopoverContent align="start" className="w-72 rounded-2xl border border-amber-500/30 bg-card p-3 shadow-xl">
+                                <div className="space-y-2">
+                                    <div className="text-xs font-medium text-muted-foreground">未创建 Key 的分组</div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {pendingKeyGroups.map((group) => (
+                                            <Button
+                                                key={group.group_key}
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                className="rounded-full border-amber-500/30 bg-white/60 text-amber-800 hover:bg-white dark:bg-background/40 dark:text-amber-200"
+                                                onClick={() => handleOpenCreateKey(group)}
+                                                disabled={createKeyMutation.isPending}
+                                            >
+                                                {group.group_name || group.group_key}
+                                                <span className="text-[10px] text-amber-700/80 dark:text-amber-200/80">
+                                                    {createKeyMutation.isPending && creatingGroup?.group_key === group.group_key ? '创建中...' : '快捷创建'}
+                                                </span>
+                                            </Button>
                                         ))}
-                                    </SelectContent>
-                                </Select>
-                                <Button type="button" size="sm" className="h-7 rounded-xl px-2 text-xs" onClick={() => applyRouteChange(selectedModels, bulkMoveTarget)} disabled={hasPendingChanges}>
-                                    移动
-                                </Button>
-                                <Button type="button" variant="outline" size="sm" className="h-7 rounded-xl px-2 text-xs" onClick={() => applyDisabledChange(selectedModels, false)} disabled={hasPendingChanges}>
-                                    启用
-                                </Button>
-                                <Button type="button" variant="outline" size="sm" className="h-7 rounded-xl px-2 text-xs" onClick={() => applyDisabledChange(selectedModels, true)} disabled={hasPendingChanges}>
-                                    停用
-                                </Button>
-                                <Button type="button" variant="ghost" size="sm" className="h-7 rounded-xl px-2 text-xs" onClick={() => setSelectedModelKeys(new Set())}>
-                                    清空
-                                </Button>
+                                    </div>
+                                </div>
+                            </PopoverContent>
+                        </Popover>
+                    ) : null}
+
+                    {visibleGroups.some((group) => group.masked_pending_key_count > 0 && group.enabled_key_count === 0) ? (
+                        <button
+                            type="button"
+                            onClick={handleFocusAttention}
+                            className="inline-flex h-8 items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 text-xs font-medium text-amber-800 transition hover:bg-amber-500/15 dark:text-amber-200"
+                        >
+                            <CircleAlert className="size-3.5" />
+                            待补全文明文 Key
+                        </button>
+                    ) : null}
+
+                    {projectedGroups.length > 0 ? (
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <button
+                                    type="button"
+                                    className="inline-flex h-8 items-center gap-2 rounded-full border border-border/70 bg-background/70 px-3 text-xs font-medium text-foreground transition hover:bg-muted/60"
+                                >
+                                    <KeyRound className="size-3.5 text-primary" />
+                                    投影 Key {projectedGroups.length} 组
+                                </button>
+                            </PopoverTrigger>
+                            <PopoverContent align="start" className="w-72 rounded-2xl border border-border/70 bg-card p-3 shadow-xl">
+                                <div className="space-y-2">
+                                    <div className="text-xs font-medium text-muted-foreground">投影渠道 Key 管理</div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {projectedGroups.map((group) => (
+                                            <Button
+                                                key={`projected-${group.group_key}`}
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                className="rounded-full"
+                                                onClick={() => handleOpenProjectedKeys(group)}
+                                            >
+                                                {group.group_name || group.group_key}
+                                                <span className="text-[10px] text-muted-foreground">{group.projected_keys.length} Keys</span>
+                                            </Button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </PopoverContent>
+                        </Popover>
+                    ) : null}
+
+                    {/* 分组级模型正则筛选：命中的启用、未命中的停用；留空即取消筛选、全部启用。
+                        该正则是持久规则，每次站点同步落库后会再次套用，因此新同步出来的模型也会自动遵守。 */}
+                    <Popover open={modelFilterOpen} onOpenChange={handleModelFilterOpenChange}>
+                        <PopoverTrigger asChild>
+                            <button
+                                type="button"
+                                disabled={!activeGroup}
+                                title={activeGroup ? '按正则筛选该分组要启用的模型' : '请先选择具体分组'}
+                                className={cn(
+                                    'inline-flex h-8 items-center gap-2 rounded-full border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
+                                    activeGroupModelFilter
+                                        ? 'border-primary/30 bg-primary/10 text-primary hover:bg-primary/15'
+                                        : 'border-border/70 bg-background/70 text-foreground hover:bg-muted/60',
+                                )}
+                            >
+                                <Regex className="size-3.5" />
+                                {activeGroupModelFilter
+                                    ? `正则 启用 ${activeGroupEnabledModelCount}/${activeGroup?.models.length ?? 0}`
+                                    : '正则 未设置'}
+                            </button>
+                        </PopoverTrigger>
+                        <PopoverContent align="start" className="w-80 rounded-2xl border border-border/70 bg-card p-3 shadow-xl">
+                            <div className="space-y-3">
+                                <div className="text-xs font-medium text-muted-foreground">
+                                    分组 {activeGroupLabel} 的模型正则筛选
+                                </div>
+                                <Input
+                                    value={modelFilterDraft}
+                                    onChange={(event) => setModelFilterDraft(event.target.value)}
+                                    onKeyDown={(event) => {
+                                        if (event.key !== 'Enter' || modelFilterDraftError) return;
+                                        event.preventDefault();
+                                        handleSaveModelFilter(modelFilterDraft);
+                                    }}
+                                    placeholder="例如 ^(claude|deepseek)-"
+                                    aria-invalid={!!modelFilterDraftError}
+                                    className="h-8 rounded-xl font-mono text-xs"
+                                />
+                                {modelFilterDraftError ? (
+                                    <p className="text-[11px] text-destructive">正则无效：{modelFilterDraftError}</p>
+                                ) : (
+                                    <p className="text-[11px] text-muted-foreground">
+                                        {modelFilterDraft.trim()
+                                            ? `匹配 ${modelFilterPreview.matched} / 共 ${modelFilterPreview.total} 个模型，未匹配的会被停用`
+                                            : `留空 = 全部启用（共 ${modelFilterPreview.total} 个模型）`}
+                                    </p>
+                                )}
+                                <div className="flex items-center justify-end gap-2">
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-8 rounded-xl px-2 text-xs"
+                                        onClick={() => handleSaveModelFilter('')}
+                                        disabled={groupModelFilterMutation.isPending || !activeGroupModelFilter}
+                                    >
+                                        清除
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        className="h-8 rounded-xl px-3 text-xs"
+                                        onClick={() => handleSaveModelFilter(modelFilterDraft)}
+                                        disabled={groupModelFilterMutation.isPending || !!modelFilterDraftError}
+                                    >
+                                        {groupModelFilterMutation.isPending ? '应用中...' : '保存并应用'}
+                                    </Button>
+                                </div>
                             </div>
-                        ) : null}
-                    </div>
-                ) : null}
+                        </PopoverContent>
+                    </Popover>
+
+                    {unsupportedRouteCount > 0 ? (
+                        <button
+                            type="button"
+                            onClick={handleFocusAttention}
+                            className="inline-flex h-8 items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 text-xs font-medium text-amber-800 transition hover:bg-amber-500/15 dark:text-amber-200"
+                        >
+                            <CircleAlert className="size-3.5" />
+                            未识别端点 {unsupportedRouteCount}
+                        </button>
+                    ) : null}
+
+                    {selectedVisibleCount > 0 ? (
+                        <div className="ml-auto flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-medium text-foreground">已选 {selectedVisibleCount} 个</span>
+                            <Select value={bulkMoveTarget} onValueChange={(value) => setBulkMoveTarget(value as SiteModelRouteType)}>
+                                <SelectTrigger className="h-7 w-[10rem] rounded-xl text-xs">
+                                    <SelectValue placeholder="目标端点" />
+                                </SelectTrigger>
+                                <SelectContent className="rounded-xl">
+                                    {SITE_ROUTE_COLUMN_ORDER.map((routeType) => (
+                                        <SelectItem key={routeType} value={routeType}>
+                                            {routeTypeLabel(routeType)}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <Button type="button" size="sm" className="h-7 rounded-xl px-2 text-xs" onClick={() => applyRouteChange(selectedModels, bulkMoveTarget)} disabled={hasPendingChanges}>
+                                移动
+                            </Button>
+                            <Button type="button" variant="outline" size="sm" className="h-7 rounded-xl px-2 text-xs" onClick={() => applyDisabledChange(selectedModels, false)} disabled={hasPendingChanges}>
+                                启用
+                            </Button>
+                            <Button type="button" variant="outline" size="sm" className="h-7 rounded-xl px-2 text-xs" onClick={() => applyDisabledChange(selectedModels, true)} disabled={hasPendingChanges}>
+                                停用
+                            </Button>
+                            <Button type="button" variant="ghost" size="sm" className="h-7 rounded-xl px-2 text-xs" onClick={() => setSelectedModelKeys(new Set())}>
+                                清空
+                            </Button>
+                        </div>
+                    ) : null}
+                </div>
             </div>
 
             <Dialog open={!!creatingGroup} onOpenChange={(open) => !open && handleCloseCreateKey()}>

@@ -369,6 +369,7 @@ func newSiteChannelGroupView(groupKey string, groupName string, group model.Site
 		GroupKey:                groupKey,
 		GroupName:               groupName,
 		ProjectionDisabled:      group.ProjectionDisabled,
+		ModelFilterRegex:        group.ModelFilterRegex,
 		ProjectionSuspended:     group.ProjectionSuspended,
 		ProjectionSuspendReason: group.ProjectionSuspendReason,
 		ProjectionSuspendedAt:   projectionSuspendedAt,
@@ -608,6 +609,87 @@ func UpdateSiteGroupProjection(siteID int, accountID int, req *model.SiteGroupPr
 			Columns:   []clause.Column{{Name: "site_account_id"}, {Name: "group_key"}},
 			DoUpdates: clause.AssignmentColumns([]string{"projection_disabled"}),
 		}).Create(&row).Error
+	})
+}
+
+// UpdateSiteGroupModelFilter 保存分组级模型正则筛选，并立即按新正则重算该分组所有
+// 模型的启用状态：命中正则的启用、未命中的停用；正则留空表示取消筛选、全部启用。
+// 该正则是持久规则，站点同步落库时会再次套用（见 sitesync.persistSyncSnapshot），
+// 因此新同步出来的模型也会自动遵守。
+func UpdateSiteGroupModelFilter(siteID int, accountID int, req *model.SiteGroupModelFilterUpdateRequest, ctx context.Context) error {
+	if req == nil {
+		return fmt.Errorf("site group model filter update request is nil")
+	}
+	if _, err := siteChannelAccount(siteID, accountID, ctx); err != nil {
+		return err
+	}
+	pattern := strings.TrimSpace(req.ModelFilterRegex)
+	re, err := model.CompileSiteModelFilterRegex(pattern)
+	if err != nil {
+		return newSiteChannelInvalidModelFilterError(err)
+	}
+	groupKey := model.NormalizeSiteGroupKey(req.GroupKey)
+	groupName := model.NormalizeSiteGroupName(groupKey, groupKey)
+
+	return db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing model.SiteUserGroup
+		result := tx.Where("site_account_id = ? AND group_key = ?", accountID, groupKey).First(&existing)
+		switch {
+		case result.Error == nil:
+			if err := tx.Model(&model.SiteUserGroup{}).
+				Where("id = ?", existing.ID).
+				Update("model_filter_regex", pattern).Error; err != nil {
+				return err
+			}
+		case errors.Is(result.Error, gorm.ErrRecordNotFound):
+			// 分组行可能尚未落库（例如同步还没跑过），留空正则时没有任何需要记录的状态。
+			if pattern == "" {
+				break
+			}
+			row := model.SiteUserGroup{
+				SiteAccountID:    accountID,
+				GroupKey:         groupKey,
+				Name:             groupName,
+				ModelFilterRegex: pattern,
+			}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "site_account_id"}, {Name: "group_key"}},
+				DoUpdates: clause.AssignmentColumns([]string{"model_filter_regex"}),
+			}).Create(&row).Error; err != nil {
+				return err
+			}
+		default:
+			return result.Error
+		}
+
+		var models []model.SiteModel
+		if err := tx.Where("site_account_id = ? AND group_key = ?", accountID, groupKey).Find(&models).Error; err != nil {
+			return err
+		}
+		enabled := make([]int, 0, len(models))
+		disabled := make([]int, 0, len(models))
+		for _, item := range models {
+			nextDisabled := !model.SiteModelFilterAllows(re, item.ModelName)
+			if item.Disabled == nextDisabled {
+				continue
+			}
+			if nextDisabled {
+				disabled = append(disabled, item.ID)
+			} else {
+				enabled = append(enabled, item.ID)
+			}
+		}
+		if len(enabled) > 0 {
+			if err := tx.Model(&model.SiteModel{}).Where("id IN ?", enabled).Update("disabled", false).Error; err != nil {
+				return err
+			}
+		}
+		if len(disabled) > 0 {
+			if err := tx.Model(&model.SiteModel{}).Where("id IN ?", disabled).Update("disabled", true).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

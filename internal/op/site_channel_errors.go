@@ -12,6 +12,8 @@ const (
 	CodeSiteChannelModelNotFound           = "site_channel.model_not_found"
 	CodeSiteChannelRouteUpdateFailed       = "site_channel.route_update_failed"
 	CodeSiteChannelModelDisableFailed      = "site_channel.model_disable_failed"
+	CodeSiteChannelInvalidModelFilter      = "site_channel.invalid_model_filter"
+	CodeSiteChannelModelFilterUpdateFailed = "site_channel.model_filter_update_failed"
 	CodeSiteChannelKeyCreateFailed         = "site_channel.key_create_failed"
 	CodeSiteChannelSourceKeyUpdateFailed   = "site_channel.source_key_update_failed"
 	CodeSiteChannelProjectedSettingsFailed = "site_channel.projected_settings_failed"
@@ -29,6 +31,10 @@ func wrapSiteChannelRouteUpdateFailed(err error) *apperror.Error {
 
 func wrapSiteChannelModelDisableFailed(err error) *apperror.Error {
 	return apperror.Wrap(CodeSiteChannelModelDisableFailed, "site channel model disable failed", err).WithStatus(http.StatusInternalServerError)
+}
+
+func newSiteChannelInvalidModelFilterError(err error) *apperror.Error {
+	return apperror.Wrap(CodeSiteChannelInvalidModelFilter, "invalid site group model filter regex", err).WithStatus(http.StatusBadRequest)
 }
 
 func wrapSiteChannelSourceKeyUpdateFailed(err error) *apperror.Error {

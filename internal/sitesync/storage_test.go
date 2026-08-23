@@ -347,6 +347,118 @@ func TestPersistSyncSnapshotPreservesGroupProjectionDisabled(t *testing.T) {
 	}
 }
 
+// 分组模型正则筛选是持久规则：同步既要保留正则原文，也要用它重算新同步下来的模型，
+// 否则上游新增的模型会绕过筛选被自动启用。
+func TestPersistSyncSnapshotPreservesAndAppliesGroupModelFilter(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+	_, account := createProjectionFixture(t, ctx)
+
+	existingGroup := model.SiteUserGroup{
+		SiteAccountID:    account.ID,
+		GroupKey:         model.SiteDefaultGroupKey,
+		Name:             model.SiteDefaultGroupName,
+		ModelFilterRegex: "^claude-",
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&existingGroup).Error; err != nil {
+		t.Fatalf("create default group failed: %v", err)
+	}
+
+	snapshot := &syncSnapshot{
+		accessToken: account.AccessToken,
+		groups: []model.SiteUserGroup{
+			{GroupKey: model.SiteDefaultGroupKey, Name: model.SiteDefaultGroupName},
+		},
+		tokens: []model.SiteToken{
+			{Name: "primary", Token: "key-primary", GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, Enabled: true, Source: "sync"},
+		},
+		models: []model.SiteModel{
+			{GroupKey: model.SiteDefaultGroupKey, ModelName: "claude-opus-5", Source: "sync", RouteType: model.SiteModelRouteTypeAnthropic, RouteSource: model.SiteModelRouteSourceSyncInferred},
+			{GroupKey: model.SiteDefaultGroupKey, ModelName: "gpt-4.1", Source: "sync", RouteType: model.SiteModelRouteTypeOpenAIChat, RouteSource: model.SiteModelRouteSourceSyncInferred},
+		},
+		groupResults: []siteGroupSyncResult{
+			{GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, HasKey: true, Status: siteGroupSyncStatusSynced, Authoritative: true, ModelCount: 2, Message: "同步到 2 个模型"},
+		},
+		status:  model.SiteExecutionStatusSuccess,
+		message: "ok",
+	}
+
+	if err := persistSyncSnapshot(ctx, account.ID, snapshot); err != nil {
+		t.Fatalf("persistSyncSnapshot returned error: %v", err)
+	}
+
+	var reloadedGroup model.SiteUserGroup
+	if err := dbpkg.GetDB().WithContext(ctx).Where("site_account_id = ? AND group_key = ?", account.ID, model.SiteDefaultGroupKey).First(&reloadedGroup).Error; err != nil {
+		t.Fatalf("query reloaded group failed: %v", err)
+	}
+	if reloadedGroup.ModelFilterRegex != "^claude-" {
+		t.Fatalf("expected model filter regex to be preserved, got %q", reloadedGroup.ModelFilterRegex)
+	}
+
+	var models []model.SiteModel
+	if err := dbpkg.GetDB().WithContext(ctx).Where("site_account_id = ?", account.ID).Order("model_name ASC").Find(&models).Error; err != nil {
+		t.Fatalf("query models failed: %v", err)
+	}
+	disabledByName := make(map[string]bool, len(models))
+	for _, item := range models {
+		disabledByName[item.ModelName] = item.Disabled
+	}
+	if disabledByName["claude-opus-5"] {
+		t.Fatalf("model matching the filter must stay enabled")
+	}
+	if !disabledByName["gpt-4.1"] {
+		t.Fatalf("model not matching the filter must be auto-disabled")
+	}
+}
+
+// 没有配置正则的分组必须完全不受影响：手动停用的模型不能被每轮同步重新启用。
+func TestPersistSyncSnapshotWithoutFilterKeepsManualDisabledState(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+	_, account := createProjectionFixture(t, ctx)
+
+	existing := model.SiteModel{
+		SiteAccountID: account.ID,
+		GroupKey:      model.SiteDefaultGroupKey,
+		ModelName:     "gpt-4.1",
+		Source:        "sync",
+		RouteType:     model.SiteModelRouteTypeOpenAIChat,
+		RouteSource:   model.SiteModelRouteSourceSyncInferred,
+		Disabled:      true,
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&existing).Error; err != nil {
+		t.Fatalf("create existing model failed: %v", err)
+	}
+
+	snapshot := &syncSnapshot{
+		accessToken: account.AccessToken,
+		groups: []model.SiteUserGroup{
+			{GroupKey: model.SiteDefaultGroupKey, Name: model.SiteDefaultGroupName},
+		},
+		tokens: []model.SiteToken{
+			{Name: "primary", Token: "key-primary", GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, Enabled: true, Source: "sync"},
+		},
+		models: []model.SiteModel{
+			{GroupKey: model.SiteDefaultGroupKey, ModelName: "gpt-4.1", Source: "sync", RouteType: model.SiteModelRouteTypeOpenAIChat, RouteSource: model.SiteModelRouteSourceSyncInferred},
+		},
+		groupResults: []siteGroupSyncResult{
+			{GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, HasKey: true, Status: siteGroupSyncStatusSynced, Authoritative: true, ModelCount: 1, Message: "同步到 1 个模型"},
+		},
+		status:  model.SiteExecutionStatusSuccess,
+		message: "ok",
+	}
+
+	if err := persistSyncSnapshot(ctx, account.ID, snapshot); err != nil {
+		t.Fatalf("persistSyncSnapshot returned error: %v", err)
+	}
+
+	var reloaded model.SiteModel
+	if err := dbpkg.GetDB().WithContext(ctx).Where("site_account_id = ? AND model_name = ?", account.ID, "gpt-4.1").First(&reloaded).Error; err != nil {
+		t.Fatalf("query reloaded model failed: %v", err)
+	}
+	if !reloaded.Disabled {
+		t.Fatalf("manual disabled state must survive a sync when the group has no filter")
+	}
+}
+
 func TestPersistSyncSnapshotReplacesOnlyAuthoritativeGroups(t *testing.T) {
 	ctx := setupProjectTestDB(t)
 	_, account := createProjectionFixture(t, ctx)

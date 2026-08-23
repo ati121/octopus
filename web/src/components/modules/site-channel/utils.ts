@@ -408,3 +408,40 @@ export function getErrorMessage(error: unknown, fallback: string) {
 
     return fallback;
 }
+
+// 与后端 regexp2 的 ECMAScript 模式对齐：支持 (?i)(?s)(?m) 内联 flag。
+// JS 原生 RegExp 不认内联 flag，因此这里把它剥离成构造参数，
+// 保证前端预览的匹配结果和后端实际落库的一致。
+const INLINE_REGEX_FLAGS = /^\(\?([ism]+)\)([\s\S]+)$/;
+
+export function compileModelFilterRegex(pattern: string): RegExp | null {
+    const trimmed = pattern.trim();
+    if (!trimmed) return null;
+    try {
+        const inlineMatch = trimmed.match(INLINE_REGEX_FLAGS);
+        if (inlineMatch) {
+            const flags = inlineMatch[1].split('').filter((flag) => 'ism'.includes(flag)).join('');
+            return new RegExp(inlineMatch[2], flags);
+        }
+        return new RegExp(trimmed);
+    } catch {
+        return null;
+    }
+}
+
+export function validateModelFilterRegex(pattern: string): string {
+    const trimmed = pattern.trim();
+    if (!trimmed) return '';
+    try {
+        const inlineMatch = trimmed.match(INLINE_REGEX_FLAGS);
+        if (inlineMatch) {
+            const flags = inlineMatch[1].split('').filter((flag) => 'ism'.includes(flag)).join('');
+            new RegExp(inlineMatch[2], flags);
+        } else {
+            new RegExp(trimmed);
+        }
+        return '';
+    } catch (error) {
+        return (error as Error)?.message ?? '正则表达式无效';
+    }
+}

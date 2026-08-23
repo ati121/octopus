@@ -31,6 +31,7 @@ type SiteChannelGroup struct {
 	GroupKey                string                         `json:"group_key"`
 	GroupName               string                         `json:"group_name"`
 	ProjectionDisabled      bool                           `json:"projection_disabled"`
+	ModelFilterRegex        string                         `json:"model_filter_regex"`
 	ProjectionSuspended     bool                           `json:"projection_suspended"`
 	ProjectionSuspendReason string                         `json:"projection_suspend_reason,omitempty"`
 	ProjectionSuspendedAt   *int64                         `json:"projection_suspended_at,omitempty"`
@@ -196,4 +197,11 @@ type SiteSourceKeyUpdateRequest struct {
 type SiteGroupProjectionUpdateRequest struct {
 	GroupKey           string `json:"group_key" binding:"required"`
 	ProjectionDisabled bool   `json:"projection_disabled"`
+}
+
+// SiteGroupModelFilterUpdateRequest 保存分组级模型正则筛选。ModelFilterRegex 留空
+// 表示取消筛选，该分组模型全部启用。
+type SiteGroupModelFilterUpdateRequest struct {
+	GroupKey         string `json:"group_key" binding:"required"`
+	ModelFilterRegex string `json:"model_filter_regex"`
 }

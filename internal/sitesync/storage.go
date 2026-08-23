@@ -119,6 +119,7 @@ func persistSyncSnapshot(ctx context.Context, accountID int, snapshot *syncSnaps
 				itemCopy := item
 				existing = &itemCopy
 				snapshot.groups[i].ProjectionDisabled = item.ProjectionDisabled
+				snapshot.groups[i].ModelFilterRegex = item.ModelFilterRegex
 			}
 			if result, ok := groupResultMap[snapshot.groups[i].GroupKey]; ok {
 				applyPersistedGroupSyncState(&snapshot.groups[i], existing, result, now)
@@ -130,6 +131,9 @@ func persistSyncSnapshot(ctx context.Context, accountID int, snapshot *syncSnaps
 		applyRevokedManualTokensToSnapshot(snapshot, revokedTokens)
 		incomingModels := preparePersistedSyncModels(accountID, snapshot.models, existingModelMap, now)
 		finalModels := mergePersistedSiteModelsByGroup(existingModels, incomingModels, snapshot.groupResults)
+		// 分组级正则筛选是持久规则：同步落库前按各分组的正则重算启用状态，
+		// 这样上游新出现的模型不匹配时不会被自动启用。
+		model.ApplySiteModelFilters(finalModels, collectSiteModelFilters(existingGroups, snapshot.groups))
 
 		if len(snapshot.groups) > 0 {
 			if err := tx.Create(&snapshot.groups).Error; err != nil {
@@ -162,6 +166,20 @@ func persistSyncSnapshot(ctx context.Context, accountID int, snapshot *syncSnaps
 		return err
 	}
 	return nil
+}
+
+// collectSiteModelFilters 汇总本账号各分组的模型正则筛选。以库里已有的分组为底，
+// 再用本轮快照覆盖——快照里的分组已经在上面继承过历史正则，而只存在于历史里的分组
+// （本轮未同步、模型被原样保留）也需要继续套用自己的正则。
+func collectSiteModelFilters(existingGroups []model.SiteUserGroup, snapshotGroups []model.SiteUserGroup) map[string]string {
+	filters := make(map[string]string, len(existingGroups)+len(snapshotGroups))
+	for _, group := range existingGroups {
+		filters[model.NormalizeSiteGroupKey(group.GroupKey)] = group.ModelFilterRegex
+	}
+	for _, group := range snapshotGroups {
+		filters[model.NormalizeSiteGroupKey(group.GroupKey)] = group.ModelFilterRegex
+	}
+	return filters
 }
 
 func preparePersistedSyncModels(accountID int, incoming []model.SiteModel, existingModelMap map[string]model.SiteModel, now time.Time) []model.SiteModel {

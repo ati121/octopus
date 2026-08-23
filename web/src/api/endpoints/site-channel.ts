@@ -79,6 +79,7 @@ export type SiteChannelGroup = {
     group_key: string;
     group_name: string;
     projection_disabled: boolean;
+    model_filter_regex: string;
     projection_suspended: boolean;
     projection_suspend_reason?: string;
     projection_suspended_at?: number | null;
@@ -292,6 +293,7 @@ function normalizeSiteChannelAccount(account: SiteChannelAccountServer): SiteCha
         groups: (account.groups ?? []).map((group) => ({
             ...group,
             projection_disabled: group.projection_disabled === true,
+            model_filter_regex: typeof group.model_filter_regex === 'string' ? group.model_filter_regex : '',
             projection_suspended: group.projection_suspended === true,
             projection_suspend_reason: typeof group.projection_suspend_reason === 'string' ? group.projection_suspend_reason : undefined,
             projection_suspended_at: typeof group.projection_suspended_at === 'number' ? group.projection_suspended_at : null,
@@ -408,6 +410,11 @@ export type SiteSourceKeyUpdateRequest = {
 export type SiteGroupProjectionUpdateRequest = {
     group_key: string;
     projection_disabled: boolean;
+};
+
+export type SiteGroupModelFilterUpdateRequest = {
+    group_key: string;
+    model_filter_regex: string;
 };
 
 function getAccountPath(siteId: number, accountId: number, suffix: string) {
@@ -600,6 +607,25 @@ export function useUpdateSiteGroupProjection(siteId: number, accountId: number) 
         },
         onError: (error) => {
             logger.error('site group projection update failed:', error);
+        },
+    });
+}
+
+export function useUpdateSiteGroupModelFilter(siteId: number, accountId: number) {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (payload: SiteGroupModelFilterUpdateRequest) =>
+            apiClient.put<SiteChannelAccountServer>(getAccountPath(siteId, accountId, '/group-model-filter'), payload),
+        onSuccess: (account) => {
+            const normalizedAccount = normalizeSiteChannelAccount(account);
+            queryClient.setQueryData<SiteChannelCard[]>(['site-channel', 'list'], (cards) =>
+                replaceSiteChannelAccount(cards, siteId, normalizedAccount),
+            );
+            invalidateSiteChannelAndRelated(queryClient);
+        },
+        onError: (error) => {
+            logger.error('site group model filter update failed:', error);
         },
     });
 }
