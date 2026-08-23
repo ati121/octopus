@@ -15,6 +15,7 @@ type ChannelAttempt struct {
 	ChannelID    int           `json:"channel_id"`
 	ChannelKeyID int           `json:"channel_key_id,omitempty"`
 	ChannelName  string        `json:"channel_name"`
+	Protocol     string        `json:"protocol,omitempty"` // 出站协议（Chat/Response/Anthropic 等）
 	ModelName    string        `json:"model_name"`
 	AttemptNum   int           `json:"attempt_num"`
 	Status       AttemptStatus `json:"status"`
@@ -56,6 +57,7 @@ type RelayLog struct {
 	RequestAPIKeyName    string              `json:"request_api_key_name"`                     // 请求使用的 API Key 名称
 	ChannelId            int                 `json:"channel" gorm:"index"`                     // 实际使用的渠道ID
 	ChannelName          string              `json:"channel_name"`                             // 渠道名称
+	Protocol             string              `json:"protocol,omitempty" gorm:"-"`              // 出站协议（Chat/Response/Anthropic 等）
 	ActualModelName      string              `json:"actual_model_name"`                        // 实际使用模型名称
 	InputTokens          int                 `json:"input_tokens"`                             // 输入Token
 	TransportInputTokens *int                `json:"transport_input_tokens,omitempty"`         // 实际发送到上游请求体的 Token 估算

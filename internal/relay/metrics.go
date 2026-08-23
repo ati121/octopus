@@ -218,7 +218,10 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 		globalStats.RequestFailed = 1
 	}
 
-	channelID, channelName := finalChannel(attempts)
+	attempts = enrichChannelAttemptProtocols(ctx, attempts)
+	channelID, _ := finalChannel(attempts)
+	logChannelID, logChannelName := finalLogChannel(attempts)
+	protocol := finalChannelProtocol(attempts)
 	op.StatsTotalUpdate(globalStats)
 	op.StatsHourlyUpdate(globalStats)
 	op.StatsDailyUpdate(context.Background(), globalStats)
@@ -246,8 +249,9 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 		}
 		log.Debugw("relay.usage_missing",
 			"actual_model", m.ActualModel,
-			"channel_id", channelID,
-			"channel", channelName,
+			"channel_id", logChannelID,
+			"channel", logChannelName,
+			"protocol", protocol,
 			"had_usage", m.InternalResponse != nil && m.InternalResponse.Usage != nil,
 			"fallback_input_tokens", fallbackInput,
 		)
@@ -257,8 +261,9 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 		fields := []interface{}{
 			"model", m.RequestModel,
 			"actual_model", m.ActualModel,
-			"channel_id", channelID,
-			"channel", channelName,
+			"channel_id", logChannelID,
+			"channel", logChannelName,
+			"protocol", protocol,
 			"success", success,
 			"duration_ms", duration.Milliseconds(),
 			"input_token", m.Stats.InputToken,
@@ -276,7 +281,48 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 		}
 	}
 
-	m.saveLog(ctx, success, err, duration, attempts, channelID, channelName)
+	m.saveLog(ctx, success, err, duration, attempts, logChannelID, logChannelName)
+}
+
+// enrichChannelAttemptProtocols fills the protocol from the channel's actual
+// outbound type. Channel names are not reliable for this: ordinary channels
+// do not carry a protocol suffix, while site-projected names may contain
+// account/group path segments.
+func enrichChannelAttemptProtocols(ctx context.Context, attempts []model.ChannelAttempt) []model.ChannelAttempt {
+	if len(attempts) == 0 {
+		return attempts
+	}
+	enriched := make([]model.ChannelAttempt, len(attempts))
+	copy(enriched, attempts)
+	for i := range enriched {
+		if strings.TrimSpace(enriched[i].Protocol) != "" || enriched[i].ChannelID == 0 {
+			continue
+		}
+		channel, err := op.ChannelGet(enriched[i].ChannelID, ctx)
+		if err != nil || channel == nil {
+			continue
+		}
+		enriched[i].Protocol = model.CompactOutboundProtocolName(channel.Type)
+	}
+	return enriched
+}
+
+func finalChannelProtocol(attempts []model.ChannelAttempt) string {
+	var fallbackProtocol string
+	for i := len(attempts) - 1; i >= 0; i-- {
+		attempt := attempts[i]
+		protocol := strings.TrimSpace(attempt.Protocol)
+		if protocol == "" {
+			continue
+		}
+		if fallbackProtocol == "" {
+			fallbackProtocol = protocol
+		}
+		if attempt.Status == model.AttemptSuccess {
+			return attempt.Protocol
+		}
+	}
+	return fallbackProtocol
 }
 
 func finalChannel(attempts []model.ChannelAttempt) (int, string) {
@@ -295,6 +341,22 @@ func finalChannel(attempts []model.ChannelAttempt) (int, string) {
 	return lastID, lastName
 }
 
+// finalLogChannel supplies a display target for all-skipped requests without
+// changing channel statistics semantics (which intentionally use finalChannel
+// and ignore circuit-break/skipped decisions).
+func finalLogChannel(attempts []model.ChannelAttempt) (int, string) {
+	if channelID, channelName := finalChannel(attempts); channelID != 0 || strings.TrimSpace(channelName) != "" {
+		return channelID, channelName
+	}
+	for i := len(attempts) - 1; i >= 0; i-- {
+		attempt := attempts[i]
+		if attempt.ChannelID != 0 || strings.TrimSpace(attempt.ChannelName) != "" {
+			return attempt.ChannelID, attempt.ChannelName
+		}
+	}
+	return 0, ""
+}
+
 func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, duration time.Duration, attempts []model.ChannelAttempt, channelID int, channelName string) {
 	actualModel := m.ActualModel
 	if actualModel == "" {
@@ -306,6 +368,7 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 		Time:             m.StartTime.Unix(),
 		RequestModelName: m.RequestModel,
 		ChannelName:      channelName,
+		Protocol:         finalChannelProtocol(attempts),
 		ChannelId:        channelID,
 		ActualModelName:  actualModel,
 		UseTime:          int(duration.Milliseconds()),

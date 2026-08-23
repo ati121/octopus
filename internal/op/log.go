@@ -169,6 +169,50 @@ func appendRelayLogRecent(relayLog model.RelayLog) {
 	pruneFinishedRelayLogsLocked()
 }
 
+// fillRelayLogProtocols backfills protocol metadata for logs created by older
+// relay code (or by a direct caller). Keeping this at the log boundary makes
+// the API consistent even when a request started before the new metadata was
+// introduced, and it also covers non-HTTP relay paths.
+func fillRelayLogProtocols(relayLog *model.RelayLog) {
+	if relayLog == nil {
+		return
+	}
+	protocolForChannel := func(channelID int) string {
+		if channelID == 0 {
+			return ""
+		}
+		channel, ok := channelCache.Get(channelID)
+		if !ok {
+			return ""
+		}
+		return model.CompactOutboundProtocolName(channel.Type)
+	}
+	if strings.TrimSpace(relayLog.Protocol) == "" {
+		relayLog.Protocol = protocolForChannel(relayLog.ChannelId)
+	}
+	for i := range relayLog.Attempts {
+		if strings.TrimSpace(relayLog.Attempts[i].Protocol) == "" {
+			relayLog.Attempts[i].Protocol = protocolForChannel(relayLog.Attempts[i].ChannelID)
+		}
+	}
+	if strings.TrimSpace(relayLog.Protocol) == "" {
+		for i := len(relayLog.Attempts) - 1; i >= 0; i-- {
+			if relayLog.Attempts[i].Status == model.AttemptSuccess && strings.TrimSpace(relayLog.Attempts[i].Protocol) != "" {
+				relayLog.Protocol = relayLog.Attempts[i].Protocol
+				break
+			}
+		}
+	}
+	if strings.TrimSpace(relayLog.Protocol) == "" {
+		for i := len(relayLog.Attempts) - 1; i >= 0; i-- {
+			if strings.TrimSpace(relayLog.Attempts[i].Protocol) != "" {
+				relayLog.Protocol = relayLog.Attempts[i].Protocol
+				break
+			}
+		}
+	}
+}
+
 // pruneFinishedRelayLogsLocked removes the oldest completed records only.
 // Active records do not count toward the 50-record limit.
 func pruneFinishedRelayLogsLocked() {
@@ -197,6 +241,7 @@ func RelayLogAdd(ctx context.Context, relayLog model.RelayLog) error {
 	if relayLog.ID == 0 {
 		relayLog.ID = snowflake.GenerateID()
 	}
+	fillRelayLogProtocols(&relayLog)
 	relayLog.Processing = false
 	appendRelayLogRecent(relayLog)
 	notifySubscribers(relayLog)
@@ -207,6 +252,7 @@ func RelayLogStart(relayLog model.RelayLog) int64 {
 	if relayLog.ID == 0 {
 		relayLog.ID = snowflake.GenerateID()
 	}
+	fillRelayLogProtocols(&relayLog)
 	relayLog.Processing = true
 
 	relayLogInFlightLock.Lock()
@@ -221,6 +267,7 @@ func RelayLogUpdate(ctx context.Context, relayLog model.RelayLog) error {
 	if relayLog.ID == 0 {
 		return RelayLogAdd(ctx, relayLog)
 	}
+	fillRelayLogProtocols(&relayLog)
 	relayLog.Processing = false
 	relayLogInFlightLock.Lock()
 	delete(relayLogInFlight, relayLog.ID)
@@ -236,6 +283,7 @@ func RelayLogProgress(relayLog model.RelayLog) {
 	if relayLog.ID == 0 {
 		return
 	}
+	fillRelayLogProtocols(&relayLog)
 	relayLog.Processing = true
 	relayLogInFlightLock.Lock()
 	if _, ok := relayLogInFlight[relayLog.ID]; !ok {
@@ -449,9 +497,11 @@ func relayLogBeforeCursor(entry model.RelayLog, beforeTime, beforeID *int64) boo
 
 func RelayLogGet(ctx context.Context, id int64) (*model.RelayLog, error) {
 	if item, ok := relayLogFindInFlight(id); ok {
+		fillRelayLogProtocols(&item)
 		return &item, nil
 	}
 	if item, ok := relayLogFindRecent(id); ok {
+		fillRelayLogProtocols(&item)
 		return &item, nil
 	}
 	return nil, gorm.ErrRecordNotFound
@@ -461,6 +511,7 @@ func relayLogCollectRecent(filter RelayLogListFilter, channelSet map[int]struct{
 	relayLogRecentLock.RLock()
 	result := make([]model.RelayLog, 0, len(relayLogRecent))
 	for _, entry := range relayLogRecent {
+		fillRelayLogProtocols(&entry)
 		if !relayLogMatchesFilter(entry, filter, channelSet, keyword) {
 			continue
 		}

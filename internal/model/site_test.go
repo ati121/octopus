@@ -1,6 +1,10 @@
 package model
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/bestruirui/octopus/internal/transformer/outbound"
+)
 
 func TestNormalizeComparableSiteTokenValue(t *testing.T) {
 	tests := []struct {
@@ -174,6 +178,30 @@ func TestCompactSiteModelRouteTypeName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if actual := CompactSiteModelRouteTypeName(tt.routeType); actual != tt.expected {
+				t.Fatalf("expected %q, got %q", tt.expected, actual)
+			}
+		})
+	}
+}
+
+func TestCompactOutboundProtocolName(t *testing.T) {
+	tests := []struct {
+		name        string
+		channelType outbound.OutboundType
+		expected    string
+	}{
+		{name: "chat", channelType: outbound.OutboundTypeOpenAIChat, expected: "Chat"},
+		{name: "response", channelType: outbound.OutboundTypeOpenAIResponse, expected: "Response"},
+		{name: "anthropic", channelType: outbound.OutboundTypeAnthropic, expected: "Anthropic"},
+		{name: "gemini", channelType: outbound.OutboundTypeGemini, expected: "Gemini"},
+		{name: "volcengine", channelType: outbound.OutboundTypeVolcengine, expected: "Volcengine"},
+		{name: "embedding", channelType: outbound.OutboundTypeOpenAIEmbedding, expected: "Embedding"},
+		{name: "codex", channelType: outbound.OutboundTypeCodex, expected: "Codex"},
+		{name: "rerank", channelType: outbound.OutboundTypeRerank, expected: "Rerank"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if actual := CompactOutboundProtocolName(tt.channelType); actual != tt.expected {
 				t.Fatalf("expected %q, got %q", tt.expected, actual)
 			}
 		})

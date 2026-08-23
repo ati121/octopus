@@ -139,6 +139,7 @@ function mergeAdjacentAttempts(attempts: ChannelAttempt[]): MergedAttempt[] {
             && last.channel_id === a.channel_id
             && last.channel_key_id === a.channel_key_id
             && last.model_name === a.model_name
+            && last.protocol === a.protocol
             && last.status === a.status
             && (last.msg ?? '') === (a.msg ?? '')
         ) {
@@ -179,12 +180,72 @@ function hasCacheTokens(log: RelayLog) {
         || (log.cache_write_tokens != null && log.cache_write_tokens > 0);
 }
 
-// 投影渠道命名 "站点/账号/分组-端点后缀"，Anthropic 端点后缀为 -Anthropic。
-// 仅 Anthropic 端点的 input_tokens 不含 cache_read（Anthropic 原生语义），不应做减法；
-// OpenAI/Gemini 等的 input_tokens 已含 cache_read。见 SiteModelRouteType 后缀映射。
-function isAnthropicChannel(channelName: string): boolean {
-    if (!channelName) return false;
-    return /-Anthropic$/.test(channelName);
+const LOG_PROTOCOL_ALIASES: Record<string, string> = {
+    chat: 'Chat',
+    openaichat: 'Chat',
+    chatcompletion: 'Chat',
+    chatcompletions: 'Chat',
+    response: 'Response',
+    responses: 'Response',
+    openairesponse: 'Response',
+    anthropic: 'Anthropic',
+    messages: 'Anthropic',
+    gemini: 'Gemini',
+    volcengine: 'Volcengine',
+    embedding: 'Embedding',
+    openaiembedding: 'Embedding',
+    rerank: 'Rerank',
+    codex: 'Codex',
+    unsupported: 'Unsupported',
+};
+
+const LOG_PROTOCOLS = Object.values(LOG_PROTOCOL_ALIASES).filter((value, index, values) => values.indexOf(value) === index);
+
+function normalizeLogProtocol(value: string | undefined | null): string {
+    const trimmed = value?.trim() ?? '';
+    if (!trimmed) return '';
+    const key = trimmed.toLowerCase().replace(/[\s_-]+/g, '');
+    return LOG_PROTOCOL_ALIASES[key] ?? trimmed;
+}
+
+function inferLegacyLogChannel(channelName: string, expectedProtocol?: string): { baseName: string; protocol: string } {
+    const raw = channelName.trim();
+    if (!raw) return { baseName: '', protocol: '' };
+
+    const protocols = expectedProtocol
+        ? [expectedProtocol, ...LOG_PROTOCOLS.filter((protocol) => protocol !== expectedProtocol)]
+        : LOG_PROTOCOLS;
+    for (const protocol of protocols) {
+        const suffix = `-${protocol}`;
+        if (!raw.toLowerCase().endsWith(suffix.toLowerCase())) continue;
+        const withoutSuffix = raw.slice(0, -suffix.length).trim();
+        const segments = withoutSuffix.split('/').filter(Boolean);
+        // 站点投影渠道格式为「站点/账号/分组-协议」，日志只保留站点名。
+        const baseName = segments.length >= 3 ? segments[0] : withoutSuffix;
+        return { baseName: baseName || raw, protocol };
+    }
+
+    return { baseName: raw, protocol: '' };
+}
+
+/**
+ * 统一日志渠道标签：只显示「渠道名/协议」。
+ * 新日志优先使用后端 protocol；旧的站点投影日志仍从名称末尾兼容解析。
+ */
+function formatLogChannelLabel(channelName: string, protocol?: string | null): string {
+    const explicitProtocol = normalizeLogProtocol(protocol);
+    const inferred = inferLegacyLogChannel(channelName, explicitProtocol || undefined);
+    const resolvedProtocol = explicitProtocol || inferred.protocol;
+    const baseName = inferred.baseName;
+    if (!baseName) return resolvedProtocol;
+    return resolvedProtocol ? `${baseName}/${resolvedProtocol}` : baseName;
+}
+
+// 投影渠道命名 "站点/账号/分组-端点后缀"，Anthropic 端点的 input_tokens 不含 cache_read。
+function isAnthropicChannel(channelName: string, protocol?: string | null): boolean {
+    const explicitProtocol = normalizeLogProtocol(protocol);
+    if (explicitProtocol) return explicitProtocol === 'Anthropic';
+    return inferLegacyLogChannel(channelName).protocol === 'Anthropic';
 }
 
 function getHeadlineInputTokens(log: RelayLog) {
@@ -194,7 +255,7 @@ function getHeadlineInputTokens(log: RelayLog) {
     // OpenAI 等语义：input 已含 cache_read（必然 input ≥ cache_read），减去命中得新输入；
     // Anthropic：input 不含 cache_read，绝不减（含恢复对话等 input ≥ cache_read 的情况）；
     // 数值兜底：input < cache_read 时即便误判为含缓存语义也不减，避免畸形上游归零。
-    const dedupedInput = !isAnthropicChannel(log.channel_name) && log.input_tokens >= cacheRead
+    const dedupedInput = !isAnthropicChannel(log.channel_name, log.protocol) && log.input_tokens >= cacheRead
         ? log.input_tokens - cacheRead
         : log.input_tokens;
     return Math.max(0, dedupedInput + cacheWrite);
@@ -350,7 +411,7 @@ function RetryBadgeWithTooltip({ channelName, brandColor, attempts }: RetryBadge
                                 </Badge>
                                 <div className="flex min-w-0 flex-col flex-1">
                                     <span className="truncate text-xs font-semibold text-foreground">
-                                        {attempt.channel_name}
+                                        {formatLogChannelLabel(attempt.channel_name, attempt.protocol)}
                                     </span>
                                     <span className="text-[10px] text-muted-foreground">
                                         {attempt.model_name} • {formatDuration(attempt.totalDuration)}
@@ -701,7 +762,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                         </Badge>
                                     ) : hasMultipleAttempts ? (
                                         <RetryBadgeWithTooltip
-                                            channelName={log.channel_name}
+                                            channelName={formatLogChannelLabel(log.channel_name, log.protocol)}
                                             brandColor={brandColor}
                                             attempts={log.attempts!}
                                         />
@@ -711,7 +772,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                             className="shrink-0 text-xs px-1.5 py-0"
                                             style={{ backgroundColor: `${brandColor}15`, color: brandColor }}
                                         >
-                                            {log.channel_name}
+                                            {formatLogChannelLabel(log.channel_name, log.protocol)}
                                         </Badge>
                                     )}
                                     <span className="text-muted-foreground truncate" title={displayActualModelName}>
@@ -810,7 +871,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                     </Badge>
                                 ) : hasMultipleAttempts ? (
                                     <RetryBadgeWithTooltip
-                                        channelName={log.channel_name}
+                                        channelName={formatLogChannelLabel(log.channel_name, log.protocol)}
                                         brandColor={brandColor}
                                         attempts={log.attempts!}
                                     />
@@ -820,7 +881,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                         className="shrink-0 text-xs px-1.5 py-0"
                                         style={{ backgroundColor: `${brandColor}15`, color: brandColor }}
                                     >
-                                        {log.channel_name}
+                                        {formatLogChannelLabel(log.channel_name, log.protocol)}
                                     </Badge>
                                 )}
                                 <span className="text-muted-foreground truncate">{displayActualModelName}</span>
@@ -923,6 +984,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                                             && last.channel_id === a.channel_id
                                                                             && last.channel_key_id === a.channel_key_id
                                                                             && last.model_name === a.model_name
+                                                                            && last.protocol === a.protocol
                                                                             && last.status === a.status
                                                                             && (last.msg ?? '') === (a.msg ?? '')
                                                                         ) {
@@ -965,7 +1027,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                                                     <div className="min-w-0 flex-1">
                                                                                         <div className="flex items-center gap-2">
                                                                                             <span className="font-semibold text-foreground">
-                                                                                                {attempt.channel_name}
+                                                                                                {formatLogChannelLabel(attempt.channel_name, attempt.protocol)}
                                                                                             </span>
                                                                                             <span className="text-muted-foreground truncate">
                                                                                                 ({attempt.model_name})

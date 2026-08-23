@@ -767,6 +767,29 @@ func CompactSiteModelRouteTypeName(routeType SiteModelRouteType) string {
 	}
 }
 
+// CompactOutboundProtocolName 返回日志中展示的出站协议短名称。
+// 普通渠道没有站点投影名称，日志因此必须根据真实 outbound type 计算协议。
+func CompactOutboundProtocolName(channelType outbound.OutboundType) string {
+	switch channelType {
+	case outbound.OutboundTypeOpenAIResponse:
+		return "Response"
+	case outbound.OutboundTypeAnthropic:
+		return "Anthropic"
+	case outbound.OutboundTypeGemini:
+		return "Gemini"
+	case outbound.OutboundTypeVolcengine:
+		return "Volcengine"
+	case outbound.OutboundTypeOpenAIEmbedding:
+		return "Embedding"
+	case outbound.OutboundTypeCodex:
+		return "Codex"
+	case outbound.OutboundTypeRerank:
+		return "Rerank"
+	default:
+		return "Chat"
+	}
+}
+
 func ComposeSiteChannelBindingKey(groupKey string, routeType SiteModelRouteType, split bool) string {
 	groupKey = NormalizeSiteGroupKey(groupKey)
 	if !split {

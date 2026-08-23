@@ -87,6 +87,7 @@ function createOfficialOrgAvatar(path: string, fallbackColor: string) {
 const OFFICIAL_ORG_AVATARS = {
     agnes: createOfficialOrgAvatar('/model-icons/agnes.png', '#3248AF'),
     mimo: createOfficialOrgAvatar('/model-icons/mimo.png', '#FF6900'),
+    muse: createOfficialOrgAvatar('/model-icons/muse.png', '#087FF5'),
     paddlepaddle: createOfficialOrgAvatar('/model-icons/paddlepaddle.png', '#2D9CDB'),
     openmoss: createOfficialOrgAvatar('/model-icons/openmoss.png', '#334155'),
     inclusionai: createOfficialOrgAvatar('/model-icons/inclusionai.png', '#111827'),
@@ -104,6 +105,9 @@ const MODEL_ICON_PATTERNS: ModelIconConfig[] = [
     { prefixes: ['agnes', 'pavo', 'echo'], Avatar: OFFICIAL_ORG_AVATARS.agnes, color: '#3248AF' },
     // Xiaomi MiMo series.
     { prefixes: ['mimo', 'xiaomi'], Avatar: OFFICIAL_ORG_AVATARS.mimo, color: '#FF6900' },
+    // Meta Muse Spark series. Keep this before the generic iFlytek Spark rule:
+    // `muse-spark-*` is a Meta model, not an iFlytek Spark model.
+    { prefixes: ['muse'], Avatar: OFFICIAL_ORG_AVATARS.muse, color: '#087FF5' },
     { prefixes: ['paddlepaddle'], Avatar: OFFICIAL_ORG_AVATARS.paddlepaddle, color: '#2D9CDB' },
     { prefixes: ['fnlp', 'moss'], Avatar: OFFICIAL_ORG_AVATARS.openmoss, color: '#334155' },
     { prefixes: ['inclusionai', 'ling-'], Avatar: OFFICIAL_ORG_AVATARS.inclusionai, color: '#111827' },

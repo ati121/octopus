@@ -327,7 +327,10 @@ func (m *imagesRelayMetrics) SaveWithChannelStats(ctx context.Context, success b
 		globalStats.RequestFailed = 1
 	}
 
-	channelID, channelName := finalChannel(attempts)
+	attempts = enrichChannelAttemptProtocols(ctx, attempts)
+	channelID, _ := finalChannel(attempts)
+	logChannelID, logChannelName := finalLogChannel(attempts)
+	protocol := finalChannelProtocol(attempts)
 	op.StatsTotalUpdate(globalStats)
 	op.StatsHourlyUpdate(globalStats)
 	op.StatsDailyUpdate(context.Background(), globalStats)
@@ -343,8 +346,9 @@ func (m *imagesRelayMetrics) SaveWithChannelStats(ctx context.Context, success b
 		fields := []interface{}{
 			"model", m.RequestModel,
 			"actual_model", m.ActualModel,
-			"channel_id", channelID,
-			"channel", channelName,
+			"channel_id", logChannelID,
+			"channel", logChannelName,
+			"protocol", protocol,
 			"success", success,
 			"duration_ms", duration.Milliseconds(),
 			"input_token", m.Stats.InputToken,
@@ -361,7 +365,7 @@ func (m *imagesRelayMetrics) SaveWithChannelStats(ctx context.Context, success b
 		}
 	}
 
-	m.saveLog(ctx, success, err, duration, attempts, channelID, channelName)
+	m.saveLog(ctx, success, err, duration, attempts, logChannelID, logChannelName)
 }
 
 func (m *imagesRelayMetrics) saveLog(ctx context.Context, success bool, err error, duration time.Duration, attempts []model.ChannelAttempt, channelID int, channelName string) {
@@ -375,6 +379,7 @@ func (m *imagesRelayMetrics) saveLog(ctx context.Context, success bool, err erro
 		Time:             m.StartTime.Unix(),
 		RequestModelName: m.RequestModel,
 		ChannelName:      channelName,
+		Protocol:         finalChannelProtocol(attempts),
 		ChannelId:        channelID,
 		ActualModelName:  actualModel,
 		UseTime:          int(duration.Milliseconds()),

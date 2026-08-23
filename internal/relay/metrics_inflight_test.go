@@ -4,7 +4,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/transformer/outbound"
 )
 
 // StartLog 把记录挂进 op 的在途表后，只有终态更新会摘掉它。这里固化两条曾经漏掉
@@ -90,5 +92,33 @@ func TestFinalizeIfUnsavedRunsOnPanicUnwind(t *testing.T) {
 
 	if got := op.RelayLogInFlightLen(); got != before {
 		t.Fatalf("in-flight length after panic unwind: got %d want %d", got, before)
+	}
+}
+
+func TestRelayMetricsSaveAddsProtocolToLogAndAttempts(t *testing.T) {
+	ctx := setupRelayTestDB(t)
+	channel := model.Channel{Name: "opencode2api", Type: outbound.OutboundTypeOpenAIResponse, Enabled: true}
+	if err := op.ChannelCreate(&channel, ctx); err != nil {
+		t.Fatalf("create channel failed: %v", err)
+	}
+
+	metrics := NewRelayMetrics(0, "test-model", nil, nil)
+	metrics.SaveWithChannelStats(ctx, true, nil, []model.ChannelAttempt{{
+		ChannelID:   channel.ID,
+		ChannelName: channel.Name,
+		ModelName:   "test-model",
+		AttemptNum:  1,
+		Status:      model.AttemptSuccess,
+	}}, false)
+
+	logs, err := op.RelayLogList(ctx, nil, nil, nil, 1, 10)
+	if err != nil {
+		t.Fatalf("list relay logs failed: %v", err)
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected one relay log")
+	}
+	if logs[0].Protocol != "Response" || len(logs[0].Attempts) != 1 || logs[0].Attempts[0].Protocol != "Response" {
+		t.Fatalf("expected Response protocol on log and attempt, got %#v", logs[0])
 	}
 }

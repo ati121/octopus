@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/transformer/outbound"
 )
 
 func resetRelayLogStateForTest() {
@@ -20,6 +21,33 @@ func resetRelayLogStateForTest() {
 	relayLogStreamTokensLock.Lock()
 	relayLogStreamTokens = make(map[string]time.Time)
 	relayLogStreamTokensLock.Unlock()
+}
+
+func TestFillRelayLogProtocolsCoversOrdinaryChannelsAndAttempts(t *testing.T) {
+	const chatChannelID = 991101
+	const responseChannelID = 991102
+	channelCache.Set(chatChannelID, model.Channel{ID: chatChannelID, Name: "chat-channel", Type: outbound.OutboundTypeOpenAIChat})
+	channelCache.Set(responseChannelID, model.Channel{ID: responseChannelID, Name: "response-channel", Type: outbound.OutboundTypeOpenAIResponse})
+	t.Cleanup(func() {
+		channelCache.Del(chatChannelID)
+		channelCache.Del(responseChannelID)
+	})
+
+	relayLog := model.RelayLog{
+		ChannelId: responseChannelID,
+		Attempts: []model.ChannelAttempt{
+			{ChannelID: chatChannelID, ChannelName: "chat-channel", Status: model.AttemptFailed},
+			{ChannelID: responseChannelID, ChannelName: "response-channel", Status: model.AttemptSuccess},
+		},
+	}
+	fillRelayLogProtocols(&relayLog)
+
+	if relayLog.Protocol != "Response" {
+		t.Fatalf("expected final protocol Response, got %q", relayLog.Protocol)
+	}
+	if relayLog.Attempts[0].Protocol != "Chat" || relayLog.Attempts[1].Protocol != "Response" {
+		t.Fatalf("unexpected attempt protocols: %#v", relayLog.Attempts)
+	}
 }
 
 func TestRelayLogStreamTokenExpires(t *testing.T) {
