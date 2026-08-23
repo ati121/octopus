@@ -118,6 +118,9 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 	}
 	metrics := NewRelayMetrics(apiKeyID, requestModel, rawBody, internalRequest)
 	metrics.StartLog()
+	// StartLog 之后这条记录就挂在 op 的在途表里了，只有落库路径会摘掉它。兜底覆盖
+	// 未显式 Save 的提前返回和被 gin.CustomRecovery 吞掉的 panic；已落库时是空操作。
+	defer metrics.FinalizeIfUnsaved(c.Request.Context(), errRelayAborted)
 
 	// === 早期心跳 ===
 	// 在所有 forward / 重试 / 退避之前启动早期心跳协程，覆盖前置阶段（连接慢、failover、退避叠加）
@@ -158,6 +161,7 @@ outer:
 		iter := balancer.NewIteratorWithPreference(group, apiKeyID, requestModel, preferredSticky)
 		if iter.Len() == 0 {
 			resp.ErrorWithCode(c, http.StatusServiceUnavailable, CodeRelayNoAvailableChannel, "no available channel")
+			metrics.SaveWithChannelStats(c.Request.Context(), false, errRelayNoAvailableChannel, iter.Attempts(), false)
 			return
 		}
 		req.iter = iter

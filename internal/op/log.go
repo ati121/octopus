@@ -229,6 +229,14 @@ func RelayLogPendingLen() int {
 	return len(relayLogPending)
 }
 
+// RelayLogInFlightLen 返回当前在途（运行中）日志记录数。该表没有容量上限，只靠
+// 请求结束时的落库路径摘除条目，因此它的长度是判断「有没有请求漏掉收尾」的信号。
+func RelayLogInFlightLen() int {
+	relayLogInFlightLock.RLock()
+	defer relayLogInFlightLock.RUnlock()
+	return len(relayLogInFlight)
+}
+
 func RelayLogDroppedTotal() uint64 {
 	return relayLogDroppedTotal.Load()
 }

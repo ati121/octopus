@@ -22,6 +22,10 @@ type RelayMetrics struct {
 	StartTime    time.Time
 	LogID        int64
 
+	// logSaved 标记本次请求是否已经走过落库路径。StartLog 会把记录挂进 op 的在途表，
+	// 只有 SaveWithChannelStats 会把它摘掉，因此需要这个标记给兜底清理判重。
+	logSaved bool
+
 	// 首 Token 时间
 	FirstTokenTime time.Time
 
@@ -183,7 +187,20 @@ func (m *RelayMetrics) Save(ctx context.Context, success bool, err error, attemp
 	m.SaveWithChannelStats(ctx, success, err, attempts, true)
 }
 
+// FinalizeIfUnsaved 兜底落一条终态日志，用 defer 挂在 StartLog 之后。
+//
+// StartLog 把记录挂进 op 的在途表后，只有落库路径会把它摘掉；任何没走到 Save 的
+// 提前返回，或被 gin.CustomRecovery 吞掉的 panic，都会让这条记录永久滞留——既是
+// 内存泄漏，也会让日志页一直挂着一条「处理中」的幽灵记录。已落库时是空操作。
+func (m *RelayMetrics) FinalizeIfUnsaved(ctx context.Context, err error) {
+	if m == nil || m.logSaved || m.LogID == 0 {
+		return
+	}
+	m.SaveWithChannelStats(ctx, false, err, nil, false)
+}
+
 func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, err error, attempts []model.ChannelAttempt, updateChannelStats bool) {
+	m.logSaved = true
 	duration := time.Since(m.StartTime)
 
 	globalStats := model.StatsMetrics{
