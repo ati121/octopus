@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -257,6 +258,10 @@ func clearLog(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Completed request/response bodies can be large. Once their references have
+	// been removed from the in-memory log store, ask the runtime to return that
+	// memory promptly instead of waiting for the next automatic GC cycle.
+	runtime.GC()
 	resp.Success(c, nil)
 }
 

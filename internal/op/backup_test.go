@@ -12,6 +12,7 @@ import (
 
 func setupBackupTestDB(t *testing.T) context.Context {
 	t.Helper()
+	resetRelayLogStateForTest()
 
 	if dbpkg.GetDB() != nil {
 		_ = dbpkg.Close()
@@ -307,11 +308,11 @@ func mustSprintf(format string, args ...any) string {
 func TestDBExportZipContainsRelayLogsNDJSON(t *testing.T) {
 	ctx := setupBackupTestDB(t)
 
-	if err := dbpkg.GetDB().Create(&[]model.RelayLog{
-		{ID: 1001, Time: 1, RequestModelName: "a", Success: true},
-		{ID: 1002, Time: 2, RequestModelName: "b", Success: true},
-	}).Error; err != nil {
-		t.Fatalf("seed relay logs failed: %v", err)
+	if err := RelayLogAdd(ctx, model.RelayLog{ID: 1001, Time: 1, RequestModelName: "a", Success: true}); err != nil {
+		t.Fatalf("seed in-memory relay log failed: %v", err)
+	}
+	if err := RelayLogAdd(ctx, model.RelayLog{ID: 1002, Time: 2, RequestModelName: "b", Success: true}); err != nil {
+		t.Fatalf("seed in-memory relay log failed: %v", err)
 	}
 
 	var buf bytesBuffer

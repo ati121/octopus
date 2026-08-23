@@ -318,7 +318,7 @@
                 "success": "開始匯出",
                 "failed": "匯出失敗",
                 "withLogsButton": "匯出含日誌歸檔 (ZIP)",
-                "withLogsWarning": "含日誌歸檔為 ZIP 串流匯出，僅供留存查閱，無法匯入復原。"
+                "withLogsWarning": "僅匯出目前程序內最近 50 條日誌，重新啟動後日誌會清空；ZIP 僅供留存查閱，無法匯入復原。"
             },
             "import": {
                 "title": "匯入（增量）",
@@ -435,13 +435,10 @@
             "updateFailed": "更新失敗"
         },
         "log": {
-            "title": "歷史日誌",
-            "enabled": {
-                "label": "啟用歷史日誌"
-            },
-            "keepPeriod": {
-                "label": "日誌保存天數",
-                "placeholder": "請輸入天數"
+            "title": "進程內日誌",
+            "retention": {
+                "label": "日誌保留",
+                "value": "最近 50 條，重啟後清空"
             },
             "clear": {
                 "label": "清空歷史日誌",

@@ -2,21 +2,19 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { AlertTriangle, Calendar, Clock, Database, Download, FileArchive, ScrollText, Trash2, Upload } from 'lucide-react';
+import { AlertTriangle, Clock, Database, Download, FileArchive, ScrollText, Trash2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/common/Toast';
 import { SettingKey, useExportDB, useImportDB } from '@/api/endpoints/setting';
 import { useClearLogs } from '@/api/endpoints/log';
-import { SettingCard, SettingRow, SettingSection, useSettingField, useSettingToggle } from './shared';
+import { SettingCard, SettingRow, SettingSection, useSettingField } from './shared';
 
 export function SettingData() {
     const t = useTranslations('setting');
 
-    // 历史日志与统计持久化
-    const logEnabled = useSettingToggle(SettingKey.RelayLogKeepEnabled);
-    const keepPeriod = useSettingField(SettingKey.RelayLogKeepPeriod);
+    // 统计持久化；中继日志现在按上游方案保存在进程内，最多保留最近 50 条。
     const statsInterval = useSettingField(SettingKey.StatsSaveInterval);
     const clearLogs = useClearLogs();
 
@@ -25,7 +23,7 @@ export function SettingData() {
     const importDB = useImportDB();
 
     const [includeStats, setIncludeStats] = useState(true);
-    // 常规导出固定 JSON（可导入恢复）；含日志导出为 ZIP 流式归档，单独成按钮
+    // 常规导出固定 JSON（可导入恢复）；最近 50 条进程内日志可单独导出为 ZIP 归档。
     const [exportingKind, setExportingKind] = useState<'json' | 'logs' | null>(null);
 
     const [file, setFile] = useState<File | null>(null);
@@ -96,21 +94,10 @@ export function SettingData() {
                 />
             </SettingRow>
 
-            {/* 历史日志 */}
+            {/* 进程内日志 */}
             <SettingSection title={t('log.title')} />
-            <SettingRow icon={ScrollText} label={t('log.enabled.label')}>
-                <Switch checked={logEnabled.enabled} onCheckedChange={logEnabled.toggle} />
-            </SettingRow>
-            <SettingRow icon={Calendar} label={t('log.keepPeriod.label')}>
-                <Input
-                    type="number"
-                    value={keepPeriod.value}
-                    onChange={(e) => keepPeriod.setValue(e.target.value)}
-                    onBlur={keepPeriod.save}
-                    placeholder={t('log.keepPeriod.placeholder')}
-                    className="w-48 rounded-xl"
-                    disabled={!logEnabled.enabled}
-                />
+            <SettingRow icon={ScrollText} label={t('log.retention.label')}>
+                <span className="text-sm text-muted-foreground">{t('log.retention.value')}</span>
             </SettingRow>
             <SettingRow icon={Trash2} label={t('log.clear.label')}>
                 <Button
@@ -143,7 +130,7 @@ export function SettingData() {
                     {exportingKind === 'json' ? t('backup.export.exporting') : t('backup.export.button')}
                 </Button>
 
-                {/* 含日志归档：数据量大，ZIP 流式写入，仅供留存，无法导入恢复 */}
+                {/* 含日志归档：导出当前进程内的最近日志，仅供留存，无法导入恢复 */}
                 <Button
                     type="button"
                     variant="outline"

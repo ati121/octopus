@@ -11,12 +11,21 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// StatsSiteModelBackfill 一次性从最近的 relay_logs 回填 StatsSiteModelHourly 聚合表，
-// 让首次启用此功能的实例也能立即看到历史折线图。已回填则跳过。
+// StatsSiteModelBackfill 一次性从旧版 relay_logs 回填 StatsSiteModelHourly 聚合表，
+// 让首次启用此功能的实例也能立即看到历史折线图。日志改为进程内存储后，旧表不存在时直接标记完成。
 // 回填窗口：默认 30 天。
 func StatsSiteModelBackfill(ctx context.Context) {
 	done, err := SettingGetBool(model.SettingKeyStatsSiteModelBackfilled)
 	if err == nil && done {
+		return
+	}
+	// Relay logs are process-local now and are intentionally not persisted.
+	// There is no historical table left to scan, so mark this one-time legacy
+	// backfill complete without issuing a failing query on every startup.
+	if !db.GetDB().Migrator().HasTable("relay_logs") {
+		if setErr := SettingSetString(model.SettingKeyStatsSiteModelBackfilled, "true"); setErr != nil {
+			log.Warnf("stats site model backfill: failed to mark skipped migration: %v", setErr)
+		}
 		return
 	}
 

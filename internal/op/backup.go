@@ -21,10 +21,9 @@ const (
 	dbDumpVersion = 1
 
 	// Keep import batches small enough for SQLite builds with low SQL variable limits.
-	// Some exported tables (for example relay_logs) have many columns, so a conservative
-	// row count avoids "too many SQL variables" during bulk insert/upsert.
-	dbImportBatchSize    = 20
-	dbExportLogBatchSize = 1000
+	// Some exported tables have many columns, so a conservative row count avoids
+	// "too many SQL variables" during bulk insert/upsert.
+	dbImportBatchSize = 20
 )
 
 func DBExportAll(ctx context.Context, includeLogs, includeStats bool) (*model.DBDump, error) {
@@ -105,7 +104,7 @@ func DBExportAll(ctx context.Context, includeLogs, includeStats bool) (*model.DB
 	}
 
 	if includeLogs {
-		if err := exportRelayLogsPaged(ctx, conn, d); err != nil {
+		if err := exportRelayLogsFromMemory(ctx, d); err != nil {
 			return nil, err
 		}
 	}
@@ -113,27 +112,17 @@ func DBExportAll(ctx context.Context, includeLogs, includeStats bool) (*model.DB
 	return d, nil
 }
 
-func exportRelayLogsPaged(ctx context.Context, conn *gorm.DB, d *model.DBDump) error {
-	var lastID int64
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		var batch []model.RelayLog
-		if err := conn.Where("id > ?", lastID).Order("id ASC").Limit(dbExportLogBatchSize).Find(&batch).Error; err != nil {
-			return fmt.Errorf("export relay_logs: %w", err)
-		}
-		if len(batch) == 0 {
-			break
-		}
-		d.RelayLogs = append(d.RelayLogs, batch...)
-		lastID = batch[len(batch)-1].ID
-		if len(batch) < dbExportLogBatchSize {
-			break
-		}
+func exportRelayLogsFromMemory(ctx context.Context, d *model.DBDump) error {
+	result, err := RelayLogListWithFilter(ctx, RelayLogListFilter{
+		Limit:          relayLogRecentMaxSize,
+		IncludeContent: true,
+		WithTotal:      false,
+		Pagination:     "cursor",
+	})
+	if err != nil {
+		return fmt.Errorf("export in-memory relay logs: %w", err)
 	}
+	d.RelayLogs = append(d.RelayLogs, result.Logs...)
 	return nil
 }
 
@@ -149,6 +138,7 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 	conn := db.GetDB().WithContext(ctx)
 	res := &model.DBImportResult{RowsAffected: map[string]int64{}}
 
+	var importedRelayLogs []model.RelayLog
 	err := conn.Transaction(func(tx *gorm.DB) error {
 		channelIDMap := make(map[int]int)
 		proxyConfigIDMap := make(map[int]int)
@@ -566,13 +556,10 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			}
 		}
 
-		// 16. RelayLogs (Snowflake IDs - keep createDoNothing)
+		// Relay logs are process-local now. Keep legacy backup imports useful by
+		// staging them and adding them after the database transaction commits.
 		if dump.IncludeLogs {
-			if n, err := createDoNothing(tx, dump.RelayLogs); err != nil {
-				return fmt.Errorf("import relay_logs: %w", err)
-			} else {
-				res.RowsAffected["relay_logs"] = n
-			}
+			importedRelayLogs = append(importedRelayLogs, dump.RelayLogs...)
 		}
 
 		return nil
@@ -587,6 +574,16 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			"operation", "db_import_incremental",
 			"error", err,
 		)
+	}
+	if len(importedRelayLogs) > 0 {
+		imported := int64(0)
+		for _, entry := range importedRelayLogs {
+			if err := RelayLogAdd(ctx, entry); err != nil {
+				return nil, fmt.Errorf("import in-memory relay logs: %w", err)
+			}
+			imported++
+		}
+		res.RowsAffected["relay_logs"] = imported
 	}
 	return res, nil
 }
@@ -762,10 +759,11 @@ func createUpsertSettings(tx *gorm.DB, rows []model.Setting) (int64, error) {
 	return result.RowsAffected, result.Error
 }
 
-// DBExportZip streams the database dump as a ZIP archive: small tables become
-// JSON files, relay_logs become NDJSON to avoid building a giant in-memory
-// slice. The writer is consumed once; failures partway through cannot return a
-// JSON error to the client, so callers should validate inputs before invoking.
+// DBExportZip streams the database dump as a ZIP archive. Database tables become
+// JSON files; when requested, the current process-local relay log snapshot (at
+// most 50 completed records plus any active requests) becomes NDJSON. The writer
+// is consumed once, so failures partway through cannot return a JSON error to the
+// client; callers should validate inputs before invoking.
 func DBExportZip(ctx context.Context, w io.Writer, includeLogs, includeStats bool) (err error) {
 	zw := zip.NewWriter(w)
 	defer func() {
@@ -855,7 +853,7 @@ func DBExportZip(ctx context.Context, w io.Writer, includeLogs, includeStats boo
 	}
 
 	if includeLogs {
-		if err := writeZipRelayLogsNDJSON(ctx, zw, conn); err != nil {
+		if err := writeZipRelayLogsNDJSON(ctx, zw); err != nil {
 			return err
 		}
 	}
@@ -888,34 +886,23 @@ func writeZipTable[T any](ctx context.Context, zw *zip.Writer, conn *gorm.DB, na
 	return writeZipJSON(zw, name, dest)
 }
 
-func writeZipRelayLogsNDJSON(ctx context.Context, zw *zip.Writer, conn *gorm.DB) error {
+func writeZipRelayLogsNDJSON(ctx context.Context, zw *zip.Writer) error {
 	f, err := zw.Create("relay_logs.ndjson")
 	if err != nil {
 		return fmt.Errorf("zip create relay_logs.ndjson: %w", err)
 	}
 	enc := json.NewEncoder(f)
-	var lastID int64
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		var batch []model.RelayLog
-		if err := conn.Where("id > ?", lastID).Order("id ASC").Limit(dbExportLogBatchSize).Find(&batch).Error; err != nil {
-			return fmt.Errorf("zip read relay_logs: %w", err)
-		}
-		if len(batch) == 0 {
-			break
-		}
-		for i := range batch {
-			if err := enc.Encode(&batch[i]); err != nil {
-				return fmt.Errorf("zip encode relay_log: %w", err)
-			}
-		}
-		lastID = batch[len(batch)-1].ID
-		if len(batch) < dbExportLogBatchSize {
-			break
+	result, err := RelayLogListWithFilter(ctx, RelayLogListFilter{
+		Limit:          relayLogRecentMaxSize,
+		IncludeContent: true,
+		Pagination:     "cursor",
+	})
+	if err != nil {
+		return fmt.Errorf("zip read in-memory relay_logs: %w", err)
+	}
+	for i := range result.Logs {
+		if err := enc.Encode(&result.Logs[i]); err != nil {
+			return fmt.Errorf("zip encode relay_log: %w", err)
 		}
 	}
 	return nil

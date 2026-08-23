@@ -412,13 +412,13 @@ func (m *imagesRelayMetrics) saveLog(ctx context.Context, success bool, err erro
 		logErr = op.RelayLogAdd(ctx, relayLog)
 	}
 	if logErr != nil {
-		log.Warnf("failed to save relay log: %v", logErr)
+		log.Warnf("failed to finalize relay log: %v", logErr)
 	}
 }
 
 func buildImagesRequestContentForLog(isMultipart bool, bc *bodycache.BodyCache, jsonPayload map[string]any) string {
 	if isMultipart {
-		// multipart 可能包含图片文件，避免落库
+		// multipart 可能包含图片文件，避免把原始内容保存在日志内存中。
 		return fmt.Sprintf(`{"content_type":"multipart/form-data","size_bytes":%d,"note":"multipart request content omitted for storage"}`, bc.Size())
 	}
 	if jsonPayload == nil {

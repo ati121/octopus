@@ -9,7 +9,7 @@ import (
 	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
-// relayLogPerfIndexes 列出 relay_logs 的性能索引。
+// relayLogPerfIndexes 列出旧版 relay_logs 的性能索引。
 // 这些索引此前在 migration 013 同步创建，但每个 CREATE INDEX 都要全表扫描；
 // 当 relay_logs 含 GB 级 request/response_content 时，三次全表扫加上 page cache
 // 会把容器内存顶满，直接 OOMKill。改为 server 起来后异步建：
@@ -40,7 +40,7 @@ const (
 	relayLogIndexCooldown = 500 * time.Millisecond
 )
 
-// RelayLogEnsureIndexes 确保 relay_logs 的性能索引存在。幂等：已存在的索引会跳过。
+// RelayLogEnsureIndexes 确保旧版 relay_logs 的性能索引存在。新库没有该表时直接跳过。
 // 调用方应在 server.Start 之后 safe.Go 调用，避免阻塞启动路径。
 //
 // ctx 应该绑定 shutdown 的取消链路：
@@ -53,6 +53,9 @@ const (
 // 慢但不会报错；下次启动会再次尝试缺失的那些。
 func RelayLogEnsureIndexes(ctx context.Context) {
 	if db.GetDB() == nil {
+		return
+	}
+	if !db.GetDB().Migrator().HasTable("relay_logs") {
 		return
 	}
 	// 启动前 warmup：让出 server 起步阶段的连接，让 InitCache 完成、handler 接住
@@ -105,6 +108,9 @@ func RelayLogEnsureIndexes(ctx context.Context) {
 func RelayLogEnsureIndexesSync(ctx context.Context) error {
 	if db.GetDB() == nil {
 		return fmt.Errorf("db not initialized")
+	}
+	if !db.GetDB().Migrator().HasTable("relay_logs") {
+		return nil
 	}
 	for _, index := range relayLogPerfIndexes {
 		if ctx.Err() != nil {

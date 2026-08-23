@@ -318,7 +318,7 @@
                 "success": "Export started",
                 "failed": "Export failed",
                 "withLogsButton": "Export Archive with Logs (ZIP)",
-                "withLogsWarning": "The archive with logs is a streamed ZIP export for archival only; it cannot be imported to restore data."
+                "withLogsWarning": "Only the latest 50 in-memory logs are exported and they are cleared on restart; the ZIP is for reference only and cannot be restored."
             },
             "import": {
                 "title": "Import (Incremental)",
@@ -435,13 +435,10 @@
             "updateFailed": "Update failed"
         },
         "log": {
-            "title": "History Logs",
-            "enabled": {
-                "label": "Enable History Logs"
-            },
-            "keepPeriod": {
-                "label": "Log Retention (days)",
-                "placeholder": "Enter days"
+            "title": "In-Memory Logs",
+            "retention": {
+                "label": "Log Retention",
+                "value": "Latest 50; cleared on restart"
             },
             "clear": {
                 "label": "Clear History Logs",

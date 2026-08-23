@@ -7,7 +7,7 @@ import (
 	"github.com/bestruirui/octopus/internal/op"
 )
 
-// StartLog 把记录挂进 op 的在途表后，只有落库路径会摘掉它。这里固化两条曾经漏掉
+// StartLog 把记录挂进 op 的在途表后，只有终态更新会摘掉它。这里固化两条曾经漏掉
 // 收尾的路径：提前返回（分组无可用渠道）和被 gin.CustomRecovery 吞掉的 panic。
 // 任何一条漏掉，在途表都会永久滞留一条记录——既泄漏内存，也让日志页一直挂着
 // 一条「处理中」的幽灵记录。
@@ -32,7 +32,7 @@ func TestFinalizeIfUnsavedClearsInFlightLog(t *testing.T) {
 	}
 }
 
-// 已经正常落库的请求不应被兜底重复处理。
+// 已经正常完成的请求不应被兜底重复处理。
 func TestFinalizeIfUnsavedIsNoopAfterSave(t *testing.T) {
 	ctx := setupRelayTestDB(t)
 

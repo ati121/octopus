@@ -12,7 +12,6 @@ import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useChannelList } from '@/api/endpoints/channel';
 import { useSiteChannelList } from '@/api/endpoints/site-channel';
-import { SettingKey, useSettingValue } from '@/api/endpoints/setting';
 import { useToolbarViewOptionsStore } from '@/components/modules/toolbar/view-options-store';
 import { useSearchStore } from '@/components/modules/toolbar/search-store';
 
@@ -152,14 +151,12 @@ export function LogFilterPopover() {
     const setLogChannelIds = useToolbarViewOptionsStore((s) => s.setLogChannelIds);
     const setLogKeywordMode = useToolbarViewOptionsStore((s) => s.setLogKeywordMode);
     const setLogKeywordScope = useToolbarViewOptionsStore((s) => s.setLogKeywordScope);
-    const { value: logKeepPeriodValue } = useSettingValue(SettingKey.RelayLogKeepPeriod, '0');
     const { data: channels } = useChannelList();
     const { data: sites } = useSiteChannelList({ includeHistory: false });
 
     const [search, setSearch] = useState('');
     const [expanded, setExpanded] = useState<Set<string>>(new Set(['__manual__']));
 
-    const logKeepPeriod = Number.parseInt(logKeepPeriodValue, 10) || 0;
 
     const groups = useMemo<ChannelGroup[]>(() => {
         if (!channels) return [];
@@ -251,25 +248,19 @@ export function LogFilterPopover() {
 
     const startDisabled = useMemo<Matcher[]>(() => {
         const matchers: Matcher[] = [{ after: new Date() }];
-        if (logKeepPeriod > 0) {
-            matchers.push({ before: dayjs().subtract(logKeepPeriod, 'day').startOf('day').toDate() });
-        }
         if (logDateRange.end) {
             matchers.push({ after: new Date(logDateRange.end * 1000) });
         }
         return matchers;
-    }, [logKeepPeriod, logDateRange.end]);
+    }, [logDateRange.end]);
 
     const endDisabled = useMemo<Matcher[]>(() => {
         const matchers: Matcher[] = [{ after: new Date() }];
-        if (logKeepPeriod > 0) {
-            matchers.push({ before: dayjs().subtract(logKeepPeriod, 'day').startOf('day').toDate() });
-        }
         if (logDateRange.start) {
             matchers.push({ before: new Date(logDateRange.start * 1000) });
         }
         return matchers;
-    }, [logKeepPeriod, logDateRange.start]);
+    }, [logDateRange.start]);
 
     const handleStartChange = (value: number | undefined) => {
         setLogDateRange({ ...logDateRange, start: value });
@@ -348,9 +339,6 @@ export function LogFilterPopover() {
                                 onChange={handleEndChange}
                             />
                         </div>
-                        {logKeepPeriod > 0 ? (
-                            <p className="text-[11px] leading-4 text-muted-foreground">{t('popover.logFilter.date.hint')}</p>
-                        ) : null}
                     </div>
 
                     <div className="grid gap-2">

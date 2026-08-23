@@ -118,8 +118,8 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 	}
 	metrics := NewRelayMetrics(apiKeyID, requestModel, rawBody, internalRequest)
 	metrics.StartLog()
-	// StartLog 之后这条记录就挂在 op 的在途表里了，只有落库路径会摘掉它。兜底覆盖
-	// 未显式 Save 的提前返回和被 gin.CustomRecovery 吞掉的 panic；已落库时是空操作。
+	// StartLog 之后这条记录就挂在 op 的在途表里了，只有终态更新会摘掉它。兜底覆盖
+	// 未显式 Save 的提前返回和被 gin.CustomRecovery 吞掉的 panic；已完成时是空操作。
 	defer metrics.FinalizeIfUnsaved(c.Request.Context(), errRelayAborted)
 
 	// === 早期心跳 ===

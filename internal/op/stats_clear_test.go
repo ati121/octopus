@@ -28,7 +28,6 @@ func TestStatsClearResetsAggregatesAndPreservesLogs(t *testing.T) {
 		&model.StatsModel{ID: 1, Name: "test", ChannelID: 1, StatsMetrics: metrics},
 		&model.StatsAPIKey{APIKeyID: 1, StatsMetrics: metrics},
 		&model.StatsSiteModelHourly{Hour: int(time.Now().Unix() / 3600), SiteAccountID: 1, GroupKey: "default", ModelName: "test", Date: today, StatsMetrics: metrics},
-		&model.RelayLog{ID: 1, Time: time.Now().Unix(), InputTokens: 100, CacheReadTokens: statsClearIntPtr(80)},
 	}
 	for _, row := range rows {
 		if err := dbConn.Create(row).Error; err != nil {
@@ -62,15 +61,9 @@ func TestStatsClearResetsAggregatesAndPreservesLogs(t *testing.T) {
 			t.Fatalf("expected %s stats to be empty, got %d", name, count)
 		}
 	}
-	var logCount int64
-	if err := dbConn.Model(&model.RelayLog{}).Count(&logCount).Error; err != nil {
-		t.Fatalf("count relay logs failed: %v", err)
+	// Relay logs are process-local and deliberately outside StatsClear's scope.
+	// The database no longer contains a relay_logs table.
+	if dbConn.Migrator().HasTable("relay_logs") {
+		t.Fatal("relay_logs must not be recreated by StatsClear")
 	}
-	if logCount != 1 {
-		t.Fatalf("expected relay logs to be preserved, got %d", logCount)
-	}
-}
-
-func statsClearIntPtr(value int) *int {
-	return &value
 }
