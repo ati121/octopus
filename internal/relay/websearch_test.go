@@ -81,6 +81,46 @@ func TestHasWebSearchTool(t *testing.T) {
 	}
 }
 
+func TestHasGatewayManagedWebSearchToolDistinguishesFunctionTools(t *testing.T) {
+	ordinaryFunction := &model.InternalLLMRequest{
+		Tools: []model.Tool{{
+			Type:     "function",
+			Function: model.Function{Name: "web_search"},
+		}},
+	}
+	if hasGatewayManagedWebSearchTool(ordinaryFunction) {
+		t.Fatal("ordinary function named web_search must not enable gateway buffering")
+	}
+
+	nativeType := &model.InternalLLMRequest{
+		Tools: []model.Tool{{Type: "web_search"}},
+	}
+	if !hasGatewayManagedWebSearchTool(nativeType) {
+		t.Fatal("provider-native web_search type must enable gateway management")
+	}
+
+	anthropicNative := &model.InternalLLMRequest{
+		Tools: []model.Tool{{
+			Type:                "web_search_20250305",
+			Function:            model.Function{Name: "web_search"},
+			AnthropicServerSpec: []byte(`{"type":"web_search_20250305","name":"web_search"}`),
+		}},
+	}
+	if !hasGatewayManagedWebSearchTool(anthropicNative) {
+		t.Fatal("Anthropic provider-native web_search server tool must be managed")
+	}
+
+	ordinaryLookalike := &model.InternalLLMRequest{
+		Tools: []model.Tool{{
+			Type:     "function",
+			Function: model.Function{Name: "x_search"},
+		}},
+	}
+	if hasGatewayManagedWebSearchTool(ordinaryLookalike) {
+		t.Fatal("function tools with search-like names must not enable gateway buffering")
+	}
+}
+
 func TestFindWebSearchCalls(t *testing.T) {
 	resp := &model.InternalLLMResponse{
 		Choices: []model.Choice{

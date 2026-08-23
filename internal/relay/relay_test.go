@@ -380,6 +380,109 @@ func TestHandleStreamResponsePassthroughOpenAIResponsesClientCancelMidStream(t *
 	}
 }
 
+// 回归：普通的 `type:function, name:web_search` 是客户端自己的工具，
+// 不能触发网关整流。上游先送出 reasoning，再延迟到流尾；下游必须在
+// 首块到达时立即看到它，而不是等到 EOF 后一次性收到整段响应。
+func TestHandleStreamResponseV2DoesNotBufferOrdinaryWebSearchFunction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	ctx := context.Background()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	firstChunkSeen := make(chan struct{}, 1)
+	writer := &notifyStreamWriter{header: make(http.Header)}
+	writer.onWrite = func(p []byte) {
+		if bytes.Contains(p, []byte(`"reasoning_content":"first"`)) {
+			select {
+			case firstChunkSeen <- struct{}{}:
+			default:
+			}
+		}
+	}
+
+	internalReq := &transformerModel.InternalLLMRequest{
+		Model:        "stream-model",
+		Stream:       boolPtr(true),
+		RawAPIFormat: transformerModel.APIFormatOpenAIChatCompletion,
+		Tools: []transformerModel.Tool{{
+			Type:     "function",
+			Function: transformerModel.Function{Name: "web_search"},
+		}},
+	}
+	req := &relayRequest{
+		c:               c,
+		inAdapter:       inbound.Get(inbound.InboundTypeOpenAIChat),
+		internalRequest: internalReq,
+		metrics:         NewRelayMetrics(1, internalReq.Model, nil, internalReq),
+		apiKeyID:        1,
+		requestModel:    internalReq.Model,
+		streamWriter:    writer,
+	}
+	ra := &relayAttempt{
+		relayRequest: req,
+		outAdapter:   outbound.Get(outbound.OutboundTypeOpenAIChat),
+		channel:      &model.Channel{Type: outbound.OutboundTypeOpenAIChat},
+	}
+
+	reader, upstream := io.Pipe()
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       reader,
+	}
+
+	first := []byte("data: {\"id\":\"stream-1\",\"object\":\"chat.completion.chunk\",\"model\":\"stream-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"first\"}}]}\n\n")
+	second := []byte("data: {\"id\":\"stream-1\",\"object\":\"chat.completion.chunk\",\"model\":\"stream-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	release := make(chan struct{})
+	upstreamDone := make(chan error, 1)
+	go func() {
+		if _, err := upstream.Write(first); err != nil {
+			upstreamDone <- err
+			return
+		}
+		<-release
+		if _, err := upstream.Write(second); err != nil {
+			upstreamDone <- err
+			return
+		}
+		upstreamDone <- upstream.Close()
+	}()
+
+	handlerDone := make(chan error, 1)
+	go func() {
+		handlerDone <- ra.handleStreamResponseV2(ctx, response)
+	}()
+
+	select {
+	case <-firstChunkSeen:
+		// The first chunk arrived before the upstream was released to send its
+		// delayed tail. This is the latency property the production incident
+		// was missing.
+	case <-time.After(1 * time.Second):
+		close(release)
+		<-handlerDone
+		t.Fatalf("ordinary web_search function was buffered until stream completion; body=%q", writer.buf.String())
+	}
+
+	close(release)
+	select {
+	case err := <-handlerDone:
+		if err != nil {
+			t.Fatalf("handleStreamResponseV2() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream handler did not finish after delayed tail was released")
+	}
+	if err := <-upstreamDone; err != nil {
+		t.Fatalf("upstream test stream failed: %v", err)
+	}
+	if !strings.Contains(writer.buf.String(), `"reasoning_content":"first"`) || !strings.Contains(writer.buf.String(), `"content":"done"`) {
+		t.Fatalf("expected complete transformed stream, got %q", writer.buf.String())
+	}
+}
+
 // 回归：Anthropic 直通同场景——客户端收到 message_stop 后立即断连，应按正常结束处理。
 func TestHandleStreamResponsePassthroughAnthropicClientCancelAfterTerminal(t *testing.T) {
 	gin.SetMode(gin.TestMode)

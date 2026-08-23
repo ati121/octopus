@@ -72,15 +72,59 @@ func isWebSearchToolType(toolType string) bool {
 	return false
 }
 
-// hasWebSearchTool 判断请求是否声明了 web_search 工具。
-// 仅当客户端显式声明了搜索工具时才启用网关侧搜索执行，
-// 其余请求保持原有纯透传行为（零影响）。
+// hasWebSearchTool 宽泛判断请求是否声明了搜索工具，仅用于诊断与兼容检查。
+// 是否允许网关拦截、缓冲和重放必须使用更严格的
+// hasGatewayManagedWebSearchTool，不能仅凭普通 function 名称决定。
 func hasWebSearchTool(req *model.InternalLLMRequest) bool {
 	if req == nil {
 		return false
 	}
 	for _, tool := range req.Tools {
 		if isWebSearchToolName(tool.Function.Name) || isWebSearchToolType(tool.Type) {
+			return true
+		}
+	}
+	return false
+}
+
+// isGatewayManagedWebSearchTool reports whether a request tool is a
+// provider-native search tool that Octopus is allowed to intercept and replay.
+//
+// A regular OpenAI function named "web_search" is deliberately excluded. Many
+// clients (Hermes included) register their own function with that name and
+// expect to execute it themselves. Looking at the function name alone would
+// make the relay buffer the entire stream before it could decide whether a
+// search call occurred.
+func isGatewayManagedWebSearchTool(tool model.Tool) bool {
+	if isWebSearchToolType(tool.Type) {
+		return true
+	}
+
+	// Anthropic server tools retain their raw provider spec across the internal
+	// request conversion. Accept the spec as a second, explicit native-tool
+	// signal, while keeping ordinary `type:function` tools out of this path.
+	if len(tool.AnthropicServerSpec) > 0 {
+		var spec struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(tool.AnthropicServerSpec, &spec); err == nil {
+			return isWebSearchToolType(spec.Type) || isWebSearchToolName(spec.Name)
+		}
+	}
+	return false
+}
+
+// hasGatewayManagedWebSearchTool is the buffering gate used by the relay.
+// Keep it narrower than hasWebSearchTool: the latter is a broad declaration
+// detector, whereas this function controls whether the downstream stream may
+// be withheld for a possible gateway-side replay.
+func hasGatewayManagedWebSearchTool(req *model.InternalLLMRequest) bool {
+	if req == nil {
+		return false
+	}
+	for _, tool := range req.Tools {
+		if isGatewayManagedWebSearchTool(tool) {
 			return true
 		}
 	}
@@ -102,7 +146,7 @@ func findWebSearchCalls(resp *model.InternalLLMResponse) []model.ToolCall {
 			toolCalls = choice.Delta.ToolCalls
 		}
 		for _, call := range toolCalls {
-			if isWebSearchToolName(call.Function.Name) {
+			if isWebSearchToolName(call.Function.Name) || isWebSearchToolType(call.Type) {
 				calls = append(calls, call)
 			}
 		}

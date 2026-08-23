@@ -1251,14 +1251,18 @@ func (ra *relayAttempt) handleStreamResponseV2(ctx context.Context, response *ht
 	ra.heartbeat.Hand()
 
 	// === 网关侧 web search 执行（缓冲模式） ===
-	// 当请求声明了 provider-native web_search 工具且网关开关开启时，
+	// 只有请求声明了 provider-native web_search 工具且网关开关开启时，
 	// 整段流先缓冲不落客户端：流结束后用独立 outbound 适配器逐事件累积
 	// StreamEvent 再聚合检查，若响应含 web_search 工具调用则返回哨兵错误
 	// 触发重放（网关执行搜索后回填 tool result 重新请求上游），否则把缓冲
-	// 内容原样写出。其余请求保持原有低延迟透传行为。
-	bufferMode := webSearchEnabled() && hasWebSearchTool(ra.internalRequest)
-	log.Debugf("web search: bufferMode=%t enabled=%t hasTool=%t tools=%d model=%s",
-		bufferMode, webSearchEnabled(), hasWebSearchTool(ra.internalRequest), len(ra.internalRequest.Tools), ra.internalRequest.Model)
+	// 内容原样写出。普通 `type:function` 工具（即使名字叫 web_search）
+	// 保持低延迟透传，交由客户端自己的工具执行脚手架处理。
+	webSearchEnabledForRequest := webSearchEnabled()
+	hasGatewaySearchTool := hasGatewayManagedWebSearchTool(ra.internalRequest)
+	bufferMode := webSearchEnabledForRequest && hasGatewaySearchTool
+	log.Debugf("web search: bufferMode=%t enabled=%t gatewayTool=%t declaredSearchName=%t tools=%d model=%s",
+		bufferMode, webSearchEnabledForRequest, hasGatewaySearchTool,
+		hasWebSearchTool(ra.internalRequest), len(ra.internalRequest.Tools), ra.internalRequest.Model)
 	var webBuf *webSearchBufferWriter
 	var webDecoder model.Outbound
 	var webEvents []model.StreamEvent
@@ -1625,7 +1629,7 @@ func (ra *relayAttempt) handleResponse(ctx context.Context, response *http.Respo
 	// === 网关侧 web search 执行（非流式） ===
 	// 响应含 web_search 工具调用时拦截：不写给客户端，由 Handler
 	// 执行搜索并重放请求，最终只把模型的最终回答回给客户端。
-	if webSearchEnabled() && len(findWebSearchCalls(internalResponse)) > 0 {
+	if webSearchEnabled() && hasGatewayManagedWebSearchTool(ra.internalRequest) && len(findWebSearchCalls(internalResponse)) > 0 {
 		actualModel := strings.TrimSpace(internalResponse.Model)
 		if actualModel == "" && ra.internalRequest != nil {
 			actualModel = strings.TrimSpace(ra.internalRequest.Model)
