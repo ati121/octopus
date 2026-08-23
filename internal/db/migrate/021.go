@@ -56,6 +56,13 @@ func removePersistedRelayLogs(db *gorm.DB) error {
 		if err := db.Exec("VACUUM").Error; err != nil {
 			return fmt.Errorf("vacuum sqlite database after dropping relay_logs: %w", err)
 		}
+		// In WAL mode VACUUM can leave the compacted pages in the WAL while the
+		// old main-file tail remains allocated. Checkpoint once more so the
+		// physical data.db file is truncated before the server continues serving.
+		log.Infow("migration.relay_logs_memory.vacuum.checkpoint")
+		if err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
+			return fmt.Errorf("checkpoint sqlite WAL after vacuuming relay_logs: %w", err)
+		}
 	}
 
 	log.Infow("migration.relay_logs_memory.done",
