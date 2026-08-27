@@ -14,7 +14,7 @@ import { SettingCard, SettingRow, SettingSection, useSettingField } from './shar
 export function SettingData() {
     const t = useTranslations('setting');
 
-    // 统计持久化；中继日志现在按上游方案保存在进程内，最多保留最近 50 条。
+    // 统计持久化；中继日志现在按上游方案保存在进程内，最多保留最近 200 条。
     const statsInterval = useSettingField(SettingKey.StatsSaveInterval);
     const clearLogs = useClearLogs();
 
@@ -23,7 +23,7 @@ export function SettingData() {
     const importDB = useImportDB();
 
     const [includeStats, setIncludeStats] = useState(true);
-    // 常规导出固定 JSON（可导入恢复）；最近 50 条进程内日志可单独导出为 ZIP 归档。
+    // 常规导出固定 JSON（可导入恢复）；最近 200 条进程内日志可单独导出为 ZIP 归档。
     const [exportingKind, setExportingKind] = useState<'json' | 'logs' | null>(null);
 
     const [file, setFile] = useState<File | null>(null);

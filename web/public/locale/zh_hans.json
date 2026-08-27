@@ -318,7 +318,7 @@
                 "success": "开始导出",
                 "failed": "导出失败",
                 "withLogsButton": "导出含日志归档 (ZIP)",
-                "withLogsWarning": "仅导出当前进程内最近 50 条日志，重启后日志会清空；ZIP 仅供留存查阅，无法导入恢复。"
+                "withLogsWarning": "仅导出当前进程内最近 200 条日志，重启后日志会清空；ZIP 仅供留存查阅，无法导入恢复。"
             },
             "import": {
                 "title": "导入（增量）",
@@ -438,7 +438,7 @@
             "title": "进程内日志",
             "retention": {
                 "label": "日志保留",
-                "value": "最近 50 条，重启后清空"
+                "value": "最近 200 条，重启后清空"
             },
             "clear": {
                 "label": "清空历史日志",
