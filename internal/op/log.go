@@ -16,9 +16,9 @@ import (
 
 // Relay logs are intentionally process-local.  Request and response bodies
 // can be very large, and persisting every relay to SQLite made the database
-// grow without bound.  Keep at most 50 completed records while retaining all
-// active requests until they finish.
-const relayLogRecentMaxSize = 50
+// grow without bound.  Keep at most relayLogRecentMaxSize completed records
+// while retaining all active requests until they finish.
+const relayLogRecentMaxSize = 200
 
 var (
 	relayLogRecent     = make([]model.RelayLog, 0, relayLogRecentMaxSize)
@@ -214,7 +214,7 @@ func fillRelayLogProtocols(relayLog *model.RelayLog) {
 }
 
 // pruneFinishedRelayLogsLocked removes the oldest completed records only.
-// Active records do not count toward the 50-record limit.
+// Active records do not count toward relayLogRecentMaxSize.
 func pruneFinishedRelayLogsLocked() {
 	finished := 0
 	for _, entry := range relayLogRecent {

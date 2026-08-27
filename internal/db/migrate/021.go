@@ -16,9 +16,9 @@ func init() {
 }
 
 // removePersistedRelayLogs removes the legacy relay_logs table.  Relay logs
-// are now process-local (the newest 50 completed records are retained in
-// memory), so keeping this table would only preserve the multi-gigabyte body
-// archive that motivated the change.
+// are now process-local (a bounded window of the newest completed records is
+// retained in memory), so keeping this table would only preserve the
+// multi-gigabyte body archive that motivated the change.
 //
 // SQLite needs an explicit checkpoint and VACUUM after DROP TABLE: deleting a
 // table frees pages for reuse but does not shrink data.db on disk when

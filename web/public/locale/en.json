@@ -318,7 +318,7 @@
                 "success": "Export started",
                 "failed": "Export failed",
                 "withLogsButton": "Export Archive with Logs (ZIP)",
-                "withLogsWarning": "Only the latest 50 in-memory logs are exported and they are cleared on restart; the ZIP is for reference only and cannot be restored."
+                "withLogsWarning": "Only the latest 200 in-memory logs are exported and they are cleared on restart; the ZIP is for reference only and cannot be restored."
             },
             "import": {
                 "title": "Import (Incremental)",
@@ -438,7 +438,7 @@
             "title": "In-Memory Logs",
             "retention": {
                 "label": "Log Retention",
-                "value": "Latest 50; cleared on restart"
+                "value": "Latest 200; cleared on restart"
             },
             "clear": {
                 "label": "Clear History Logs",

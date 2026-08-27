@@ -318,7 +318,7 @@
                 "success": "開始匯出",
                 "failed": "匯出失敗",
                 "withLogsButton": "匯出含日誌歸檔 (ZIP)",
-                "withLogsWarning": "僅匯出目前程序內最近 50 條日誌，重新啟動後日誌會清空；ZIP 僅供留存查閱，無法匯入復原。"
+                "withLogsWarning": "僅匯出目前程序內最近 200 條日誌，重新啟動後日誌會清空；ZIP 僅供留存查閱，無法匯入復原。"
             },
             "import": {
                 "title": "匯入（增量）",
@@ -438,7 +438,7 @@
             "title": "進程內日誌",
             "retention": {
                 "label": "日誌保留",
-                "value": "最近 50 條，重啟後清空"
+                "value": "最近 200 條，重啟後清空"
             },
             "clear": {
                 "label": "清空歷史日誌",

@@ -65,7 +65,36 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 	} else {
 		channel.ProxyConfigID = nil
 	}
-	if err := db.GetDB().WithContext(ctx).Create(channel).Error; err != nil {
+	// Channel.Enabled 和 ChannelKey.Enabled 都带 `default:true`，GORM 会把 false
+	// 顶替成 true 落库并改掉内存里的值，所以得在 Create 之前记下真实意图，之后再补
+	// 写一次。整个过程放进事务，避免补写失败留下一个本该停用却是启用的渠道。
+	channelDisabled := !channel.Enabled
+	disabledKeyIdx := make([]int, 0, len(channel.Keys))
+	for i := range channel.Keys {
+		if !channel.Keys[i].Enabled {
+			disabledKeyIdx = append(disabledKeyIdx, i)
+		}
+	}
+	if err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(channel).Error; err != nil {
+			return err
+		}
+		if channelDisabled {
+			if err := db.ResetFalseBoolColumn(tx, &model.Channel{}, "enabled", []int{channel.ID}); err != nil {
+				return err
+			}
+			channel.Enabled = false
+		}
+		if len(disabledKeyIdx) == 0 {
+			return nil
+		}
+		keyIDs := make([]int, 0, len(disabledKeyIdx))
+		for _, i := range disabledKeyIdx {
+			channel.Keys[i].Enabled = false
+			keyIDs = append(keyIDs, channel.Keys[i].ID)
+		}
+		return db.ResetFalseBoolColumn(tx, &model.ChannelKey{}, "enabled", keyIDs)
+	}); err != nil {
 		return err
 	}
 	normalizeChannelProxyFields(channel)
@@ -148,9 +177,17 @@ func ChannelKeySaveDB(ctx context.Context) error {
 	if len(rows) == 0 {
 		return nil
 	}
+	// 只回写运行时真正会变的三列。用 UpdateAll 会把整行盖掉，那有两个后果：
+	// 一是 GORM 对 `default:true` 的 Enabled 做零值顶替，把用户关掉的开关重新写成
+	// true；二是中继按值拷走 ChannelKey 快照、请求结束才整体写回，中途被用户改过的
+	// enabled / remark 会被这份陈旧快照覆盖。限定列之后两个问题一起消失。
 	if err := db.GetDB().WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "id"}},
-		UpdateAll: true,
+		Columns: []clause.Column{{Name: "id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"status_code",
+			"last_use_time_stamp",
+			"total_cost",
+		}),
 	}).CreateInBatches(&rows, 100).Error; err != nil {
 		channelKeyCacheNeedUpdateLock.Lock()
 		for _, id := range keyIDs {
@@ -333,7 +370,13 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	// 新增 keys
 	if len(req.KeysToAdd) > 0 {
 		newKeys := make([]model.ChannelKey, 0, len(req.KeysToAdd))
+		// Enabled 带 `default:true`，GORM 会把 false 顶替成 true，所以先记下哪几条
+		// 本该是停用的，Create 拿到自增 ID 后再把这一列补写回去。
+		disabledIdx := make([]int, 0, len(req.KeysToAdd))
 		for _, ka := range req.KeysToAdd {
+			if !ka.Enabled {
+				disabledIdx = append(disabledIdx, len(newKeys))
+			}
 			newKeys = append(newKeys, model.ChannelKey{
 				ChannelID:  req.ID,
 				Enabled:    ka.Enabled,
@@ -344,6 +387,16 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		if err := tx.Create(&newKeys).Error; err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("failed to create channel keys: %w", err)
+		}
+		if len(disabledIdx) > 0 {
+			disabledIDs := make([]int, 0, len(disabledIdx))
+			for _, i := range disabledIdx {
+				disabledIDs = append(disabledIDs, newKeys[i].ID)
+			}
+			if err := db.ResetFalseBoolColumn(tx, &model.ChannelKey{}, "enabled", disabledIDs); err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("failed to persist disabled channel keys: %w", err)
+			}
 		}
 	}
 

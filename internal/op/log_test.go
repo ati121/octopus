@@ -163,15 +163,24 @@ func TestRelayLogListCursorReturnsNextCursorWithoutTotal(t *testing.T) {
 	}
 }
 
-func TestRelayLogClearKeepsActiveAndCapsCompletedAt50(t *testing.T) {
+func TestRelayLogClearKeepsActiveAndCapsCompleted(t *testing.T) {
 	resetRelayLogStateForTest()
 	activeID := RelayLogStart(model.RelayLog{Time: 1, RequestModelName: "active"})
 	for i := 0; i < relayLogRecentMaxSize+10; i++ {
 		_ = RelayLogAdd(nil, model.RelayLog{ID: int64(1000 + i), Time: int64(1000 + i), Success: true})
 	}
-	listed, err := RelayLogListWithFilter(nil, RelayLogListFilter{Limit: 100})
-	if err != nil || len(listed.Logs) != relayLogRecentMaxSize+1 {
-		t.Fatalf("expected 50 completed plus active, got %d err=%v", len(listed.Logs), err)
+	// 直接查内存：列表接口单页最多 100 条，撑不到 relayLogRecentMaxSize。
+	relayLogRecentLock.RLock()
+	completed := 0
+	for _, entry := range relayLogRecent {
+		if !entry.Processing {
+			completed++
+		}
+	}
+	total := len(relayLogRecent)
+	relayLogRecentLock.RUnlock()
+	if completed != relayLogRecentMaxSize || total != relayLogRecentMaxSize+1 {
+		t.Fatalf("expected %d completed plus 1 active, got completed=%d total=%d", relayLogRecentMaxSize, completed, total)
 	}
 	if _, err := RelayLogGet(nil, activeID); err != nil {
 		t.Fatalf("active log was evicted: %v", err)

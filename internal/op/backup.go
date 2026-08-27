@@ -26,6 +26,21 @@ const (
 	dbImportBatchSize = 20
 )
 
+// 导入时需要保住的布尔列。这些字段带 `default:true`，GORM 在 INSERT 时会把 false 当
+// 成“未赋值”换成 true 落库（详见 db.CreatePreservingFalseBools），不点名补写的话导
+// 入备份之后所有停用的代理、渠道、Key、站点、账号和 API Key 都会变成启用状态。
+//
+// 两个 map 均为只读常量，不要在运行时改动。
+var (
+	enabledBoolColumn = map[string]string{"Enabled": "enabled"}
+
+	siteAccountBoolColumns = map[string]string{
+		"Enabled":     "enabled",
+		"AutoSync":    "auto_sync",
+		"AutoCheckin": "auto_checkin",
+	}
+)
+
 func DBExportAll(ctx context.Context, includeLogs, includeStats bool) (*model.DBDump, error) {
 	conn := db.GetDB().WithContext(ctx)
 
@@ -186,7 +201,7 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("import proxy_configurations: %w", err)
 			}
-			if err := tx.Create(&proxyConfig).Error; err != nil {
+			if err := db.CreatePreservingFalseBools(tx, &proxyConfig, enabledBoolColumn); err != nil {
 				return fmt.Errorf("import proxy_configurations: %w", err)
 			}
 			proxyConfigIDMap[oldID] = proxyConfig.ID
@@ -209,7 +224,7 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("import channels: %w", err)
 			}
-			if err := tx.Omit("Keys", "Stats").Create(&ch).Error; err != nil {
+			if err := db.CreatePreservingFalseBools(tx.Omit("Keys", "Stats"), &ch, enabledBoolColumn); err != nil {
 				return fmt.Errorf("import channels: %w", err)
 			}
 			channelIDMap[oldID] = ch.ID
@@ -229,7 +244,7 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("import channel_keys: %w", err)
 			}
-			if err := tx.Create(&key).Error; err != nil {
+			if err := db.CreatePreservingFalseBools(tx, &key, enabledBoolColumn); err != nil {
 				return fmt.Errorf("import channel_keys: %w", err)
 			}
 			res.RowsAffected["channel_keys"]++
@@ -258,7 +273,7 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 				return fmt.Errorf("import sites: %w", err)
 			}
 			site.Name = uniqueSiteName(tx, site.Name)
-			if err := tx.Omit("Accounts").Create(&site).Error; err != nil {
+			if err := db.CreatePreservingFalseBools(tx.Omit("Accounts"), &site, enabledBoolColumn); err != nil {
 				return fmt.Errorf("import sites: %w", err)
 			}
 			siteIDMap[oldID] = site.ID
@@ -287,7 +302,11 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("import site_accounts: %w", err)
 			}
-			if err := tx.Omit("Tokens", "UserGroups", "Models", "ChannelBindings").Create(&account).Error; err != nil {
+			if err := db.CreatePreservingFalseBools(
+				tx.Omit("Tokens", "UserGroups", "Models", "ChannelBindings"),
+				&account,
+				siteAccountBoolColumns,
+			); err != nil {
 				return fmt.Errorf("import site_accounts: %w", err)
 			}
 			accountIDMap[oldID] = account.ID
@@ -307,7 +326,7 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("import site_tokens: %w", err)
 			}
-			if err := tx.Create(&token).Error; err != nil {
+			if err := db.CreatePreservingFalseBools(tx, &token, enabledBoolColumn); err != nil {
 				return fmt.Errorf("import site_tokens: %w", err)
 			}
 			res.RowsAffected["site_tokens"]++
@@ -453,7 +472,7 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("import api_keys: %w", err)
 			}
-			if err := tx.Create(&key).Error; err != nil {
+			if err := db.CreatePreservingFalseBools(tx, &key, enabledBoolColumn); err != nil {
 				return fmt.Errorf("import api_keys: %w", err)
 			}
 			apiKeyIDMap[oldID] = key.ID
@@ -761,7 +780,8 @@ func createUpsertSettings(tx *gorm.DB, rows []model.Setting) (int64, error) {
 
 // DBExportZip streams the database dump as a ZIP archive. Database tables become
 // JSON files; when requested, the current process-local relay log snapshot (at
-// most 50 completed records plus any active requests) becomes NDJSON. The writer
+// most relayLogRecentMaxSize completed records plus any active requests) becomes
+// NDJSON. The writer
 // is consumed once, so failures partway through cannot return a JSON error to the
 // client; callers should validate inputs before invoking.
 func DBExportZip(ctx context.Context, w io.Writer, includeLogs, includeStats bool) (err error) {
