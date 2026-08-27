@@ -144,8 +144,27 @@ func persistSyncSnapshot(ctx context.Context, accountID int, snapshot *syncSnaps
 			return err
 		}
 		if len(mergedTokens) > 0 {
+			// Enabled 带 `default:true`，GORM 会把 false 顶替成 true。这里是整体删除
+			// 后重建，不补写的话用户手动停用的站点 Key 每轮同步都会被重新启用，还会
+			// 经下一次投影传导到托管渠道的 Key 上。索引必须在 Create 之前算好，
+			// Create 会把内存里的 false 一并改成 true。
+			disabledTokenIdx := make([]int, 0, len(mergedTokens))
+			for i := range mergedTokens {
+				if !mergedTokens[i].Enabled {
+					disabledTokenIdx = append(disabledTokenIdx, i)
+				}
+			}
 			if err := tx.Create(&mergedTokens).Error; err != nil {
 				return err
+			}
+			if len(disabledTokenIdx) > 0 {
+				disabledTokenIDs := make([]int, 0, len(disabledTokenIdx))
+				for _, i := range disabledTokenIdx {
+					disabledTokenIDs = append(disabledTokenIDs, mergedTokens[i].ID)
+				}
+				if err := db.ResetFalseBoolColumn(tx, &model.SiteToken{}, "enabled", disabledTokenIDs); err != nil {
+					return err
+				}
 			}
 		}
 		if len(finalModels) > 0 {

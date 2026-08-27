@@ -730,3 +730,62 @@ func TestMergePersistedSiteTokensKeepsMatchingManualToken(t *testing.T) {
 		t.Fatalf("expected matching manual token to remain ready, got %q", merged[0].ValueStatus)
 	}
 }
+
+// 站点同步是“整体删除后重建”Token 行的，重建走 Create，于是用户手动停用的密钥会被 GORM
+// 的零值顶替重新写成启用，再经下一次投影传导到托管渠道的 Key 上。合并层本身是清白的
+// （mergeReadyIncomingSiteToken 会把 existing.Enabled 抄给 incoming），丢掉停用状态的只有
+// 落库那一步。
+func TestPersistSyncSnapshotKeepsManuallyDisabledToken(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+	_, account := createProjectionFixture(t, ctx)
+
+	// 用户在界面上把 backup 这把密钥关掉。
+	if err := dbpkg.GetDB().WithContext(ctx).
+		Model(&model.SiteToken{}).
+		Where("site_account_id = ? AND token = ?", account.ID, "key-backup").
+		Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable backup token failed: %v", err)
+	}
+
+	// 上游照旧把两把密钥都报成启用状态。
+	snapshot := &syncSnapshot{
+		accessToken: account.AccessToken,
+		groups: []model.SiteUserGroup{
+			{GroupKey: model.SiteDefaultGroupKey, Name: model.SiteDefaultGroupName},
+		},
+		tokens: []model.SiteToken{
+			{Name: "primary", Token: "key-primary", GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, Enabled: true, Source: "sync"},
+			{Name: "backup", Token: "key-backup", GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, Enabled: true, Source: "sync"},
+		},
+		status:  model.SiteExecutionStatusSuccess,
+		message: "ok",
+	}
+
+	if err := persistSyncSnapshot(ctx, account.ID, snapshot); err != nil {
+		t.Fatalf("persistSyncSnapshot returned error: %v", err)
+	}
+
+	var reloaded []model.SiteToken
+	if err := dbpkg.GetDB().WithContext(ctx).
+		Where("site_account_id = ?", account.ID).
+		Find(&reloaded).Error; err != nil {
+		t.Fatalf("query reloaded tokens failed: %v", err)
+	}
+	if len(reloaded) != 2 {
+		t.Fatalf("expected two tokens after sync, got %+v", reloaded)
+	}
+	for _, token := range reloaded {
+		switch token.Token {
+		case "key-primary":
+			if !token.Enabled {
+				t.Fatalf("启用的密钥被同步改成了停用: %+v", token)
+			}
+		case "key-backup":
+			if token.Enabled {
+				t.Fatalf("同步把用户手动停用的密钥重新启用了: %+v", token)
+			}
+		default:
+			t.Fatalf("unexpected token after sync: %+v", token)
+		}
+	}
+}
