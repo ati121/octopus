@@ -542,16 +542,19 @@ func SiteManualModelDelete(siteID int, accountID int, req *model.SiteManualModel
 	if modelName == "" {
 		return fmt.Errorf("model name is required")
 	}
-	result := db.GetDB().WithContext(ctx).
-		Where("site_account_id = ? AND group_key = ? AND model_name = ? AND source = ?", accountID, groupKey, modelName, "manual").
-		Delete(&model.SiteModel{})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("manual model not found")
-	}
-	return nil
+	return db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("site_account_id = ? AND group_key = ? AND model_name = ? AND source = ?", accountID, groupKey, modelName, "manual").
+			Delete(&model.SiteModel{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("manual model not found")
+		}
+		// 模型被彻底删掉，对它的表态也没有意义了；留着会让同名模型日后重新出现时
+		// 莫名继承旧状态。
+		return deleteSiteModelStateOverrides(tx, "site_account_id = ? AND group_key = ? AND model_name = ?", accountID, groupKey, modelName)
+	})
 }
 
 func siteChannelAccount(siteID int, accountID int, ctx context.Context) (*model.SiteAccount, error) {
@@ -616,6 +619,9 @@ func UpdateSiteGroupProjection(siteID int, accountID int, req *model.SiteGroupPr
 // 模型的启用状态：命中正则的启用、未命中的停用；正则留空表示取消筛选、全部启用。
 // 该正则是持久规则，站点同步落库时会再次套用（见 sitesync.persistSyncSnapshot），
 // 因此新同步出来的模型也会自动遵守。
+//
+// 正则只是分组的批量默认值，用户对单个模型的手动开关是优先级更高的逐个例外（存在
+// site_model_state_overrides）。保存正则会清空该分组已有的例外，让新正则完全接管。
 func UpdateSiteGroupModelFilter(siteID int, accountID int, req *model.SiteGroupModelFilterUpdateRequest, ctx context.Context) error {
 	if req == nil {
 		return fmt.Errorf("site group model filter update request is nil")
@@ -662,6 +668,12 @@ func UpdateSiteGroupModelFilter(siteID int, accountID int, req *model.SiteGroupM
 			return result.Error
 		}
 
+		// 保存正则是一次显式的批量动作，用它重置该分组的逐个例外：否则用户既无法让
+		// 正则重新接管已被单独开关过的模型，表态也会无声地越积越多。
+		if err := deleteSiteModelStateOverrides(tx, "site_account_id = ? AND group_key = ?", accountID, groupKey); err != nil {
+			return err
+		}
+
 		var models []model.SiteModel
 		if err := tx.Where("site_account_id = ? AND group_key = ?", accountID, groupKey).Find(&models).Error; err != nil {
 			return err
@@ -669,7 +681,7 @@ func UpdateSiteGroupModelFilter(siteID int, accountID int, req *model.SiteGroupM
 		enabled := make([]int, 0, len(models))
 		disabled := make([]int, 0, len(models))
 		for _, item := range models {
-			nextDisabled := !model.SiteModelFilterAllows(re, item.ModelName)
+			nextDisabled := model.ResolveSiteModelDisabled(nil, re, item.ModelName)
 			if item.Disabled == nextDisabled {
 				continue
 			}

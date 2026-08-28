@@ -92,6 +92,14 @@ func persistSyncSnapshot(ctx context.Context, accountID int, snapshot *syncSnaps
 			existingModelMap[key] = item
 		}
 
+		// 用户对单个模型的启用/停用表态存在独立的 override 表里，与模型行的生命周期
+		// 解耦：下面的落库会把本账号的模型行整体删掉重建，寄生在行上的状态必然丢失。
+		var overrideRows []model.SiteModelStateOverride
+		if err := tx.Where("site_account_id = ?", accountID).Find(&overrideRows).Error; err != nil {
+			return err
+		}
+		overrides := model.NewSiteModelDisabledOverrides(overrideRows)
+
 		updatePayload := map[string]any{
 			"last_sync_at":      &now,
 			"last_sync_status":  snapshot.status,
@@ -131,9 +139,9 @@ func persistSyncSnapshot(ctx context.Context, accountID int, snapshot *syncSnaps
 		applyRevokedManualTokensToSnapshot(snapshot, revokedTokens)
 		incomingModels := preparePersistedSyncModels(accountID, snapshot.models, existingModelMap, now)
 		finalModels := mergePersistedSiteModelsByGroup(existingModels, incomingModels, snapshot.groupResults)
-		// 分组级正则筛选是持久规则：同步落库前按各分组的正则重算启用状态，
-		// 这样上游新出现的模型不匹配时不会被自动启用。
-		model.ApplySiteModelFilters(finalModels, collectSiteModelFilters(existingGroups, snapshot.groups))
+		// Disabled 是派生列，每轮同步都按「用户表态 > 分组正则 > 默认启用」重算，
+		// 这样模型缺席一轮再回来时状态不会漂移，上游新出现的模型也不会绕过正则。
+		model.ApplySiteModelDisabledState(finalModels, collectSiteModelFilters(existingGroups, snapshot.groups), overrides)
 
 		if len(snapshot.groups) > 0 {
 			if err := tx.Create(&snapshot.groups).Error; err != nil {
@@ -210,7 +218,8 @@ func preparePersistedSyncModels(accountID int, incoming []model.SiteModel, exist
 		key := item.GroupKey + "\x00" + strings.TrimSpace(item.ModelName)
 		if existing, ok := existingModelMap[key]; ok {
 			item.ID = existing.ID
-			item.Disabled = existing.Disabled
+			// Disabled 不从历史行继承：它由 ApplySiteModelDisabledState 依据
+			// override 表和分组正则统一算出，继承只会让派生列和事实来源不一致。
 			applyPersistedRouteState(&item, &existing, now)
 		} else {
 			applyPersistedRouteState(&item, nil, now)

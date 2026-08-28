@@ -73,6 +73,7 @@ func InitDB(dbType, dsn string, debug bool) error {
 		&model.SiteToken{},
 		&model.SiteUserGroup{},
 		&model.SiteModel{},
+		&model.SiteModelStateOverride{},
 		&model.SiteChannelBinding{},
 		&model.Group{},
 		&model.GroupItem{},
