@@ -10,6 +10,7 @@ import (
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func SiteList(ctx context.Context) ([]model.Site, error) {
@@ -447,6 +448,9 @@ func SiteDel(id int, ctx context.Context) error {
 			if err := tx.Where("site_account_id IN ?", accountIDs).Delete(&model.SiteModel{}).Error; err != nil {
 				return err
 			}
+			if err := deleteSiteModelStateOverrides(tx, "site_account_id IN ?", accountIDs); err != nil {
+				return err
+			}
 			if err := tx.Where("site_account_id IN ?", accountIDs).Delete(&model.StatsSiteModelHourly{}).Error; err != nil {
 				return err
 			}
@@ -781,6 +785,9 @@ func SiteAccountDel(id int, ctx context.Context) error {
 		if err := tx.Where("site_account_id = ?", id).Delete(&model.SiteModel{}).Error; err != nil {
 			return err
 		}
+		if err := deleteSiteModelStateOverrides(tx, "site_account_id = ?", id); err != nil {
+			return err
+		}
 		if err := tx.Where("site_account_id = ?", id).Delete(&model.StatsSiteModelHourly{}).Error; err != nil {
 			return err
 		}
@@ -855,9 +862,42 @@ func SiteModelRouteUpdateIfNotManual(accountID int, groupKey string, modelName s
 	return result.RowsAffected > 0, nil
 }
 
+// SiteModelDisabledUpdate 记录用户对单个模型启用状态的表态。
+//
+// 意图写进 site_model_state_overrides（唯一事实来源），site_models.disabled 只是读侧
+// 用的派生列：模型行会在每轮同步里被整体删除重建，只改它的话状态撑不过一次上游抖动。
 func SiteModelDisabledUpdate(accountID int, groupKey string, modelName string, disabled bool, ctx context.Context) error {
-	return db.GetDB().WithContext(ctx).
-		Model(&model.SiteModel{}).
-		Where("site_account_id = ? AND group_key = ? AND model_name = ?", accountID, model.NormalizeSiteGroupKey(groupKey), strings.TrimSpace(modelName)).
-		Update("disabled", disabled).Error
+	normalizedGroup := model.NormalizeSiteGroupKey(groupKey)
+	trimmedModel := strings.TrimSpace(modelName)
+	if trimmedModel == "" {
+		return fmt.Errorf("model name is empty")
+	}
+	return db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := upsertSiteModelStateOverride(tx, accountID, normalizedGroup, trimmedModel, disabled); err != nil {
+			return err
+		}
+		return tx.Model(&model.SiteModel{}).
+			Where("site_account_id = ? AND group_key = ? AND model_name = ?", accountID, normalizedGroup, trimmedModel).
+			Update("disabled", disabled).Error
+	})
+}
+
+func upsertSiteModelStateOverride(tx *gorm.DB, accountID int, groupKey string, modelName string, disabled bool) error {
+	row := model.SiteModelStateOverride{
+		SiteAccountID: accountID,
+		GroupKey:      groupKey,
+		ModelName:     modelName,
+		Disabled:      disabled,
+		UpdatedAt:     time.Now(),
+	}
+	return tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "site_account_id"}, {Name: "group_key"}, {Name: "model_name"}},
+		DoUpdates: clause.AssignmentColumns([]string{"disabled", "updated_at"}),
+	}).Create(&row).Error
+}
+
+// deleteSiteModelStateOverrides 清理指定条件的用户表态。模型行、分组、账号或站点被
+// 删除时必须一起清掉，否则同名模型日后重新出现会莫名继承旧状态。
+func deleteSiteModelStateOverrides(tx *gorm.DB, query string, args ...any) error {
+	return tx.Where(query, args...).Delete(&model.SiteModelStateOverride{}).Error
 }

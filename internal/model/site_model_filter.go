@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,43 +48,78 @@ func SiteModelFilterAllows(re *regexp2.Regexp, modelName string) bool {
 	return matched
 }
 
-// ApplySiteModelFilters 按分组正则重算 models 的 Disabled 状态：命中正则的启用、
-// 未命中的停用。
+// SiteModelOverrideKey 生成用户表态记录的查找键。
+func SiteModelOverrideKey(accountID int, groupKey string, modelName string) string {
+	return strconv.Itoa(accountID) + "\x00" + NormalizeSiteGroupKey(groupKey) + "\x00" + strings.TrimSpace(modelName)
+}
+
+// SiteModelDisabledOverrides 是按 SiteModelOverrideKey 索引的用户表态集合，
+// value 为用户选择的停用状态。
+type SiteModelDisabledOverrides map[string]bool
+
+// NewSiteModelDisabledOverrides 把 site_model_state_overrides 的行索引成查找表。
+func NewSiteModelDisabledOverrides(rows []SiteModelStateOverride) SiteModelDisabledOverrides {
+	if len(rows) == 0 {
+		return nil
+	}
+	index := make(SiteModelDisabledOverrides, len(rows))
+	for _, row := range rows {
+		index[SiteModelOverrideKey(row.SiteAccountID, row.GroupKey, row.ModelName)] = row.Disabled
+	}
+	return index
+}
+
+// Lookup 返回该模型是否有用户表态，以及表态的内容。
+func (o SiteModelDisabledOverrides) Lookup(accountID int, groupKey string, modelName string) (bool, bool) {
+	if len(o) == 0 {
+		return false, false
+	}
+	disabled, ok := o[SiteModelOverrideKey(accountID, groupKey, modelName)]
+	return disabled, ok
+}
+
+// ResolveSiteModelDisabled 是站点模型启用状态的唯一判定规则：
 //
-// filters 的 key 是分组 key，value 是该分组配置的正则原文。**只有正则非空的分组会被
-// 处理**——正则留空表示该分组不做筛选，此时保持模型现有的启用状态不动，以免每轮同步
-// 把用户手动停用的模型重新翻上来。“清空正则即全部启用”只在保存正则那一刻生效
-// （见 op.UpdateSiteGroupModelFilter）。
+//	用户表态存在 -> 直接用用户的选择（正则只是批量默认值，手动是逐个例外）
+//	否则分组配了正则 -> 命中即启用，未命中即停用
+//	否则 -> 启用
 //
-// 正则本身非法的分组同样整组跳过并保持既有状态，避免脏数据把模型全部误停用。
-// 返回实际被改动的条目数。
-func ApplySiteModelFilters(models []SiteModel, filters map[string]string) int {
-	if len(models) == 0 || len(filters) == 0 {
+// re 为 nil（未配置或非法正则）时 SiteModelFilterAllows 全部放行，因此结果是启用。
+// 判定必须只依赖这三项输入：site_models.disabled 是由本函数算出的派生列，不能反过来
+// 参与判定，否则同步删行重建时状态就会漂移。
+func ResolveSiteModelDisabled(override *bool, re *regexp2.Regexp, modelName string) bool {
+	if override != nil {
+		return *override
+	}
+	return !SiteModelFilterAllows(re, modelName)
+}
+
+// ApplySiteModelDisabledState 按 ResolveSiteModelDisabled 重算整批模型的 Disabled。
+//
+// filters 的 key 是分组 key，value 是该分组配置的正则原文；正则留空或非法的分组视为
+// 不筛选。overrides 为用户表态索引，优先级最高。返回实际被改动的条目数。
+func ApplySiteModelDisabledState(models []SiteModel, filters map[string]string, overrides SiteModelDisabledOverrides) int {
+	if len(models) == 0 {
 		return 0
 	}
 
 	compiled := make(map[string]*regexp2.Regexp, len(filters))
 	for groupKey, pattern := range filters {
-		if strings.TrimSpace(pattern) == "" {
-			continue
-		}
 		re, err := CompileSiteModelFilterRegex(pattern)
 		if err != nil || re == nil {
 			continue
 		}
 		compiled[NormalizeSiteGroupKey(groupKey)] = re
 	}
-	if len(compiled) == 0 {
-		return 0
-	}
 
 	changed := 0
 	for i := range models {
-		re, ok := compiled[NormalizeSiteGroupKey(models[i].GroupKey)]
-		if !ok {
-			continue
+		groupKey := NormalizeSiteGroupKey(models[i].GroupKey)
+		var override *bool
+		if disabled, ok := overrides.Lookup(models[i].SiteAccountID, groupKey, models[i].ModelName); ok {
+			override = &disabled
 		}
-		nextDisabled := !SiteModelFilterAllows(re, models[i].ModelName)
+		nextDisabled := ResolveSiteModelDisabled(override, compiled[groupKey], models[i].ModelName)
 		if models[i].Disabled != nextDisabled {
 			models[i].Disabled = nextDisabled
 			changed++

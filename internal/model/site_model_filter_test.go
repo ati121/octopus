@@ -53,15 +53,15 @@ func TestSiteModelFilterAllowsHonorsInlineFlags(t *testing.T) {
 	}
 }
 
-func TestApplySiteModelFiltersRecomputesDisabled(t *testing.T) {
+func TestApplySiteModelDisabledStateRecomputesFromFilter(t *testing.T) {
 	models := []SiteModel{
-		{GroupKey: "default", ModelName: "claude-opus-5", Disabled: true},
-		{GroupKey: "default", ModelName: "deepseek-v4", Disabled: false},
-		{GroupKey: "vip", ModelName: "gpt-5", Disabled: true},
+		{SiteAccountID: 1, GroupKey: "default", ModelName: "claude-opus-5", Disabled: true},
+		{SiteAccountID: 1, GroupKey: "default", ModelName: "deepseek-v4"},
+		{SiteAccountID: 1, GroupKey: "vip", ModelName: "gpt-5", Disabled: true},
 	}
-	changed := ApplySiteModelFilters(models, map[string]string{"default": "^claude-"})
-	if changed != 2 {
-		t.Fatalf("changed = %d, want 2", changed)
+	changed := ApplySiteModelDisabledState(models, map[string]string{"default": "^claude-"}, nil)
+	if changed != 3 {
+		t.Fatalf("changed = %d, want 3", changed)
 	}
 	if models[0].Disabled {
 		t.Fatalf("matched model must be enabled")
@@ -69,36 +69,78 @@ func TestApplySiteModelFiltersRecomputesDisabled(t *testing.T) {
 	if !models[1].Disabled {
 		t.Fatalf("unmatched model must be disabled")
 	}
-	// vip 没有配置正则，其手动停用状态必须原样保留。
-	if !models[2].Disabled {
-		t.Fatalf("group without a filter must keep its existing state")
+	// vip 既没有正则也没有用户表态：Disabled 是派生列，不承载记忆，必须回到启用。
+	// 手动停用的记忆由 SiteModelStateOverride 承担。
+	if models[2].Disabled {
+		t.Fatalf("without a filter or an override the model must be enabled")
 	}
 }
 
-// 空正则表示「不筛选」。它只在保存那一刻由 op.UpdateSiteGroupModelFilter 触发全部启用；
-// 同步链路必须原样跳过，否则每轮同步都会把用户手动停用的模型重新翻上来。
-func TestApplySiteModelFiltersSkipsBlankAndInvalidPatterns(t *testing.T) {
+// 用户表态是逐个例外，正则只是批量默认值，因此表态必须压过正则的两个方向。
+func TestApplySiteModelDisabledStateOverrideBeatsFilter(t *testing.T) {
 	models := []SiteModel{
-		{GroupKey: "default", ModelName: "claude-opus-5", Disabled: true},
-		{GroupKey: "vip", ModelName: "gpt-5", Disabled: true},
+		{SiteAccountID: 1, GroupKey: "default", ModelName: "claude-opus-5"},
+		{SiteAccountID: 1, GroupKey: "default", ModelName: "deepseek-v4", Disabled: true},
 	}
-	changed := ApplySiteModelFilters(models, map[string]string{
+	overrides := NewSiteModelDisabledOverrides([]SiteModelStateOverride{
+		{SiteAccountID: 1, GroupKey: "default", ModelName: "claude-opus-5", Disabled: true},
+		{SiteAccountID: 1, GroupKey: "default", ModelName: "deepseek-v4", Disabled: false},
+	})
+	if changed := ApplySiteModelDisabledState(models, map[string]string{"default": "^claude-"}, overrides); changed != 2 {
+		t.Fatalf("changed = %d, want 2", changed)
+	}
+	if !models[0].Disabled {
+		t.Fatalf("manual disable must survive a matching filter")
+	}
+	if models[1].Disabled {
+		t.Fatalf("manual enable must survive a non-matching filter")
+	}
+}
+
+// 表态只对本账号本分组的同名模型生效，不能跨账号串味。
+func TestApplySiteModelDisabledStateScopesOverrideToAccountAndGroup(t *testing.T) {
+	models := []SiteModel{
+		{SiteAccountID: 1, GroupKey: "default", ModelName: "gpt-5"},
+		{SiteAccountID: 2, GroupKey: "default", ModelName: "gpt-5"},
+		{SiteAccountID: 1, GroupKey: "vip", ModelName: "gpt-5"},
+	}
+	overrides := NewSiteModelDisabledOverrides([]SiteModelStateOverride{
+		{SiteAccountID: 1, GroupKey: "default", ModelName: "gpt-5", Disabled: true},
+	})
+	if changed := ApplySiteModelDisabledState(models, nil, overrides); changed != 1 {
+		t.Fatalf("changed = %d, want 1", changed)
+	}
+	if !models[0].Disabled {
+		t.Fatalf("override must apply to its own account and group")
+	}
+	if models[1].Disabled || models[2].Disabled {
+		t.Fatalf("override must not leak to another account or group")
+	}
+}
+
+// 非法正则视为「未配置」：宁可少停用，也不要让脏数据把整组模型误杀。
+func TestApplySiteModelDisabledStateIgnoresBlankAndInvalidPatterns(t *testing.T) {
+	models := []SiteModel{
+		{SiteAccountID: 1, GroupKey: "default", ModelName: "claude-opus-5", Disabled: true},
+		{SiteAccountID: 1, GroupKey: "vip", ModelName: "gpt-5", Disabled: true},
+	}
+	changed := ApplySiteModelDisabledState(models, map[string]string{
 		"default": "",
 		"vip":     "^(gpt",
-	})
-	if changed != 0 {
-		t.Fatalf("changed = %d, want 0", changed)
+	}, nil)
+	if changed != 2 {
+		t.Fatalf("changed = %d, want 2", changed)
 	}
 	for i := range models {
-		if !models[i].Disabled {
-			t.Fatalf("model %q must keep its existing disabled state", models[i].ModelName)
+		if models[i].Disabled {
+			t.Fatalf("model %q must be enabled when its group has no usable filter", models[i].ModelName)
 		}
 	}
 }
 
-func TestApplySiteModelFiltersNormalizesGroupKey(t *testing.T) {
-	models := []SiteModel{{GroupKey: "", ModelName: "claude-opus-5", Disabled: true}}
-	if changed := ApplySiteModelFilters(models, map[string]string{"": "^claude-"}); changed != 1 {
+func TestApplySiteModelDisabledStateNormalizesGroupKey(t *testing.T) {
+	models := []SiteModel{{SiteAccountID: 1, GroupKey: "", ModelName: "claude-opus-5", Disabled: true}}
+	if changed := ApplySiteModelDisabledState(models, map[string]string{"": "^claude-"}, nil); changed != 1 {
 		t.Fatalf("changed = %d, want 1", changed)
 	}
 	if models[0].Disabled {

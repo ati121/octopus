@@ -329,6 +329,22 @@ type SiteModel struct {
 	Disabled        bool                 `json:"disabled" gorm:"default:false;index"`
 }
 
+// SiteModelStateOverride 记录用户对单个模型启用状态的显式表态。
+//
+// site_models 的行会被每轮同步整体删除后重建（上游少返回一个模型、分组返回空列表或
+// 分组被移除时，对应的行就没了），所以 SiteModel.Disabled 只能当派生缓存用，不能当
+// 用户意图的存储位置——否则模型缺席一轮再回来就会变回启用。用户的意图存在这张表里，
+// 与模型行的生命周期解耦：有记录即用户明确表过态，优先于分组正则；没有记录才按分组
+// 正则（正则也为空时默认启用）。判定见 ResolveSiteModelDisabled。
+type SiteModelStateOverride struct {
+	ID            int       `json:"id" gorm:"primaryKey"`
+	SiteAccountID int       `json:"site_account_id" gorm:"uniqueIndex:idx_site_model_override;not null"`
+	GroupKey      string    `json:"group_key" gorm:"size:128;uniqueIndex:idx_site_model_override;not null;default:'default'"`
+	ModelName     string    `json:"model_name" gorm:"size:191;uniqueIndex:idx_site_model_override;not null"`
+	Disabled      bool      `json:"disabled" gorm:"default:false"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 type SiteChannelBinding struct {
 	ID              int    `json:"id" gorm:"primaryKey"`
 	SiteID          int    `json:"site_id" gorm:"index;not null"`

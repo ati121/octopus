@@ -693,6 +693,20 @@ func replaceMetAPIAccountData(tx *gorm.DB, accountID int, data metAPIImportAccou
 		}
 	}
 
+	// 导入是整体替换。停用意图必须落到 override 表，否则 site_models.disabled 会在
+	// 下一轮同步重算时被丢掉（那张表的行每轮都会删掉重建）。
+	if err := deleteSiteModelStateOverrides(tx, "site_account_id = ?", accountID); err != nil {
+		return 0, 0, 0, 0, err
+	}
+	for _, item := range models {
+		if !item.Disabled {
+			continue
+		}
+		if err := upsertSiteModelStateOverride(tx, accountID, item.GroupKey, item.ModelName, true); err != nil {
+			return 0, 0, 0, 0, err
+		}
+	}
+
 	disabled := 0
 	for _, item := range models {
 		if item.Disabled {

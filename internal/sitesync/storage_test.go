@@ -427,6 +427,7 @@ func TestPersistSyncSnapshotWithoutFilterKeepsManualDisabledState(t *testing.T) 
 	if err := dbpkg.GetDB().WithContext(ctx).Create(&existing).Error; err != nil {
 		t.Fatalf("create existing model failed: %v", err)
 	}
+	seedSiteModelDisabledOverride(t, ctx, account.ID, model.SiteDefaultGroupKey, "gpt-4.1", true)
 
 	snapshot := &syncSnapshot{
 		accessToken: account.AccessToken,
@@ -456,6 +457,209 @@ func TestPersistSyncSnapshotWithoutFilterKeepsManualDisabledState(t *testing.T) 
 	}
 	if !reloaded.Disabled {
 		t.Fatalf("manual disabled state must survive a sync when the group has no filter")
+	}
+}
+
+// seedSiteModelDisabledOverride 写入一条用户表态，模拟用户在页面上手动停用/启用模型。
+func seedSiteModelDisabledOverride(t *testing.T, ctx context.Context, accountID int, groupKey string, modelName string, disabled bool) {
+	t.Helper()
+	row := model.SiteModelStateOverride{
+		SiteAccountID: accountID,
+		GroupKey:      model.NormalizeSiteGroupKey(groupKey),
+		ModelName:     modelName,
+		Disabled:      disabled,
+		UpdatedAt:     time.Now(),
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&row).Error; err != nil {
+		t.Fatalf("create site model override failed: %v", err)
+	}
+}
+
+func loadSiteModelDisabled(t *testing.T, ctx context.Context, accountID int, groupKey string, modelName string) (bool, bool) {
+	t.Helper()
+	var rows []model.SiteModel
+	if err := dbpkg.GetDB().WithContext(ctx).
+		Where("site_account_id = ? AND group_key = ? AND model_name = ?", accountID, model.NormalizeSiteGroupKey(groupKey), modelName).
+		Find(&rows).Error; err != nil {
+		t.Fatalf("query site model failed: %v", err)
+	}
+	if len(rows) == 0 {
+		return false, false
+	}
+	return rows[0].Disabled, true
+}
+
+// 上游少返回一个模型只是一轮抖动。停用意图存在 override 表里，与会被删掉重建的模型行
+// 解耦，所以模型缺席一轮再回来时必须仍然是停用的。
+func TestPersistSyncSnapshotKeepsDisabledAcrossMissingRound(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+	_, account := createProjectionFixture(t, ctx)
+
+	syncRound := func(modelNames ...string) {
+		models := make([]model.SiteModel, 0, len(modelNames))
+		for _, name := range modelNames {
+			models = append(models, model.SiteModel{GroupKey: model.SiteDefaultGroupKey, ModelName: name, Source: "sync", RouteType: model.SiteModelRouteTypeOpenAIChat, RouteSource: model.SiteModelRouteSourceSyncInferred})
+		}
+		snapshot := &syncSnapshot{
+			accessToken: account.AccessToken,
+			groups:      []model.SiteUserGroup{{GroupKey: model.SiteDefaultGroupKey, Name: model.SiteDefaultGroupName}},
+			tokens:      []model.SiteToken{{Name: "primary", Token: "key-primary", GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, Enabled: true, Source: "sync"}},
+			models:      models,
+			groupResults: []siteGroupSyncResult{
+				{GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, HasKey: true, Status: siteGroupSyncStatusSynced, Authoritative: true, ModelCount: len(models)},
+			},
+			status:  model.SiteExecutionStatusSuccess,
+			message: "ok",
+		}
+		if err := persistSyncSnapshot(ctx, account.ID, snapshot); err != nil {
+			t.Fatalf("persistSyncSnapshot returned error: %v", err)
+		}
+	}
+
+	syncRound("gpt-4.1", "claude-opus-5")
+	if err := op.SiteModelDisabledUpdate(account.ID, model.SiteDefaultGroupKey, "gpt-4.1", true, ctx); err != nil {
+		t.Fatalf("SiteModelDisabledUpdate failed: %v", err)
+	}
+	if disabled, ok := loadSiteModelDisabled(t, ctx, account.ID, model.SiteDefaultGroupKey, "gpt-4.1"); !ok || !disabled {
+		t.Fatalf("expected gpt-4.1 to be disabled right after the manual toggle")
+	}
+
+	// 上游这一轮漏掉了 gpt-4.1：该分组是权威结果，模型行会被删除。
+	syncRound("claude-opus-5")
+	if _, ok := loadSiteModelDisabled(t, ctx, account.ID, model.SiteDefaultGroupKey, "gpt-4.1"); ok {
+		t.Fatalf("expected gpt-4.1 row to be dropped while upstream omits it")
+	}
+
+	// 模型回来了，停用意图必须还在。
+	syncRound("gpt-4.1", "claude-opus-5")
+	disabled, ok := loadSiteModelDisabled(t, ctx, account.ID, model.SiteDefaultGroupKey, "gpt-4.1")
+	if !ok {
+		t.Fatalf("expected gpt-4.1 row to come back")
+	}
+	if !disabled {
+		t.Fatalf("manual disabled state must survive a round where upstream omitted the model")
+	}
+	if otherDisabled, ok := loadSiteModelDisabled(t, ctx, account.ID, model.SiteDefaultGroupKey, "claude-opus-5"); !ok || otherDisabled {
+		t.Fatalf("models without an override must stay enabled")
+	}
+}
+
+// 分组被判 empty 时会清空该分组的历史模型（会话模型列表兜底一次抖动就会触发），
+// 恢复后停用意图同样必须存活。
+func TestPersistSyncSnapshotKeepsDisabledAcrossEmptyGroup(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+	_, account := createProjectionFixture(t, ctx)
+
+	vipGroup := model.SiteUserGroup{SiteAccountID: account.ID, GroupKey: "vip", Name: "VIP"}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&vipGroup).Error; err != nil {
+		t.Fatalf("create vip group failed: %v", err)
+	}
+	vipToken := model.SiteToken{SiteAccountID: account.ID, Name: "vip", Token: "key-vip", GroupKey: "vip", GroupName: "VIP", Enabled: true}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&vipToken).Error; err != nil {
+		t.Fatalf("create vip token failed: %v", err)
+	}
+
+	syncRound := func(vipModels ...string) {
+		models := []model.SiteModel{
+			{GroupKey: model.SiteDefaultGroupKey, ModelName: "gpt-4.1", Source: "sync_fallback", RouteType: model.SiteModelRouteTypeOpenAIChat, RouteSource: model.SiteModelRouteSourceSyncInferred},
+		}
+		for _, name := range vipModels {
+			models = append(models, model.SiteModel{GroupKey: "vip", ModelName: name, Source: "sync_fallback", RouteType: model.SiteModelRouteTypeOpenAIChat, RouteSource: model.SiteModelRouteSourceSyncInferred})
+		}
+		vipResult := siteGroupSyncResult{GroupKey: "vip", GroupName: "VIP", HasKey: true, Status: siteGroupSyncStatusSynced, Authoritative: true, ModelCount: len(vipModels)}
+		if len(vipModels) == 0 {
+			vipResult.Status = siteGroupSyncStatusEmpty
+			vipResult.Message = "上游当前没有可用模型，已清空该分组历史模型"
+		}
+		snapshot := &syncSnapshot{
+			accessToken: account.AccessToken,
+			groups: []model.SiteUserGroup{
+				{GroupKey: model.SiteDefaultGroupKey, Name: model.SiteDefaultGroupName},
+				{GroupKey: "vip", Name: "VIP"},
+			},
+			tokens: []model.SiteToken{
+				{Name: "primary", Token: "key-primary", GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, Enabled: true, Source: "sync"},
+				{Name: "vip", Token: "key-vip", GroupKey: "vip", GroupName: "VIP", Enabled: true, Source: "sync"},
+			},
+			models: models,
+			groupResults: []siteGroupSyncResult{
+				{GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, HasKey: true, Status: siteGroupSyncStatusSynced, Authoritative: true, ModelCount: 1},
+				vipResult,
+			},
+			status:  model.SiteExecutionStatusSuccess,
+			message: "ok",
+		}
+		if err := persistSyncSnapshot(ctx, account.ID, snapshot); err != nil {
+			t.Fatalf("persistSyncSnapshot returned error: %v", err)
+		}
+	}
+
+	syncRound("claude-opus-5")
+	if err := op.SiteModelDisabledUpdate(account.ID, "vip", "claude-opus-5", true, ctx); err != nil {
+		t.Fatalf("SiteModelDisabledUpdate failed: %v", err)
+	}
+
+	syncRound()
+	if _, ok := loadSiteModelDisabled(t, ctx, account.ID, "vip", "claude-opus-5"); ok {
+		t.Fatalf("expected the empty vip group to be cleared")
+	}
+
+	syncRound("claude-opus-5")
+	disabled, ok := loadSiteModelDisabled(t, ctx, account.ID, "vip", "claude-opus-5")
+	if !ok {
+		t.Fatalf("expected claude-opus-5 to come back")
+	}
+	if !disabled {
+		t.Fatalf("manual disabled state must survive an empty round for the group")
+	}
+}
+
+// 分组正则是批量默认值，用户的手动开关是逐个例外，因此表态必须压过正则的两个方向。
+func TestPersistSyncSnapshotOverrideBeatsGroupFilter(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+	_, account := createProjectionFixture(t, ctx)
+
+	group := model.SiteUserGroup{
+		SiteAccountID:    account.ID,
+		GroupKey:         model.SiteDefaultGroupKey,
+		Name:             model.SiteDefaultGroupName,
+		ModelFilterRegex: "^claude-",
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&group).Error; err != nil {
+		t.Fatalf("create group failed: %v", err)
+	}
+	// claude-opus-5 命中正则但被用户手动停用；gpt-4.1 未命中正则但被用户显式启用。
+	seedSiteModelDisabledOverride(t, ctx, account.ID, model.SiteDefaultGroupKey, "claude-opus-5", true)
+	seedSiteModelDisabledOverride(t, ctx, account.ID, model.SiteDefaultGroupKey, "gpt-4.1", false)
+
+	snapshot := &syncSnapshot{
+		accessToken: account.AccessToken,
+		groups:      []model.SiteUserGroup{{GroupKey: model.SiteDefaultGroupKey, Name: model.SiteDefaultGroupName}},
+		tokens:      []model.SiteToken{{Name: "primary", Token: "key-primary", GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, Enabled: true, Source: "sync"}},
+		models: []model.SiteModel{
+			{GroupKey: model.SiteDefaultGroupKey, ModelName: "claude-opus-5", Source: "sync", RouteType: model.SiteModelRouteTypeOpenAIChat, RouteSource: model.SiteModelRouteSourceSyncInferred},
+			{GroupKey: model.SiteDefaultGroupKey, ModelName: "gpt-4.1", Source: "sync", RouteType: model.SiteModelRouteTypeOpenAIChat, RouteSource: model.SiteModelRouteSourceSyncInferred},
+			{GroupKey: model.SiteDefaultGroupKey, ModelName: "deepseek-v4", Source: "sync", RouteType: model.SiteModelRouteTypeOpenAIChat, RouteSource: model.SiteModelRouteSourceSyncInferred},
+		},
+		groupResults: []siteGroupSyncResult{
+			{GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, HasKey: true, Status: siteGroupSyncStatusSynced, Authoritative: true, ModelCount: 3},
+		},
+		status:  model.SiteExecutionStatusSuccess,
+		message: "ok",
+	}
+	if err := persistSyncSnapshot(ctx, account.ID, snapshot); err != nil {
+		t.Fatalf("persistSyncSnapshot returned error: %v", err)
+	}
+
+	if disabled, ok := loadSiteModelDisabled(t, ctx, account.ID, model.SiteDefaultGroupKey, "claude-opus-5"); !ok || !disabled {
+		t.Fatalf("manual disable must beat a matching group filter")
+	}
+	if disabled, ok := loadSiteModelDisabled(t, ctx, account.ID, model.SiteDefaultGroupKey, "gpt-4.1"); !ok || disabled {
+		t.Fatalf("manual enable must beat a non-matching group filter")
+	}
+	// 没有表态的模型仍然按正则走。
+	if disabled, ok := loadSiteModelDisabled(t, ctx, account.ID, model.SiteDefaultGroupKey, "deepseek-v4"); !ok || !disabled {
+		t.Fatalf("models without an override must still follow the group filter")
 	}
 }
 
