@@ -5,6 +5,7 @@ import { Check, ChevronDownIcon, Plus, Search, Sparkles, Trash2 } from 'lucide-r
 import { useTranslations } from 'next-intl';
 import * as AccordionPrimitive from '@radix-ui/react-accordion';
 import { useModelChannelList, type LLMChannel } from '@/api/endpoints/model';
+import { CHANNEL_TYPE_SHORT_LABELS } from '@/api/endpoints/channel';
 import { Button } from '@/components/ui/button';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -79,11 +80,6 @@ function ModelPickerSection({
         }, []);
     }, [channels, normalizedSearch]);
 
-    const modelSourceLabel = (model: LLMChannel) => [model.site_name, model.site_account_name, model.site_group_name]
-        .map((value) => value?.trim())
-        .filter(Boolean)
-        .join(' / ');
-
     return (
         <div className="rounded-xl border border-border/50 bg-muted/30 flex flex-col min-h-0">
             <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 py-2 border-b border-border/30 bg-muted/50">
@@ -144,11 +140,8 @@ function ModelPickerSection({
                                         {channel.models.map((m) => {
                                             const isSelected = selectedKeys.has(memberKey(m));
                                             const { Avatar } = getModelIcon(m.name);
-                                            const sourceLabel = modelSourceLabel(m);
-                                            const isSiteChannel = m.site_id != null;
-                                            const suffix = [sourceLabel, isSiteChannel ? null : m.endpoint_type?.trim()]
-                                                .filter(Boolean)
-                                                .join(' · ');
+                                            // 分组标题已是渠道名，这里只补该模型实际使用的协议
+                                            const suffix = CHANNEL_TYPE_SHORT_LABELS[m.channel_type];
                                             return (
                                                 <div
                                                     key={memberKey(m)}

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Check, X } from 'lucide-react';
-import { ChannelType } from '@/api/endpoints/channel';
+import { CHANNEL_TYPE_SHORT_LABELS, ChannelType } from '@/api/endpoints/channel';
 import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
@@ -58,8 +58,11 @@ export function ModelBadge({ model, custom, channelType, modelType, onModelTypeC
                     >
                         {model}
                         {modelType !== undefined && (
-                            <span className="rounded-full bg-background/70 px-1.5 text-[10px] leading-4 text-foreground">
-                                {t(channelTypeLabelKey(modelType))}
+                            <span
+                                className="rounded-full bg-background/70 px-1.5 text-[10px] leading-4 text-foreground"
+                                title={t(channelTypeLabelKey(modelType))}
+                            >
+                                {CHANNEL_TYPE_SHORT_LABELS[modelType]}
                             </span>
                         )}
                     </button>

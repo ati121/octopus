@@ -15,6 +15,7 @@ import { getModelIcon } from '@/lib/model-icons';
 import type { LLMChannel } from '@/api/endpoints/model';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/animate-ui/components/animate/tooltip';
 import { useTranslations } from 'next-intl';
+import { memberSourceLabel } from './utils';
 
 export interface SelectedMember extends LLMChannel {
     id: string;
@@ -60,10 +61,7 @@ function MemberItem({
     const { Avatar: ModelAvatar } = getModelIcon(member.name);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const isDisabled = member.enabled === false;
-    const isSiteChannel = member.site_id != null;
-    const sourceLabel = [member.channel_name, isSiteChannel ? null : member.endpoint_type?.trim()]
-        .filter(Boolean)
-        .join(' · ');
+    const sourceLabel = memberSourceLabel(member);
 
     return (
         <div
@@ -121,7 +119,7 @@ function MemberItem({
                         </TooltipTrigger>
                         <TooltipContent key={member.name}>{member.name}</TooltipContent>
                     </Tooltip>
-                    <span className="text-[10px] text-muted-foreground truncate leading-tight">{sourceLabel}</span>
+                    <span className="text-[10px] text-muted-foreground truncate leading-tight" title={member.channel_name}>{sourceLabel}</span>
                 </div>
 
                 {showWeight && (
