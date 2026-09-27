@@ -24,6 +24,11 @@ func TestExtractUpstreamErrorMessageVariants(t *testing.T) {
 		{name: "top level", body: `{"message":"top-level"}`, want: "top-level"},
 		{name: "string error", body: `{"error":"plain"}`, want: "plain"},
 		{name: "non json", body: `<html>bad gateway</html>`, want: ""},
+		{name: "fastapi string detail", body: `{"detail":"Not authenticated"}`, want: "Not authenticated"},
+		{name: "fastapi validation detail", body: `{"detail":[{"loc":["body","questions","is_urgent","criteria",0],"msg":"Input should be a valid string","type":"string_type"},{"loc":["body","state"],"msg":"Field required","type":"missing"}]}`, want: "body.questions.is_urgent.criteria.0: Input should be a valid string; body.state: Field required"},
+		{name: "fastapi detail without loc", body: `{"detail":[{"msg":"Overloaded"}]}`, want: "Overloaded"},
+		{name: "error takes precedence over detail", body: `{"error":{"message":"nested"},"detail":"ignored"}`, want: "nested"},
+		{name: "unrecognized detail", body: `{"detail":{"code":1}}`, want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

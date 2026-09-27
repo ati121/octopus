@@ -973,6 +973,7 @@
             "typeVolcengine": "Volcengine",
             "typeCodex": "Codex",
             "typeRerank": "Rerank",
+            "typeSystemOne": "System One (Jev)",
             "autoSync": "Auto Sync",
             "skipHealthProbe": "Skip health probes",
             "autoGroup": "Auto Group",

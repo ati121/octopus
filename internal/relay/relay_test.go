@@ -79,6 +79,10 @@ func TestChannelTypeCompatibilitySeparatesChatEmbeddingAndRerank(t *testing.T) {
 		Model:         "rerank-model",
 		RerankPayload: json.RawMessage(`{"query":"q","documents":["d"]}`),
 	}
+	systemOneRequest := &transformerModel.InternalLLMRequest{
+		Model:            "jev-latest",
+		SystemOnePayload: json.RawMessage(`{"state":"s","questions":{"q":{"type":"noul","instructions":"i"}}}`),
+	}
 
 	tests := []struct {
 		name        string
@@ -95,6 +99,13 @@ func TestChannelTypeCompatibilitySeparatesChatEmbeddingAndRerank(t *testing.T) {
 		{name: "rerank to rerank", request: rerankRequest, channelType: outbound.OutboundTypeRerank, compatible: true},
 		{name: "rerank to chat", request: rerankRequest, channelType: outbound.OutboundTypeOpenAIChat},
 		{name: "rerank to embedding", request: rerankRequest, channelType: outbound.OutboundTypeOpenAIEmbedding},
+		{name: "chat to system one", request: chatRequest, channelType: outbound.OutboundTypeSystemOne},
+		{name: "embedding to system one", request: embeddingRequest, channelType: outbound.OutboundTypeSystemOne},
+		{name: "rerank to system one", request: rerankRequest, channelType: outbound.OutboundTypeSystemOne},
+		{name: "system one to system one", request: systemOneRequest, channelType: outbound.OutboundTypeSystemOne, compatible: true},
+		{name: "system one to chat", request: systemOneRequest, channelType: outbound.OutboundTypeOpenAIChat},
+		{name: "system one to response", request: systemOneRequest, channelType: outbound.OutboundTypeOpenAIResponse},
+		{name: "system one to rerank", request: systemOneRequest, channelType: outbound.OutboundTypeRerank},
 	}
 
 	for _, tt := range tests {
@@ -114,6 +125,13 @@ func TestIsEmptyUpstreamResponseAcceptsRerankPayload(t *testing.T) {
 	response := &transformerModel.InternalLLMResponse{RerankPayload: json.RawMessage(`{"results":[]}`)}
 	if isEmptyUpstreamResponse(response) {
 		t.Fatal("expected rerank payload to count as a non-empty upstream response")
+	}
+}
+
+func TestIsEmptyUpstreamResponseAcceptsSystemOnePayload(t *testing.T) {
+	response := &transformerModel.InternalLLMResponse{SystemOnePayload: json.RawMessage(`{"model":"jev-1.13.0","answers":{"q":{"type":"noul","noul":0.9}}}`)}
+	if isEmptyUpstreamResponse(response) {
+		t.Fatal("expected system one payload to count as a non-empty upstream response")
 	}
 }
 

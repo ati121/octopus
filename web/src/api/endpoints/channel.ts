@@ -16,6 +16,7 @@ export enum ChannelType {
     OpenAIEmbedding = 5,
     Codex = 6,
     Rerank = 7,
+    SystemOne = 8,
 }
 
 /**

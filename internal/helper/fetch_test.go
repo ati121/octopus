@@ -53,6 +53,50 @@ func TestFetchModelsFallsBackFromRootToV1(t *testing.T) {
 	}
 }
 
+func TestFetchModelsParsesSystemOneModelList(t *testing.T) {
+	var hits []string
+	observedAuthorization := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
+		observedAuthorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"jev-latest","description":"Latest stable Jev","release_date":"2026-09-15"},{"name":"jev-preview","description":"Preview","release_date":"2026-09-15"}]}`))
+	}))
+	defer server.Close()
+
+	models, err := FetchModels(context.Background(), model.Channel{
+		Type:     outbound.OutboundTypeSystemOne,
+		BaseUrls: []model.BaseUrl{{URL: server.URL + "/v1"}},
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "ts-test"}},
+	})
+	if err != nil || len(models) != 2 || models[0] != "jev-latest" || models[1] != "jev-preview" {
+		t.Fatalf("models=%v err=%v", models, err)
+	}
+	if len(hits) != 1 || hits[0] != "/v1/models" {
+		t.Fatalf("unexpected model list requests: %v", hits)
+	}
+	if observedAuthorization != "Bearer ts-test" {
+		t.Fatalf("unexpected Authorization header: %q", observedAuthorization)
+	}
+}
+
+func TestFetchModelsSystemOneAcceptsOpenAICompatibleList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"jev-1.13.0","created":"2026-09-15"}]}`))
+	}))
+	defer server.Close()
+
+	models, err := FetchModels(context.Background(), model.Channel{
+		Type:     outbound.OutboundTypeSystemOne,
+		BaseUrls: []model.BaseUrl{{URL: server.URL + "/v1"}},
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "ts-test"}},
+	})
+	if err != nil || len(models) != 1 || models[0] != "jev-1.13.0" {
+		t.Fatalf("models=%v err=%v", models, err)
+	}
+}
+
 func TestFetchModelsUsesBrowserHeadersAndSummarizesHTMLError(t *testing.T) {
 	observedUserAgent := ""
 	observedAccept := ""

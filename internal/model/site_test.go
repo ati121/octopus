@@ -198,6 +198,7 @@ func TestCompactOutboundProtocolName(t *testing.T) {
 		{name: "embedding", channelType: outbound.OutboundTypeOpenAIEmbedding, expected: "Embedding"},
 		{name: "codex", channelType: outbound.OutboundTypeCodex, expected: "Codex"},
 		{name: "rerank", channelType: outbound.OutboundTypeRerank, expected: "Rerank"},
+		{name: "system one", channelType: outbound.OutboundTypeSystemOne, expected: "SystemOne"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

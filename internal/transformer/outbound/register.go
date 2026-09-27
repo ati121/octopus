@@ -7,6 +7,7 @@ import (
 	"github.com/bestruirui/octopus/internal/transformer/outbound/gemini"
 	"github.com/bestruirui/octopus/internal/transformer/outbound/openai"
 	"github.com/bestruirui/octopus/internal/transformer/outbound/rerank"
+	"github.com/bestruirui/octopus/internal/transformer/outbound/systemone"
 	"github.com/bestruirui/octopus/internal/transformer/outbound/volcengine"
 )
 
@@ -24,6 +25,9 @@ const (
 	OutboundTypeCodex
 	// OutboundTypeRerank 追加在末尾，避免改变已持久化渠道类型的数值。
 	OutboundTypeRerank
+	// OutboundTypeSystemOne 对接 TypeSafe System One（Jev 模型）的 /v1/systemone，
+	// 同样追加在末尾，保持已持久化的类型值稳定。
+	OutboundTypeSystemOne
 )
 
 // EmbeddingChannelTypes 定义支持 embedding 请求的 channel 类型集合
@@ -34,6 +38,11 @@ var EmbeddingChannelTypes = map[OutboundType]bool{
 // RerankChannelTypes 定义支持 rerank 请求的 channel 类型集合。
 var RerankChannelTypes = map[OutboundType]bool{
 	OutboundTypeRerank: true,
+}
+
+// SystemOneChannelTypes 定义支持 System One 请求的 channel 类型集合。
+var SystemOneChannelTypes = map[OutboundType]bool{
+	OutboundTypeSystemOne: true,
 }
 
 // ChatChannelTypes 定义支持 chat 请求的 channel 类型集合
@@ -57,8 +66,9 @@ var outboundAPIFormats = map[OutboundType]model.APIFormat{
 	// Volcengine 走 OpenAI Responses 线路（内部内嵌 openai.ResponseOutbound）。
 	OutboundTypeVolcengine: model.APIFormatOpenAIResponse,
 	// Codex 走 OpenAI Responses 线路（内部内嵌 openai.ResponseOutbound，仅额外注入特征头）。
-	OutboundTypeCodex:  model.APIFormatOpenAIResponse,
-	OutboundTypeRerank: model.APIFormatRerank,
+	OutboundTypeCodex:     model.APIFormatOpenAIResponse,
+	OutboundTypeRerank:    model.APIFormatRerank,
+	OutboundTypeSystemOne: model.APIFormatSystemOne,
 }
 
 // APIFormatOf 返回出站 channel 类型对应的 provider APIFormat。
@@ -75,6 +85,11 @@ func IsEmbeddingChannelType(channelType OutboundType) bool {
 // IsRerankChannelType 判断 channel 类型是否支持 rerank 请求。
 func IsRerankChannelType(channelType OutboundType) bool {
 	return RerankChannelTypes[channelType]
+}
+
+// IsSystemOneChannelType 判断 channel 类型是否支持 System One 请求。
+func IsSystemOneChannelType(channelType OutboundType) bool {
+	return SystemOneChannelTypes[channelType]
 }
 
 // IsChatChannelType 判断 channel 类型是否支持 chat 请求
@@ -97,6 +112,7 @@ var outboundFactories = map[OutboundType]func() model.Outbound{
 	OutboundTypeVolcengine:      func() model.Outbound { return &volcengine.ResponseOutbound{} },
 	OutboundTypeCodex:           func() model.Outbound { return &codex.ResponseOutbound{} },
 	OutboundTypeRerank:          func() model.Outbound { return &rerank.Outbound{} },
+	OutboundTypeSystemOne:       func() model.Outbound { return &systemone.Outbound{} },
 }
 
 func Get(outboundType OutboundType) model.Outbound {
