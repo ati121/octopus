@@ -66,7 +66,9 @@ const (
 	SiteModelRouteTypeVolcengine      SiteModelRouteType = "volcengine"
 	SiteModelRouteTypeOpenAIEmbedding SiteModelRouteType = "openai_embedding"
 	SiteModelRouteTypeRerank          SiteModelRouteType = "rerank"
-	SiteModelRouteTypeUnknown         SiteModelRouteType = "unknown"
+	// SiteModelRouteTypeSystemOne 对应 TypeSafe System One（Jev 模型，POST /v1/systemone）。
+	SiteModelRouteTypeSystemOne SiteModelRouteType = "system_one"
+	SiteModelRouteTypeUnknown   SiteModelRouteType = "unknown"
 )
 
 type SiteModelRouteSource string
@@ -665,6 +667,7 @@ func NormalizeSiteModelRouteType(routeType SiteModelRouteType) SiteModelRouteTyp
 		SiteModelRouteTypeVolcengine,
 		SiteModelRouteTypeOpenAIEmbedding,
 		SiteModelRouteTypeRerank,
+		SiteModelRouteTypeSystemOne,
 		SiteModelRouteTypeUnknown:
 		return routeType
 	default:
@@ -680,7 +683,8 @@ func IsProjectedSiteModelRouteType(routeType SiteModelRouteType) bool {
 		SiteModelRouteTypeGemini,
 		SiteModelRouteTypeVolcengine,
 		SiteModelRouteTypeOpenAIEmbedding,
-		SiteModelRouteTypeRerank:
+		SiteModelRouteTypeRerank,
+		SiteModelRouteTypeSystemOne:
 		return true
 	default:
 		return false
@@ -705,6 +709,8 @@ func NormalizeSiteModelRouteSource(routeSource SiteModelRouteSource, manualOverr
 func InferSiteModelRouteType(modelName string) SiteModelRouteType {
 	lower := strings.ToLower(strings.TrimSpace(modelName))
 	switch {
+	case isSystemOneModelName(lower):
+		return SiteModelRouteTypeSystemOne
 	case strings.Contains(lower, "reranker"), strings.Contains(lower, "rerank"):
 		return SiteModelRouteTypeRerank
 	case strings.HasPrefix(lower, "claude"):
@@ -718,6 +724,13 @@ func InferSiteModelRouteType(modelName string) SiteModelRouteType {
 	default:
 		return SiteModelRouteTypeOpenAIChat
 	}
+}
+
+// isSystemOneModelName 识别 TypeSafe 的 Jev 模型（jev-latest、jev-1.13.0、~typesafe/jev-latest 等）。
+// Jev 只支持 System One 协议，按 Chat 转发必然失败。
+func isSystemOneModelName(lower string) bool {
+	name := lower[strings.LastIndex(lower, "/")+1:]
+	return name == "jev" || strings.HasPrefix(name, "jev-")
 }
 
 func SiteModelRouteTypeSuffix(routeType SiteModelRouteType) string {
@@ -734,6 +747,8 @@ func SiteModelRouteTypeSuffix(routeType SiteModelRouteType) string {
 		return "openai-embedding"
 	case SiteModelRouteTypeRerank:
 		return "rerank"
+	case SiteModelRouteTypeSystemOne:
+		return "system-one"
 	default:
 		return ""
 	}
@@ -753,6 +768,8 @@ func SiteModelRouteTypeName(routeType SiteModelRouteType) string {
 		return "OpenAI Embedding"
 	case SiteModelRouteTypeRerank:
 		return "Rerank"
+	case SiteModelRouteTypeSystemOne:
+		return "System One"
 	case SiteModelRouteTypeUnknown:
 		return "Unsupported"
 	default:
@@ -776,6 +793,8 @@ func CompactSiteModelRouteTypeName(routeType SiteModelRouteType) string {
 		return "Embedding"
 	case SiteModelRouteTypeRerank:
 		return "Rerank"
+	case SiteModelRouteTypeSystemOne:
+		return "SystemOne"
 	case SiteModelRouteTypeUnknown:
 		return "Unsupported"
 	default:
@@ -837,6 +856,8 @@ func ParseSiteChannelBindingKey(groupKey string) (string, SiteModelRouteType) {
 		return baseKey, SiteModelRouteTypeOpenAIEmbedding
 	case "rerank":
 		return baseKey, SiteModelRouteTypeRerank
+	case "system-one":
+		return baseKey, SiteModelRouteTypeSystemOne
 	default:
 		return baseKey, SiteModelRouteTypeOpenAIChat
 	}
@@ -865,6 +886,8 @@ func (t SiteModelRouteType) ToOutboundType() outbound.OutboundType {
 		return outbound.OutboundTypeOpenAIEmbedding
 	case SiteModelRouteTypeRerank:
 		return outbound.OutboundTypeRerank
+	case SiteModelRouteTypeSystemOne:
+		return outbound.OutboundTypeSystemOne
 	default:
 		return outbound.OutboundTypeOpenAIChat
 	}
@@ -884,6 +907,8 @@ func SiteModelRouteTypeFromOutboundType(t outbound.OutboundType) SiteModelRouteT
 		return SiteModelRouteTypeOpenAIEmbedding
 	case outbound.OutboundTypeRerank:
 		return SiteModelRouteTypeRerank
+	case outbound.OutboundTypeSystemOne:
+		return SiteModelRouteTypeSystemOne
 	default:
 		return SiteModelRouteTypeOpenAIChat
 	}

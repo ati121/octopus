@@ -97,6 +97,8 @@ export function routeTypeLabel(routeType: SiteModelRouteType) {
             return 'OpenAI Embedding';
         case 'rerank':
             return 'Rerank';
+        case 'system_one':
+            return 'System One';
         default:
             return 'OpenAI Chat';
     }

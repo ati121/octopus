@@ -134,6 +134,11 @@ func TestValidateSiteRouteBaseURLs(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "valid system one override",
+			items:   []SiteRouteBaseURL{{RouteType: SiteModelRouteTypeSystemOne, BaseURL: "https://api.typesafe.ai/v1"}},
+			wantErr: false,
+		},
+		{
 			name:    "unsupported route type",
 			items:   []SiteRouteBaseURL{{RouteType: SiteModelRouteTypeUnknown, BaseURL: "https://example.com/v1"}},
 			wantErr: true,
@@ -172,6 +177,7 @@ func TestCompactSiteModelRouteTypeName(t *testing.T) {
 		{name: "gemini", routeType: SiteModelRouteTypeGemini, expected: "Gemini"},
 		{name: "embedding", routeType: SiteModelRouteTypeOpenAIEmbedding, expected: "Embedding"},
 		{name: "rerank", routeType: SiteModelRouteTypeRerank, expected: "Rerank"},
+		{name: "system one", routeType: SiteModelRouteTypeSystemOne, expected: "SystemOne"},
 		{name: "unknown", routeType: SiteModelRouteTypeUnknown, expected: "Unsupported"},
 	}
 
@@ -227,6 +233,10 @@ func TestInferSiteModelRouteType(t *testing.T) {
 		{name: "o series defaults to chat without metadata", modelName: "o3-mini", expected: SiteModelRouteTypeOpenAIChat},
 		{name: "older openai chat models remain chat", modelName: "gpt-4-turbo", expected: SiteModelRouteTypeOpenAIChat},
 		{name: "generic compat models remain chat", modelName: "deepseek-chat", expected: SiteModelRouteTypeOpenAIChat},
+		{name: "jev latest uses system one route", modelName: "jev-latest", expected: SiteModelRouteTypeSystemOne},
+		{name: "versioned jev uses system one route", modelName: "jev-1.13.0", expected: SiteModelRouteTypeSystemOne},
+		{name: "prefixed jev uses system one route", modelName: "~typesafe/jev-latest", expected: SiteModelRouteTypeSystemOne},
+		{name: "jev prefix without dash remains chat", modelName: "jevons-chat", expected: SiteModelRouteTypeOpenAIChat},
 	}
 
 	for _, tt := range tests {
@@ -250,5 +260,24 @@ func TestShouldSplitSiteChannelRoutesForSiliconFlow(t *testing.T) {
 	}
 	if err := SitePlatformOther.Validate(); err != nil {
 		t.Fatalf("expected Other platform to validate: %v", err)
+	}
+}
+
+func TestSystemOneSiteRouteRoundTrip(t *testing.T) {
+	key := ComposeSiteChannelBindingKey("default", SiteModelRouteTypeSystemOne, true)
+	if key != "default::system-one" {
+		t.Fatalf("expected split binding key %q, got %q", "default::system-one", key)
+	}
+	if groupKey, routeType := ParseSiteChannelBindingKey(key); groupKey != "default" || routeType != SiteModelRouteTypeSystemOne {
+		t.Fatalf("expected binding key to parse back to default/system one, got %q/%q", groupKey, routeType)
+	}
+	if outboundType := SiteModelRouteTypeSystemOne.ToOutboundType(); outboundType != outbound.OutboundTypeSystemOne {
+		t.Fatalf("expected system one route to use system one outbound, got %v", outboundType)
+	}
+	if routeType := SiteModelRouteTypeFromOutboundType(outbound.OutboundTypeSystemOne); routeType != SiteModelRouteTypeSystemOne {
+		t.Fatalf("expected system one outbound to map back to system one route, got %q", routeType)
+	}
+	if !IsProjectedSiteModelRouteType(SiteModelRouteTypeSystemOne) {
+		t.Fatal("expected system one route to be projected as its own channel")
 	}
 }

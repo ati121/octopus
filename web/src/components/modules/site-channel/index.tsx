@@ -599,6 +599,7 @@ const SHORT_ROUTE_LABEL: Partial<Record<SiteModelRouteType, string>> = {
     openai_response: 'Response',
     openai_embedding: 'Embedding',
     rerank: 'Rerank',
+    system_one: 'SystemOne',
 };
 
 function getUnknownRouteReason(model: SiteModelView) {

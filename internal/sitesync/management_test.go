@@ -901,7 +901,7 @@ func TestSyncManagementPlatformAppliesPricingRouteMetadata(t *testing.T) {
 		case r.URL.Path == "/api/user/self/groups":
 			_, _ = w.Write([]byte(`{"data":[{"id":"default","name":"default"}]}`))
 		case r.URL.Path == "/v1/models":
-			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4o-mini"},{"id":"text-embedding-3-large"},{"id":"vendor-embedding-x"}]}`))
+			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4o-mini"},{"id":"text-embedding-3-large"},{"id":"vendor-embedding-x"},{"id":"jev-1.13.0"},{"id":"jev-latest"}]}`))
 		case r.URL.Path == "/api/pricing":
 			if r.Header.Get("Authorization") != "Bearer test-access-token" || r.Header.Get("New-API-User") != "7788" {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -911,7 +911,8 @@ func TestSyncManagementPlatformAppliesPricingRouteMetadata(t *testing.T) {
 			_, _ = w.Write([]byte(`{"data":[
 				{"model_name":"gpt-4o-mini","supported_endpoint_types":["/v1/responses","/v1/chat/completions"]},
 				{"model_name":"text-embedding-3-large","supported_endpoint_types":["/v1/embeddings"]},
-				{"model_name":"vendor-embedding-x","supported_endpoint_types":["/vendor/embeddings"]}
+				{"model_name":"vendor-embedding-x","supported_endpoint_types":["/vendor/embeddings"]},
+				{"model_name":"jev-1.13.0","supported_endpoint_types":["openai"]}
 			]}`))
 		case r.URL.Path == "/api/user/self":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"id":7788,"username":"managed-user"}}`))
@@ -949,6 +950,12 @@ func TestSyncManagementPlatformAppliesPricingRouteMetadata(t *testing.T) {
 	}
 	if routeByModel["vendor-embedding-x"].RouteType != model.SiteModelRouteTypeOpenAIEmbedding {
 		t.Fatalf("expected vendor-embedding-x route type %q, got %q", model.SiteModelRouteTypeOpenAIEmbedding, routeByModel["vendor-embedding-x"].RouteType)
+	}
+	// 站点对 Jev 只报告默认的 openai 端点，或在定价里根本不列出，都应推断为 System One。
+	for _, jevModel := range []string{"jev-1.13.0", "jev-latest"} {
+		if routeByModel[jevModel].RouteType != model.SiteModelRouteTypeSystemOne {
+			t.Fatalf("expected %s route type %q, got %q", jevModel, model.SiteModelRouteTypeSystemOne, routeByModel[jevModel].RouteType)
+		}
 	}
 
 	metadata, ok := model.ParseSiteModelRouteMetadata(routeByModel["vendor-embedding-x"].RouteRawPayload)

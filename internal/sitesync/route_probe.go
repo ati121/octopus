@@ -412,10 +412,17 @@ func buildSiteModelRouteDetection(
 }
 
 func inferHeuristicEndpointTypes(modelName string, supportedEndpointTypes []string) []string {
+	// Jev 只支持 System One，而站点对不认识的模型通常只报告默认的 openai 端点，这里按名称补上 /v1/systemone。
+	if model.InferSiteModelRouteType(modelName) == model.SiteModelRouteTypeSystemOne {
+		if explicitSupportsRouteType(supportedEndpointTypes, model.SiteModelRouteTypeSystemOne) {
+			return nil
+		}
+		return []string{"/v1/systemone"}
+	}
 	if !shouldHeuristicallyAddOpenAIResponse(modelName) {
 		return nil
 	}
-	if explicitSupportsResponse(supportedEndpointTypes) {
+	if explicitSupportsRouteType(supportedEndpointTypes, model.SiteModelRouteTypeOpenAIResponse) {
 		return nil
 	}
 	return []string{"/v1/responses"}
@@ -426,9 +433,9 @@ func shouldHeuristicallyAddOpenAIResponse(modelName string) bool {
 	return strings.HasPrefix(lower, "gpt-5")
 }
 
-func explicitSupportsResponse(supportedEndpointTypes []string) bool {
+func explicitSupportsRouteType(supportedEndpointTypes []string, target model.SiteModelRouteType) bool {
 	for _, endpointType := range supportedEndpointTypes {
-		if routeType, ok := mapSupportedEndpointType(endpointType); ok && routeType == model.SiteModelRouteTypeOpenAIResponse {
+		if routeType, ok := mapSupportedEndpointType(endpointType); ok && routeType == target {
 			return true
 		}
 	}
@@ -480,7 +487,8 @@ func pickPreferredDetectedRouteType(modelName string, values []model.SiteModelRo
 		model.SiteModelRouteTypeGemini,
 		model.SiteModelRouteTypeVolcengine,
 		model.SiteModelRouteTypeOpenAIEmbedding,
-		model.SiteModelRouteTypeRerank:
+		model.SiteModelRouteTypeRerank,
+		model.SiteModelRouteTypeSystemOne:
 		for _, value := range values {
 			if value == nativeRouteType {
 				return value
@@ -489,6 +497,7 @@ func pickPreferredDetectedRouteType(modelName string, values []model.SiteModelRo
 	}
 
 	fallbackOrder := []model.SiteModelRouteType{
+		model.SiteModelRouteTypeSystemOne,
 		model.SiteModelRouteTypeRerank,
 		model.SiteModelRouteTypeOpenAIEmbedding,
 		model.SiteModelRouteTypeAnthropic,
@@ -524,6 +533,8 @@ func detectedRouteTypePriority(routeType model.SiteModelRouteType) int {
 		return 5
 	case model.SiteModelRouteTypeOpenAIChat:
 		return 6
+	case model.SiteModelRouteTypeSystemOne:
+		return 7
 	default:
 		return 99
 	}
@@ -539,6 +550,11 @@ func mapSupportedEndpointType(value string) (model.SiteModelRouteType, bool) {
 		normalized == "reranker",
 		strings.Contains(normalized, "/v1/rerank"):
 		return model.SiteModelRouteTypeRerank, true
+	case normalized == "systemone",
+		normalized == "system_one",
+		normalized == "system-one",
+		strings.Contains(normalized, "/systemone"):
+		return model.SiteModelRouteTypeSystemOne, true
 	case normalized == "embedding",
 		normalized == "embeddings",
 		normalized == "openai_embedding",
