@@ -93,6 +93,7 @@ const OFFICIAL_ORG_AVATARS = {
     inclusionai: createOfficialOrgAvatar('/model-icons/inclusionai.png', '#111827'),
     nexagi: createOfficialOrgAvatar('/model-icons/nexagi.png', '#0F766E'),
     teleai: createOfficialOrgAvatar('/model-icons/teleai.png', '#2563EB'),
+    typesafe: createOfficialOrgAvatar('/model-icons/typesafe.png', '#E551BA'),
 } satisfies Record<string, AvatarComponent>;
 
 /**
@@ -113,6 +114,8 @@ const MODEL_ICON_PATTERNS: ModelIconConfig[] = [
     { prefixes: ['inclusionai', 'ling-'], Avatar: OFFICIAL_ORG_AVATARS.inclusionai, color: '#111827' },
     { prefixes: ['nex-agi', 'nex-'], Avatar: OFFICIAL_ORG_AVATARS.nexagi, color: '#0F766E' },
     { prefixes: ['teleai', 'telespeech'], Avatar: OFFICIAL_ORG_AVATARS.teleai, color: '#2563EB' },
+    // TypeSafe System One models (Jev), e.g. `jev-latest` or `~typesafe/jev-latest`.
+    { prefixes: ['jev', 'typesafe'], Avatar: OFFICIAL_ORG_AVATARS.typesafe, color: '#E551BA' },
     // FunAudioLLM, Tongyi-MAI and Wan-AI are Alibaba/Tongyi model families.
     { prefixes: ['funaudiollm', 'tongyi-mai', 'wan-ai', 'wan2'], Avatar: Alibaba.Avatar, color: '#1677FF' },
     // OpenAI - GPT series
