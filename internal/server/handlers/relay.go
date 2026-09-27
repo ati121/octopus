@@ -37,6 +37,10 @@ func init() {
 		AddRoute(
 			router.NewRoute("/rerank", http.MethodPost).
 				Handle(rerank),
+		).
+		AddRoute(
+			router.NewRoute("/systemone", http.MethodPost).
+				Handle(systemOne),
 		)
 
 	// WebSocket route for /v1/responses (no RequireJSON middleware)
@@ -65,6 +69,9 @@ func embedding(c *gin.Context) {
 }
 func rerank(c *gin.Context) {
 	relay.Handler(inbound.InboundTypeRerank, c)
+}
+func systemOne(c *gin.Context) {
+	relay.Handler(inbound.InboundTypeSystemOne, c)
 }
 func wsResponse(c *gin.Context) {
 	relay.HandleWSResponse(c)

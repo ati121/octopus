@@ -68,6 +68,8 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 		fetchModel, err = fetchAnthropicModelsOrOpenAI(client, ctx, request)
 	case outbound.OutboundTypeGemini:
 		fetchModel, err = fetchGeminiModels(client, ctx, request)
+	case outbound.OutboundTypeSystemOne:
+		fetchModel, err = fetchSystemOneModels(client, ctx, request)
 	default:
 		fetchModel, err = fetchOpenAIModels(client, ctx, request)
 	}
@@ -97,6 +99,14 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 
 // refer: https://platform.openai.com/docs/api-reference/models/list
 func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
+	return fetchModelListCandidates(request, func(modelsURL string) ([]string, error) {
+		return fetchOpenAIModelsAt(client, ctx, request, modelsURL)
+	})
+}
+
+// fetchModelListCandidates 依次尝试 openAIModelListURLs 生成的候选地址，
+// 返回第一个非空模型列表。
+func fetchModelListCandidates(request model.Channel, fetchAt func(modelsURL string) ([]string, error)) ([]string, error) {
 	base := strings.TrimRight(strings.TrimSpace(request.GetBaseUrl()), "/")
 	urls := openAIModelListURLs(base)
 	if len(urls) == 0 {
@@ -104,7 +114,7 @@ func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.C
 	}
 	var lastErr error
 	for _, modelsURL := range urls {
-		models, err := fetchOpenAIModelsAt(client, ctx, request, modelsURL)
+		models, err := fetchAt(modelsURL)
 		if err != nil {
 			lastErr = fmt.Errorf("%s: %w", modelsURL, err)
 			continue
@@ -141,6 +151,55 @@ func fetchOpenAIModelsAt(client *http.Client, ctx context.Context, request model
 	}
 
 	models := newModelFetchAccumulator(len(result.Data))
+	for _, m := range result.Data {
+		if err := models.Add(m.ID); err != nil {
+			return nil, err
+		}
+	}
+	return models.models, nil
+}
+
+// refer: https://docs.typesafe.ai/models#listing-models
+// TypeSafe 的 GET /v1/models 返回 {models:[{name,description,release_date}]}，
+// 目前只列出 jev-latest 等别名；同时兼容前置 OpenAI 兼容网关的 data[].id。
+func fetchSystemOneModels(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
+	return fetchModelListCandidates(request, func(modelsURL string) ([]string, error) {
+		return fetchSystemOneModelsAt(client, ctx, request, modelsURL)
+	})
+}
+
+func fetchSystemOneModelsAt(client *http.Client, ctx context.Context, request model.Channel, modelsURL string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	applyDefaultModelRequestHeaders(req, request)
+	req.Header.Set("Authorization", "Bearer "+request.GetChannelKey().ChannelKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := decodeModelJSONResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	models := newModelFetchAccumulator(len(result.Models) + len(result.Data))
+	for _, m := range result.Models {
+		if err := models.Add(m.Name); err != nil {
+			return nil, err
+		}
+	}
 	for _, m := range result.Data {
 		if err := models.Add(m.ID); err != nil {
 			return nil, err

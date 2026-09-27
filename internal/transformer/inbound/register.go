@@ -4,6 +4,7 @@ import (
 	"github.com/bestruirui/octopus/internal/transformer/inbound/anthropic"
 	"github.com/bestruirui/octopus/internal/transformer/inbound/openai"
 	"github.com/bestruirui/octopus/internal/transformer/inbound/rerank"
+	"github.com/bestruirui/octopus/internal/transformer/inbound/systemone"
 	"github.com/bestruirui/octopus/internal/transformer/model"
 )
 
@@ -15,6 +16,7 @@ const (
 	InboundTypeAnthropic
 	InboundTypeOpenAIEmbedding
 	InboundTypeRerank
+	InboundTypeSystemOne
 )
 
 var inboundFactories = map[InboundType]func() model.Inbound{
@@ -23,6 +25,7 @@ var inboundFactories = map[InboundType]func() model.Inbound{
 	InboundTypeOpenAIEmbedding: func() model.Inbound { return &openai.EmbeddingInbound{} },
 	InboundTypeAnthropic:       func() model.Inbound { return &anthropic.MessagesInbound{} },
 	InboundTypeRerank:          func() model.Inbound { return &rerank.Inbound{} },
+	InboundTypeSystemOne:       func() model.Inbound { return &systemone.Inbound{} },
 }
 
 func Get(inboundType InboundType) model.Inbound {

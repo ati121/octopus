@@ -20,6 +20,7 @@ const (
 	APIFormatOpenAIImageGeneration APIFormat = "openai/image_generation"
 	APIFormatOpenAIEmbedding       APIFormat = "openai/embeddings"
 	APIFormatRerank                APIFormat = "rerank"
+	APIFormatSystemOne             APIFormat = "typesafe/systemone"
 	APIFormatGeminiContents        APIFormat = "gemini/contents"
 	APIFormatAnthropicMessage      APIFormat = "anthropic/messages"
 	APIFormatAiSDKText             APIFormat = "aisdk/text"
@@ -73,6 +74,12 @@ type InternalLLMRequest struct {
 	// shapes, so keeping the wire payload avoids dropping provider extensions.
 	// The outbound adapter only replaces the routed model name.
 	RerankPayload json.RawMessage `json:"-"`
+
+	// SystemOnePayload preserves the complete TypeSafe System One request
+	// object ({state, model, questions}). State, instructions and criteria
+	// accept strings, objects or arrays, so the wire payload is forwarded as-is
+	// and the outbound adapter only replaces the routed model name.
+	SystemOnePayload json.RawMessage `json:"-"`
 
 	// Model is the model ID used to generate the response.
 	Model string `json:"model" validator:"required"`
@@ -432,23 +439,24 @@ func (r *InternalLLMRequest) Validate() error {
 		}
 	}
 
-	// 请求类型必须互斥。Rerank 使用原始 JSON 载荷承载 query、documents
-	// 及供应商扩展字段，因此单独作为第三种请求类型参与校验。
+	// 请求类型必须互斥。Rerank 与 System One 都使用原始 JSON 载荷承载
+	// 请求字段及供应商扩展字段，因此各自作为独立的请求类型参与校验。
 	isEmbeddingRequest := r.EmbeddingInput != nil
 	isChatRequest := r.IsChatRequest()
 	isRerankRequest := r.IsRerankRequest()
+	isSystemOneRequest := r.IsSystemOneRequest()
 
 	requestTypeCount := 0
-	for _, present := range []bool{isEmbeddingRequest, isChatRequest, isRerankRequest} {
+	for _, present := range []bool{isEmbeddingRequest, isChatRequest, isRerankRequest, isSystemOneRequest} {
 		if present {
 			requestTypeCount++
 		}
 	}
 	if requestTypeCount > 1 {
-		return errors.New("messages, embedding input, and rerank payload are mutually exclusive")
+		return errors.New("messages, embedding input, rerank payload, and system one payload are mutually exclusive")
 	}
 	if requestTypeCount == 0 {
-		return errors.New("messages, embedding input, or rerank payload is required")
+		return errors.New("messages, embedding input, rerank payload, or system one payload is required")
 	}
 
 	// 验证 embedding 请求
@@ -465,6 +473,10 @@ func (r *InternalLLMRequest) Validate() error {
 
 	if isRerankRequest && !json.Valid(r.RerankPayload) {
 		return errors.New("rerank payload must be valid JSON")
+	}
+
+	if isSystemOneRequest && !json.Valid(r.SystemOnePayload) {
+		return errors.New("system one payload must be valid JSON")
 	}
 
 	if len(r.Messages) > 0 {
@@ -617,6 +629,11 @@ func (r *InternalLLMRequest) IsEmbeddingRequest() bool {
 // IsRerankRequest returns true if this is a rerank request.
 func (r *InternalLLMRequest) IsRerankRequest() bool {
 	return len(r.RerankPayload) > 0
+}
+
+// IsSystemOneRequest returns true if this is a TypeSafe System One request.
+func (r *InternalLLMRequest) IsSystemOneRequest() bool {
+	return len(r.SystemOnePayload) > 0
 }
 
 // IsChatRequest returns true if this is a chat completion request.
@@ -1453,6 +1470,11 @@ type InternalLLMResponse struct {
 	// rerank endpoint can return every result/meta extension unchanged.
 	RerankPayload json.RawMessage `json:"-"`
 
+	// SystemOnePayload preserves the TypeSafe System One response
+	// ({model, answers, usage}) so the /v1/systemone endpoint can return every
+	// typed answer, probability and confidence field unchanged.
+	SystemOnePayload json.RawMessage `json:"-"`
+
 	// A list of chat completion choices. Can be more than one if `n` is greater
 	// than 1.
 	// For chat completion responses, this field is required.
@@ -1516,6 +1538,11 @@ func (r *InternalLLMResponse) IsEmbeddingResponse() bool {
 // IsRerankResponse returns true if this is a rerank response.
 func (r *InternalLLMResponse) IsRerankResponse() bool {
 	return len(r.RerankPayload) > 0
+}
+
+// IsSystemOneResponse returns true if this is a TypeSafe System One response.
+func (r *InternalLLMResponse) IsSystemOneResponse() bool {
+	return len(r.SystemOnePayload) > 0
 }
 
 // IsChatResponse returns true if this is a chat completion response.

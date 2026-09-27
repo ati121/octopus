@@ -1654,7 +1654,7 @@ func isEmptyUpstreamResponse(resp *model.InternalLLMResponse) bool {
 	if resp == nil || resp.Error != nil {
 		return resp == nil
 	}
-	if len(resp.Choices) > 0 || len(resp.EmbeddingData) > 0 || len(resp.RerankPayload) > 0 || len(resp.RawResponsesOutputItems) > 0 {
+	if len(resp.Choices) > 0 || len(resp.EmbeddingData) > 0 || len(resp.RerankPayload) > 0 || len(resp.SystemOnePayload) > 0 || len(resp.RawResponsesOutputItems) > 0 {
 		return false
 	}
 	return true
@@ -1669,6 +1669,9 @@ func channelTypeIncompatibilityReason(request *model.InternalLLMRequest, channel
 	}
 	if request.IsRerankRequest() && !outbound.IsRerankChannelType(channelType) {
 		return "channel type not compatible with rerank request"
+	}
+	if request.IsSystemOneRequest() && !outbound.IsSystemOneChannelType(channelType) {
+		return "channel type not compatible with system one request"
 	}
 	if request.IsChatRequest() && !outbound.IsChatChannelType(channelType) {
 		return "channel type not compatible with chat request"

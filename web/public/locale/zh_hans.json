@@ -973,6 +973,7 @@
             "typeVolcengine": "火山引擎",
             "typeCodex": "Codex",
             "typeRerank": "Rerank",
+            "typeSystemOne": "System One (Jev)",
             "autoSync": "自动同步",
             "skipHealthProbe": "跳过健康探测",
             "autoGroup": "自动分组",

@@ -57,6 +57,7 @@ func TestStreamResponseCompleted(t *testing.T) {
 	}{
 		{name: "nil", resp: nil, want: false},
 		{name: "no choices", resp: &transformerModel.InternalLLMResponse{}, want: false},
+		{name: "system one payload", resp: &transformerModel.InternalLLMResponse{SystemOnePayload: []byte(`{"answers":{"q":{"type":"noul","noul":1}}}`)}, want: true},
 		{
 			name: "missing finish reason",
 			resp: &transformerModel.InternalLLMResponse{Choices: []transformerModel.Choice{{Index: 0}}},
