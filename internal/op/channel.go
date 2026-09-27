@@ -251,6 +251,10 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		selectFields = append(selectFields, "custom_model")
 		updates.CustomModel = *req.CustomModel
 	}
+	if req.ModelTypes != nil {
+		selectFields = append(selectFields, "model_types")
+		updates.ModelTypes = *req.ModelTypes
+	}
 	effectiveProxyMode := existingChannel.ProxyMode
 	effectiveProxyConfigID := existingChannel.ProxyConfigID
 	proxyTouched := false
@@ -791,6 +795,18 @@ func ChannelGet(id int, ctx context.Context) (*model.Channel, error) {
 	}
 	normalizeChannelProxyFields(&channel)
 	return &channel, nil
+}
+
+// ChannelGetForModel 与 ChannelGet 相同，但 Type 已按模型解析：模型单独设置的出站类型
+// 优先于渠道类型。中继按候选模型取渠道时用它，后续转发与协议判断只读 Type 即可。
+// ChannelGet 返回的是缓存副本，改写 Type 不会影响缓存。
+func ChannelGetForModel(id int, modelName string, ctx context.Context) (*model.Channel, error) {
+	channel, err := ChannelGet(id, ctx)
+	if err != nil {
+		return nil, err
+	}
+	channel.Type = channel.TypeForModel(modelName)
+	return channel, nil
 }
 
 func ChannelGetByName(name string, ctx context.Context) (*model.Channel, error) {

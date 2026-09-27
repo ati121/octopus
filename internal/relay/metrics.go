@@ -284,10 +284,11 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 	m.saveLog(ctx, success, err, duration, attempts, logChannelID, logChannelName)
 }
 
-// enrichChannelAttemptProtocols fills the protocol from the channel's actual
-// outbound type. Channel names are not reliable for this: ordinary channels
-// do not carry a protocol suffix, while site-projected names may contain
-// account/group path segments.
+// enrichChannelAttemptProtocols fills the protocol from the outbound type the
+// attempt's model actually used (a per-model type overrides the channel type).
+// Channel names are not reliable for this: ordinary channels do not carry a
+// protocol suffix, while site-projected names may contain account/group path
+// segments.
 func enrichChannelAttemptProtocols(ctx context.Context, attempts []model.ChannelAttempt) []model.ChannelAttempt {
 	if len(attempts) == 0 {
 		return attempts
@@ -302,7 +303,7 @@ func enrichChannelAttemptProtocols(ctx context.Context, attempts []model.Channel
 		if err != nil || channel == nil {
 			continue
 		}
-		enriched[i].Protocol = model.CompactOutboundProtocolName(channel.Type)
+		enriched[i].Protocol = model.CompactOutboundProtocolName(channel.TypeForModel(enriched[i].ModelName))
 	}
 	return enriched
 }

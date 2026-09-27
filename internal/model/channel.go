@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,6 +73,29 @@ func (m ChannelWSMode) Normalize() ChannelWSMode {
 	}
 }
 
+// ChannelModelTypes 为渠道内的单个模型指定出站类型（模型名 -> 类型），
+// 优先级高于渠道级 Type；未出现在表里的模型沿用渠道级 Type。
+type ChannelModelTypes map[string]outbound.OutboundType
+
+// Normalize 去掉空模型名并校验类型；清理后为空时返回 nil，落库为 NULL。
+func (m ChannelModelTypes) Normalize() (ChannelModelTypes, error) {
+	normalized := make(ChannelModelTypes, len(m))
+	for name, channelType := range m {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if !outbound.IsValidChannelType(channelType) {
+			return nil, fmt.Errorf("invalid channel type %d for model %q", channelType, name)
+		}
+		normalized[name] = channelType
+	}
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	return normalized, nil
+}
+
 type Channel struct {
 	ID              int                   `json:"id" gorm:"primaryKey"`
 	Name            string                `json:"name" gorm:"unique;not null"`
@@ -81,6 +105,7 @@ type Channel struct {
 	Keys            []ChannelKey          `json:"keys" gorm:"foreignKey:ChannelID"`
 	Model           string                `json:"model"`
 	CustomModel     string                `json:"custom_model"`
+	ModelTypes      ChannelModelTypes     `json:"model_types" gorm:"serializer:json"`
 	ProxyMode       ProxyUsageMode        `json:"proxy_mode" gorm:"type:varchar(16);not null;default:'direct'"`
 	ProxyConfigID   *int                  `json:"proxy_config_id"`
 	Proxy           bool                  `json:"-" gorm:"default:false"`
@@ -159,6 +184,7 @@ type ChannelUpdateRequest struct {
 	BaseUrls        *[]BaseUrl             `json:"base_urls,omitempty"`
 	Model           *string                `json:"model,omitempty"`
 	CustomModel     *string                `json:"custom_model,omitempty"`
+	ModelTypes      *ChannelModelTypes     `json:"model_types,omitempty"`
 	ProxyMode       *ProxyUsageMode        `json:"proxy_mode,omitempty"`
 	ProxyConfigID   *int                   `json:"proxy_config_id,omitempty"`
 	Proxy           *bool                  `json:"-"`
@@ -199,6 +225,14 @@ type ChannelFetchModelRequest struct {
 	Key           string                `json:"key" binding:"required"`
 	ProxyMode     ProxyUsageMode        `json:"proxy_mode"`
 	ProxyConfigID *int                  `json:"proxy_config_id"`
+}
+
+// TypeForModel 返回指定模型实际使用的出站类型：模型单独设置的类型优先于渠道类型。
+func (c *Channel) TypeForModel(modelName string) outbound.OutboundType {
+	if channelType, ok := c.ModelTypes[modelName]; ok {
+		return channelType
+	}
+	return c.Type
 }
 
 func (c *Channel) GetBaseUrl() string {

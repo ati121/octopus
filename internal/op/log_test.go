@@ -50,6 +50,36 @@ func TestFillRelayLogProtocolsCoversOrdinaryChannelsAndAttempts(t *testing.T) {
 	}
 }
 
+func TestFillRelayLogProtocolsUsesModelType(t *testing.T) {
+	const channelID = 991103
+	channelCache.Set(channelID, model.Channel{
+		ID:         channelID,
+		Name:       "mixed-channel",
+		Type:       outbound.OutboundTypeOpenAIChat,
+		ModelTypes: model.ChannelModelTypes{"claude-sonnet": outbound.OutboundTypeAnthropic},
+	})
+	t.Cleanup(func() {
+		channelCache.Del(channelID)
+	})
+
+	relayLog := model.RelayLog{
+		ChannelId:       channelID,
+		ActualModelName: "claude-sonnet",
+		Attempts: []model.ChannelAttempt{
+			{ChannelID: channelID, ChannelName: "mixed-channel", ModelName: "gpt-4o", Status: model.AttemptFailed},
+			{ChannelID: channelID, ChannelName: "mixed-channel", ModelName: "claude-sonnet", Status: model.AttemptSuccess},
+		},
+	}
+	fillRelayLogProtocols(&relayLog)
+
+	if relayLog.Protocol != "Anthropic" {
+		t.Fatalf("expected final protocol Anthropic, got %q", relayLog.Protocol)
+	}
+	if relayLog.Attempts[0].Protocol != "Chat" || relayLog.Attempts[1].Protocol != "Anthropic" {
+		t.Fatalf("unexpected attempt protocols: %#v", relayLog.Attempts)
+	}
+}
+
 func TestRelayLogStreamTokenExpires(t *testing.T) {
 	resetRelayLogStateForTest()
 	relayLogStreamTokensLock.Lock()

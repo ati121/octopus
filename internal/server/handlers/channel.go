@@ -98,9 +98,15 @@ func createChannel(c *gin.Context) {
 		return
 	}
 	if err := validateChannelMatchRegex(channel.MatchRegex); err != nil {
-		respondInvalidMatchRegex(c, err)
+		respondChannelValidationFailed(c, err)
 		return
 	}
+	modelTypes, err := channel.ModelTypes.Normalize()
+	if err != nil {
+		respondChannelValidationFailed(c, err)
+		return
+	}
+	channel.ModelTypes = modelTypes
 	if channel.ProxyMode == "" {
 		channel.ProxyMode = model.ProxyUsageModeDirect
 	}
@@ -150,8 +156,16 @@ func updateChannel(c *gin.Context) {
 		return
 	}
 	if err := validateChannelMatchRegex(req.MatchRegex); err != nil {
-		respondInvalidMatchRegex(c, err)
+		respondChannelValidationFailed(c, err)
 		return
+	}
+	if req.ModelTypes != nil {
+		modelTypes, err := req.ModelTypes.Normalize()
+		if err != nil {
+			respondChannelValidationFailed(c, err)
+			return
+		}
+		req.ModelTypes = &modelTypes
 	}
 	channel, err := op.ChannelUpdate(&req, c.Request.Context())
 	if err != nil {
@@ -209,7 +223,7 @@ func fetchModel(c *gin.Context) {
 		return
 	}
 	if err := validateChannelMatchRegex(request.MatchRegex); err != nil {
-		respondInvalidMatchRegex(c, err)
+		respondChannelValidationFailed(c, err)
 		return
 	}
 	models, err := helper.FetchModels(c.Request.Context(), request)
@@ -230,7 +244,7 @@ func validateChannelMatchRegex(matchRegex *string) error {
 	return err
 }
 
-func respondInvalidMatchRegex(c *gin.Context, err error) {
+func respondChannelValidationFailed(c *gin.Context, err error) {
 	resp.ErrorWithAppError(c, http.StatusBadRequest, apperror.New(apperror.CodeCommonValidationFailed, err.Error()).WithStatus(http.StatusBadRequest))
 }
 

@@ -11,7 +11,7 @@ import {
     Globe,
     Key
 } from 'lucide-react';
-import { useUpdateChannel, useDeleteChannel, type Channel, type UpdateChannelRequest } from '@/api/endpoints/channel';
+import { useUpdateChannel, useDeleteChannel, type Channel, type ChannelModelTypes, type UpdateChannelRequest } from '@/api/endpoints/channel';
 import {
     MorphingDialogTitle,
     MorphingDialogDescription,
@@ -59,6 +59,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
             : [{ enabled: true, channel_key: '', remark: '' }],
         model: channel.model,
         custom_model: channel.custom_model,
+        model_types: channel.model_types ?? {},
         auto_sync: channel.auto_sync,
         skip_health_probe: channel.skip_health_probe,
         auto_group: channel.auto_group,
@@ -74,6 +75,12 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
     const headersEqual = (a: Channel['custom_header'] | undefined, b: Channel['custom_header'] | undefined) =>
         JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+    // 按键逐一比较：后端返回的键顺序与表单里的插入顺序可能不同，不能用 JSON.stringify
+    const modelTypesEqual = (a: ChannelModelTypes | undefined, b: ChannelModelTypes | undefined) => {
+        const left = Object.entries(a ?? {});
+        const right = b ?? {};
+        return left.length === Object.keys(right).length && left.every(([model, type]) => right[model] === type);
+    };
 
     const handleUpdate = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
@@ -91,6 +98,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         }
         if (formData.model !== channel.model) req.model = formData.model;
         if (formData.custom_model !== channel.custom_model) req.custom_model = formData.custom_model;
+        if (!modelTypesEqual(formData.model_types, channel.model_types)) req.model_types = formData.model_types;
         if (formData.proxy_mode === 'pool' && !formData.proxy_config_id) {
             toast.error(tProxy('selectRequired'));
             return;

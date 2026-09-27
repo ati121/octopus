@@ -1,4 +1,4 @@
-import { ChannelType, type AutoGroupType, type Channel, type ChannelWSMode, useFetchModel } from '@/api/endpoints/channel';
+import { ChannelType, type AutoGroupType, type Channel, type ChannelModelTypes, type ChannelWSMode, useFetchModel } from '@/api/endpoints/channel';
 import { ProxySelector } from '@/components/modules/proxy-pool/ProxySelector';
 import {
     Select,
@@ -10,11 +10,11 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/common/Toast';
 import { useTranslations } from 'next-intl';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw, X, Plus } from 'lucide-react';
+import { CHANNEL_TYPE_OPTIONS, ModelBadge } from './ModelBadge';
 
 export interface ChannelKeyFormItem {
     id?: number;
@@ -38,6 +38,7 @@ export interface ChannelFormData {
     keys: ChannelKeyFormItem[];
     model: string;
     custom_model: string;
+    model_types: ChannelModelTypes;
     enabled: boolean;
     auto_sync: boolean;
     skip_health_probe: boolean;
@@ -126,11 +127,30 @@ export function ChannelForm({
     const effectiveKey =
         formData.keys.find((k) => k.enabled && k.channel_key.trim())?.channel_key.trim() || '';
 
+    // 渠道本身或任一模型走 OpenAI Response 时，Responses WS 模式才有意义
+    const usesResponseType = formData.type === ChannelType.OpenAIResponse
+        || Object.values(formData.model_types).includes(ChannelType.OpenAIResponse);
+
     const updateModels = (nextAuto: string[], nextCustom: string[]) => {
         const model = nextAuto.join(',');
         const custom_model = nextCustom.join(',');
         if (formData.model === model && formData.custom_model === custom_model) return;
-        onFormDataChange({ ...formData, model, custom_model });
+        // 模型被移除时一并清掉它的单独类型，避免残留
+        const kept = new Set([...nextAuto, ...nextCustom]);
+        const model_types = Object.fromEntries(
+            Object.entries(formData.model_types).filter(([name]) => kept.has(name)),
+        );
+        onFormDataChange({ ...formData, model, custom_model, model_types });
+    };
+
+    const handleModelTypeChange = (model: string, type: ChannelType | undefined) => {
+        const model_types = { ...formData.model_types };
+        if (type === undefined) {
+            delete model_types[model];
+        } else {
+            model_types[model] = type;
+        }
+        onFormDataChange({ ...formData, model_types });
     };
 
     const handleRefreshModels = async () => {
@@ -272,14 +292,9 @@ export function ChannelForm({
                             <SelectValue />
                         </SelectTrigger>
                         <SelectContent className='rounded-xl'>
-                            <SelectItem className='rounded-xl' value={String(ChannelType.OpenAIChat)}>{t('typeOpenAIChat')}</SelectItem>
-                            <SelectItem className='rounded-xl' value={String(ChannelType.OpenAIResponse)}>{t('typeOpenAIResponse')}</SelectItem>
-                            <SelectItem className='rounded-xl' value={String(ChannelType.Anthropic)}>{t('typeAnthropic')}</SelectItem>
-                            <SelectItem className='rounded-xl' value={String(ChannelType.Gemini)}>{t('typeGemini')}</SelectItem>
-                            <SelectItem className='rounded-xl' value={String(ChannelType.Volcengine)}>{t('typeVolcengine')}</SelectItem>
-                            <SelectItem className='rounded-xl' value={String(ChannelType.OpenAIEmbedding)}>{t('typeOpenAIEmbedding')}</SelectItem>
-                            <SelectItem className='rounded-xl' value={String(ChannelType.Codex)}>{t('typeCodex')}</SelectItem>
-                            <SelectItem className='rounded-xl' value={String(ChannelType.Rerank)}>{t('typeRerank')}</SelectItem>
+                            {CHANNEL_TYPE_OPTIONS.map((option) => (
+                                <SelectItem key={option.value} className='rounded-xl' value={String(option.value)}>{t(option.labelKey)}</SelectItem>
+                            ))}
                         </SelectContent>
                     </Select>
                 </div>
@@ -457,28 +472,26 @@ export function ChannelForm({
                         {(autoModels.length + customModels.length) > 0 ? (
                             <div className="flex flex-wrap gap-1.5">
                                 {autoModels.map((model) => (
-                                    <Badge key={model} variant="secondary" className="bg-muted hover:bg-muted/80">
-                                        {model}
-                                        <button
-                                            type="button"
-                                            onClick={() => handleRemoveAutoModel(model)}
-                                            className="ml-1 rounded-sm opacity-70 hover:opacity-100 focus:outline-none focus:ring-1 focus:ring-ring"
-                                        >
-                                            <X className="h-3 w-3" />
-                                        </button>
-                                    </Badge>
+                                    <ModelBadge
+                                        key={model}
+                                        model={model}
+                                        custom={false}
+                                        channelType={formData.type}
+                                        modelType={formData.model_types[model]}
+                                        onModelTypeChange={(type) => handleModelTypeChange(model, type)}
+                                        onRemove={() => handleRemoveAutoModel(model)}
+                                    />
                                 ))}
                                 {customModels.map((model) => (
-                                    <Badge key={model} className="bg-primary hover:bg-primary/90">
-                                        {model}
-                                        <button
-                                            type="button"
-                                            onClick={() => handleRemoveCustomModel(model)}
-                                            className="ml-1 rounded-sm opacity-70 hover:opacity-100 focus:outline-none focus:ring-1 focus:ring-ring"
-                                        >
-                                            <X className="h-3 w-3" />
-                                        </button>
-                                    </Badge>
+                                    <ModelBadge
+                                        key={model}
+                                        model={model}
+                                        custom
+                                        channelType={formData.type}
+                                        modelType={formData.model_types[model]}
+                                        onModelTypeChange={(type) => handleModelTypeChange(model, type)}
+                                        onRemove={() => handleRemoveCustomModel(model)}
+                                    />
                                 ))}
                             </div>
                         ) : (
@@ -487,6 +500,9 @@ export function ChannelForm({
                             </div>
                         )}
                     </div>
+                    {(autoModels.length + customModels.length) > 0 && (
+                        <p className="text-xs text-muted-foreground">{t('modelTypeHint')}</p>
+                    )}
                 </div>
 
                 <div className="space-y-1.5">
@@ -530,7 +546,7 @@ export function ChannelForm({
                     </AccordionTrigger>
                     <AccordionContent className="pt-4 px-4 pb-4 space-y-4 border-t">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {formData.type === ChannelType.OpenAIResponse ? (
+                            {usesResponseType ? (
                                 <div className="space-y-2">
                                     <label htmlFor={`${idPrefix}-ws-mode`} className="text-sm font-medium text-card-foreground">
                                         {t('wsMode')}

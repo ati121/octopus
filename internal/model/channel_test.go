@@ -3,7 +3,44 @@ package model
 import (
 	"testing"
 	"time"
+
+	"github.com/bestruirui/octopus/internal/transformer/outbound"
 )
+
+func TestChannelTypeForModelPrefersModelType(t *testing.T) {
+	channel := &Channel{
+		Type:       outbound.OutboundTypeOpenAIChat,
+		ModelTypes: ChannelModelTypes{"claude-sonnet": outbound.OutboundTypeAnthropic},
+	}
+
+	if got := channel.TypeForModel("claude-sonnet"); got != outbound.OutboundTypeAnthropic {
+		t.Fatalf("expected model type Anthropic to override channel type, got %d", got)
+	}
+	if got := channel.TypeForModel("gpt-4o"); got != outbound.OutboundTypeOpenAIChat {
+		t.Fatalf("expected model without its own type to follow channel type, got %d", got)
+	}
+}
+
+func TestChannelModelTypesNormalize(t *testing.T) {
+	normalized, err := ChannelModelTypes{
+		" claude-sonnet ": outbound.OutboundTypeAnthropic,
+		"   ":             outbound.OutboundTypeGemini,
+	}.Normalize()
+	if err != nil {
+		t.Fatalf("Normalize returned error: %v", err)
+	}
+	if len(normalized) != 1 || normalized["claude-sonnet"] != outbound.OutboundTypeAnthropic {
+		t.Fatalf("expected trimmed model name and dropped blank entry, got %#v", normalized)
+	}
+
+	if empty, err := (ChannelModelTypes{"  ": outbound.OutboundTypeGemini}).Normalize(); err != nil || empty != nil {
+		t.Fatalf("expected nil for effectively empty model types, got %#v err=%v", empty, err)
+	}
+
+	if _, err := (ChannelModelTypes{"claude-sonnet": outbound.OutboundType(99)}).Normalize(); err == nil {
+		t.Fatalf("expected unknown channel type to be rejected")
+	}
+}
 
 func TestGetChannelKeyPrefersPreferredKeyID(t *testing.T) {
 	channel := &Channel{

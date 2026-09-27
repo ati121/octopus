@@ -26,6 +26,23 @@ func TestBuildProbeRequestForResponses(t *testing.T) {
 	}
 }
 
+func TestBuildProbeRequestUsesModelType(t *testing.T) {
+	channel := &model.Channel{
+		Type:       outbound.OutboundTypeOpenAIChat,
+		ModelTypes: model.ChannelModelTypes{"claude-sonnet": outbound.OutboundTypeAnthropic},
+		BaseUrls:   []model.BaseUrl{{URL: "https://example.com/v1"}},
+	}
+	usedKey := &model.ChannelKey{ID: 1, ChannelKey: "sk-test"}
+
+	req, err := buildProbeRequest(context.Background(), channel, usedKey, "claude-sonnet")
+	if err != nil {
+		t.Fatalf("buildProbeRequest returned error: %v", err)
+	}
+	if req.URL.Path != "/v1/messages" {
+		t.Fatalf("expected model type to route probe to /v1/messages, got %s", req.URL.Path)
+	}
+}
+
 func TestBuildProbeRequestForEmbeddings(t *testing.T) {
 	channel := &model.Channel{
 		Type:     outbound.OutboundTypeOpenAIEmbedding,

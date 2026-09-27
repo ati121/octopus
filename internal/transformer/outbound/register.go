@@ -82,6 +82,12 @@ func IsChatChannelType(channelType OutboundType) bool {
 	return ChatChannelTypes[channelType]
 }
 
+// IsValidChannelType 判断 channel 类型是否注册了出站适配器
+func IsValidChannelType(channelType OutboundType) bool {
+	_, ok := outboundFactories[channelType]
+	return ok
+}
+
 var outboundFactories = map[OutboundType]func() model.Outbound{
 	OutboundTypeOpenAIChat:      func() model.Outbound { return &openai.ChatOutbound{} },
 	OutboundTypeOpenAIResponse:  func() model.Outbound { return &openai.ResponseOutbound{} },

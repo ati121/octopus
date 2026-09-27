@@ -109,10 +109,12 @@ func buildProbeRequest(ctx context.Context, channel *model.Channel, usedKey *mod
 		return nil, fmt.Errorf("model name is empty")
 	}
 
-	request := buildProbeInternalRequest(channel.Type, modelName)
-	adapter := outbound.Get(channel.Type)
+	// 模型单独设置的出站类型优先于渠道类型，探测请求需与真实转发走同一协议。
+	channelType := channel.TypeForModel(modelName)
+	request := buildProbeInternalRequest(channelType, modelName)
+	adapter := outbound.Get(channelType)
 	if adapter == nil {
-		return nil, fmt.Errorf("unsupported outbound type: %d", channel.Type)
+		return nil, fmt.Errorf("unsupported outbound type: %d", channelType)
 	}
 	return adapter.TransformRequest(ctx, request, channel.GetBaseUrl(), usedKey.ChannelKey)
 }

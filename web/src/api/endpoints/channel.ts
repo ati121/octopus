@@ -31,6 +31,11 @@ export enum AutoGroupType {
 
 export type ChannelWSMode = 'inherit' | 'off' | 'passthrough' | 'transform';
 
+/**
+ * 模型级渠道类型：模型名 -> 渠道类型，优先于渠道本身的 type；未设置的模型沿用渠道类型
+ */
+export type ChannelModelTypes = Record<string, ChannelType>;
+
 export type BaseUrl = {
     url: string;
     delay: number;
@@ -71,6 +76,7 @@ export type Channel = {
     keys: ChannelKey[];
     model: string;
     custom_model: string;
+    model_types: ChannelModelTypes;
     proxy_mode: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
     auto_sync: boolean;
@@ -86,11 +92,12 @@ export type Channel = {
     stats: StatsChannel;
 };
 
-// Internal type: backend may return null for slice fields; normalize to [] in select()
-type ChannelServer = Omit<Channel, 'base_urls' | 'custom_header' | 'keys'> & {
+// Internal type: backend may return null for slice/map fields; normalize in select()
+type ChannelServer = Omit<Channel, 'base_urls' | 'custom_header' | 'keys' | 'model_types'> & {
     base_urls: BaseUrl[] | null;
     custom_header: CustomHeader[] | null;
     keys: ChannelKey[] | null;
+    model_types: ChannelModelTypes | null;
 };
 
 /**
@@ -104,6 +111,7 @@ export type CreateChannelRequest = {
     keys: Array<Pick<ChannelKey, 'enabled' | 'channel_key' | 'remark'>>;
     model: string;
     custom_model?: string;
+    model_types?: ChannelModelTypes;
     proxy_mode?: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
     auto_sync?: boolean;
@@ -127,6 +135,8 @@ export type UpdateChannelRequest = {
     base_urls?: BaseUrl[];
     model?: string;
     custom_model?: string;
+    // 整表替换；传 {} 表示清空所有模型级类型
+    model_types?: ChannelModelTypes;
     proxy_mode?: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
     auto_sync?: boolean;
@@ -179,6 +189,7 @@ export function useChannelList() {
                 custom_header: item.custom_header ?? [],
                 ws_mode: item.ws_mode ?? 'inherit',
                 keys: item.keys ?? [],
+                model_types: item.model_types ?? {},
                 proxy_mode: item.proxy_mode ?? 'direct',
                 proxy_config_id: item.proxy_config_id ?? null,
                 skip_health_probe: item.skip_health_probe ?? false,
