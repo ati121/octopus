@@ -293,6 +293,8 @@ func channelEndpointType(channelType outboundmodel.OutboundType) string {
 		return string(model.SiteModelRouteTypeOpenAIEmbedding)
 	case outboundmodel.OutboundTypeRerank:
 		return string(model.SiteModelRouteTypeRerank)
+	case outboundmodel.OutboundTypeSystemOne:
+		return string(model.SiteModelRouteTypeSystemOne)
 	default:
 		return string(model.SiteModelRouteTypeOpenAIChat)
 	}

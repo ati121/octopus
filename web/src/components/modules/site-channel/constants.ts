@@ -9,6 +9,7 @@ export const SITE_ROUTE_COLUMN_ORDER: SiteModelRouteType[] = [
     'volcengine',
     'openai_embedding',
     'rerank',
+    'system_one',
 ];
 
 export const SITE_ROUTE_DISPLAY_ORDER: SiteModelRouteType[] = [
@@ -24,6 +25,7 @@ export const SITE_ROUTE_TO_CHANNEL_TYPE: Record<Exclude<SiteModelRouteType, 'unk
     volcengine: ChannelType.Volcengine,
     openai_embedding: ChannelType.OpenAIEmbedding,
     rerank: ChannelType.Rerank,
+    system_one: ChannelType.SystemOne,
 };
 
 export const ROUTE_COLUMN_KEY_PREFIX = 'site-route-column';
@@ -42,6 +44,8 @@ export function getRouteTypeTone(routeType: SiteModelRouteType) {
             return 'border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300';
         case 'rerank':
             return 'border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300';
+        case 'system_one':
+            return 'border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-300';
         case 'openai_response':
             return 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300';
         default:

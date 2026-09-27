@@ -56,6 +56,12 @@ func TestPickPreferredDetectedRouteType(t *testing.T) {
 			values:    []model.SiteModelRouteType{model.SiteModelRouteTypeOpenAIChat, model.SiteModelRouteTypeOpenAIEmbedding},
 			expected:  model.SiteModelRouteTypeOpenAIEmbedding,
 		},
+		{
+			name:      "jev prefers system one over chat",
+			modelName: "jev-1.13.0",
+			values:    []model.SiteModelRouteType{model.SiteModelRouteTypeOpenAIChat, model.SiteModelRouteTypeSystemOne},
+			expected:  model.SiteModelRouteTypeSystemOne,
+		},
 	}
 
 	for _, tt := range tests {
@@ -170,6 +176,71 @@ func TestMapSupportedEndpointTypeRecognizesRerank(t *testing.T) {
 		if !ok || routeType != model.SiteModelRouteTypeRerank {
 			t.Fatalf("expected %q to map to rerank, got %q ok=%v", value, routeType, ok)
 		}
+	}
+}
+
+func TestMapSupportedEndpointTypeRecognizesSystemOne(t *testing.T) {
+	for _, value := range []string{"systemone", "system_one", "system-one", "/v1/systemone"} {
+		routeType, ok := mapSupportedEndpointType(value)
+		if !ok || routeType != model.SiteModelRouteTypeSystemOne {
+			t.Fatalf("expected %q to map to system one, got %q ok=%v", value, routeType, ok)
+		}
+	}
+}
+
+func TestBuildSiteModelRouteDetectionAddsHeuristicSystemOneForJev(t *testing.T) {
+	tests := []struct {
+		name                   string
+		modelName              string
+		supportedEndpointTypes []string
+		expectedHeuristic      []string
+	}{
+		{
+			// 站点对不认识的模型只报告默认的 openai 端点，旧逻辑据此把 jev 判成 Chat。
+			name:                   "default openai endpoint does not win over system one",
+			modelName:              "jev-1.13.0",
+			supportedEndpointTypes: []string{"openai"},
+			expectedHeuristic:      []string{"/v1/systemone"},
+		},
+		{
+			name:              "missing endpoint types still detect system one",
+			modelName:         "jev-latest",
+			expectedHeuristic: []string{"/v1/systemone"},
+		},
+		{
+			name:                   "explicit system one endpoint needs no heuristic",
+			modelName:              "jev-latest",
+			supportedEndpointTypes: []string{"/v1/systemone"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detection, ok := buildSiteModelRouteDetection(
+				tt.modelName,
+				nil,
+				tt.supportedEndpointTypes,
+				"/api/pricing",
+				map[string]struct{}{tt.modelName: {}},
+			)
+			if !ok {
+				t.Fatalf("expected system one detection to be produced")
+			}
+			if detection.RouteType != model.SiteModelRouteTypeSystemOne {
+				t.Fatalf("expected route type %q, got %q", model.SiteModelRouteTypeSystemOne, detection.RouteType)
+			}
+
+			metadata, ok := model.ParseSiteModelRouteMetadata(detection.RouteRawPayload)
+			if !ok {
+				t.Fatalf("expected route metadata to parse")
+			}
+			if metadata.RouteGuessed {
+				t.Fatalf("expected system one detection not to be marked as a name guess")
+			}
+			if strings.Join(metadata.HeuristicEndpointTypes, ",") != strings.Join(tt.expectedHeuristic, ",") {
+				t.Fatalf("expected heuristic endpoint types %#v, got %#v", tt.expectedHeuristic, metadata.HeuristicEndpointTypes)
+			}
+		})
 	}
 }
 

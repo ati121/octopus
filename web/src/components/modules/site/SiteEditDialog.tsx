@@ -71,6 +71,7 @@ const ROUTE_BASE_URL_OPTIONS: ReadonlyArray<{ value: string; label: string }> = 
     { value: 'volcengine', label: 'Volcengine' },
     { value: 'openai_embedding', label: 'OpenAI Embedding' },
     { value: 'rerank', label: 'Rerank' },
+    { value: 'system_one', label: 'System One' },
 ];
 
 const DEFAULT_ROUTE_TYPE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [

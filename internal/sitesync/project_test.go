@@ -113,6 +113,7 @@ func TestProjectAccountSupportsAllConfiguredRouteBuckets(t *testing.T) {
 		{SiteAccountID: account.ID, GroupKey: model.SiteDefaultGroupKey, ModelName: "text-embedding-3-large", Source: "sync", RouteType: model.SiteModelRouteTypeOpenAIEmbedding},
 		{SiteAccountID: account.ID, GroupKey: model.SiteDefaultGroupKey, ModelName: "doubao-seed-1-6", Source: "sync", RouteType: model.SiteModelRouteTypeVolcengine},
 		{SiteAccountID: account.ID, GroupKey: model.SiteDefaultGroupKey, ModelName: "Pro/BAAI/bge-reranker-v2-m3", Source: "sync", RouteType: model.SiteModelRouteTypeRerank},
+		{SiteAccountID: account.ID, GroupKey: model.SiteDefaultGroupKey, ModelName: "jev-latest", Source: "sync", RouteType: model.SiteModelRouteTypeSystemOne},
 	}
 	if err := dbpkg.GetDB().WithContext(ctx).Create(&extraModels).Error; err != nil {
 		t.Fatalf("create extra site models failed: %v", err)
@@ -122,13 +123,13 @@ func TestProjectAccountSupportsAllConfiguredRouteBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProjectAccount returned error: %v", err)
 	}
-	if len(channelIDs) != 6 {
-		t.Fatalf("expected 6 managed channels for 6 route buckets, got %d", len(channelIDs))
+	if len(channelIDs) != 7 {
+		t.Fatalf("expected 7 managed channels for 7 route buckets, got %d", len(channelIDs))
 	}
 
 	channelsByGroup := loadProjectedChannelsByGroupKey(t, ctx, account.ID)
-	if len(channelsByGroup) != 6 {
-		t.Fatalf("expected 6 bindings, got %d", len(channelsByGroup))
+	if len(channelsByGroup) != 7 {
+		t.Fatalf("expected 7 bindings, got %d", len(channelsByGroup))
 	}
 
 	assertProjectedChannel(t, channelsByGroup, "default", outbound.OutboundTypeOpenAIChat, "gpt-4o-mini", false)
@@ -137,6 +138,7 @@ func TestProjectAccountSupportsAllConfiguredRouteBuckets(t *testing.T) {
 	assertProjectedChannel(t, channelsByGroup, "default::volcengine", outbound.OutboundTypeVolcengine, "doubao-seed-1-6", true)
 	assertProjectedChannel(t, channelsByGroup, "default::openai-embedding", outbound.OutboundTypeOpenAIEmbedding, "text-embedding-3-large", true)
 	assertProjectedChannel(t, channelsByGroup, "default::rerank", outbound.OutboundTypeRerank, "Pro/BAAI/bge-reranker-v2-m3", true)
+	assertProjectedChannel(t, channelsByGroup, "default::system-one", outbound.OutboundTypeSystemOne, "jev-latest", true)
 }
 
 func TestProjectAccountRewritesGroupItemsBeforeRemovingStaleManagedBindings(t *testing.T) {
@@ -196,6 +198,64 @@ func TestProjectAccountRewritesGroupItemsBeforeRemovingStaleManagedBindings(t *t
 	bindings := loadProjectedChannelsByGroupKey(t, ctx, account.ID)
 	if _, ok := bindings["default::anthropic"]; ok {
 		t.Fatalf("expected stale anthropic binding to be removed after route rewrite")
+	}
+}
+
+// 升级前 Jev 被推断为 Chat、放进了 -Chat 渠道并加入分组；重新同步推断为 System One 后，
+// 分组条目要跟着迁到新投影的 -SystemOne 渠道，而不是被当成过期条目删掉。
+func TestProjectAccountMovesJevGroupItemsOntoSystemOneChannel(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+	_, account := createProjectionFixture(t, ctx)
+
+	jev := model.SiteModel{SiteAccountID: account.ID, GroupKey: model.SiteDefaultGroupKey, ModelName: "jev-latest", Source: "sync", RouteType: model.SiteModelRouteTypeOpenAIChat, RouteSource: model.SiteModelRouteSourceSyncInferred}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&jev).Error; err != nil {
+		t.Fatalf("create jev site model failed: %v", err)
+	}
+	if _, err := ProjectAccount(ctx, account.ID); err != nil {
+		t.Fatalf("initial ProjectAccount returned error: %v", err)
+	}
+	chatChannel, ok := loadProjectedChannelsByGroupKey(t, ctx, account.ID)["default"]
+	if !ok {
+		t.Fatalf("expected default projected channel to exist")
+	}
+
+	group := &model.Group{Name: "jev", Mode: model.GroupModeFailover}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{
+		GroupID:   group.ID,
+		ChannelID: chatChannel.ID,
+		ModelName: "jev-latest",
+		Priority:  1,
+		Weight:    1,
+	}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd failed: %v", err)
+	}
+
+	if err := dbpkg.GetDB().WithContext(ctx).
+		Model(&model.SiteModel{}).
+		Where("id = ?", jev.ID).
+		Update("route_type", model.SiteModelRouteTypeSystemOne).Error; err != nil {
+		t.Fatalf("updating jev route_type failed: %v", err)
+	}
+	if _, err := ProjectAccount(ctx, account.ID); err != nil {
+		t.Fatalf("second ProjectAccount returned error: %v", err)
+	}
+
+	channelsByGroup := loadProjectedChannelsByGroupKey(t, ctx, account.ID)
+	assertProjectedChannel(t, channelsByGroup, "default", outbound.OutboundTypeOpenAIChat, "gpt-4o-mini", false)
+	assertProjectedChannel(t, channelsByGroup, "default::system-one", outbound.OutboundTypeSystemOne, "jev-latest", true)
+
+	items, err := op.GroupItemList(group.ID, ctx)
+	if err != nil {
+		t.Fatalf("GroupItemList failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected jev group item to be kept, got %d items", len(items))
+	}
+	if systemOneChannel := channelsByGroup["default::system-one"]; items[0].ChannelID != systemOneChannel.ID {
+		t.Fatalf("expected jev group item to move onto System One channel %d, got %d", systemOneChannel.ID, items[0].ChannelID)
 	}
 }
 
@@ -1273,6 +1333,7 @@ func assertProjectedChannel(t *testing.T, channelsByGroup map[string]model.Chann
 		"default::volcengine":       "Projection Site/Primary Account/default-Volcengine",
 		"default::openai-embedding": "Projection Site/Primary Account/default-Embedding",
 		"default::rerank":           "Projection Site/Primary Account/default-Rerank",
+		"default::system-one":       "Projection Site/Primary Account/default-SystemOne",
 	}
 	if expectedName, ok := expectedNames[groupKey]; ok && channel.Name != expectedName {
 		t.Fatalf("expected channel %q name %q, got %q", groupKey, expectedName, channel.Name)
