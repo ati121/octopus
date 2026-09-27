@@ -20,6 +20,22 @@ export enum ChannelType {
 }
 
 /**
+ * 渠道类型对应的协议短名称，与后端 CompactOutboundProtocolName 一致；
+ * 站点渠道名后缀、日志里的协议也用这套名称
+ */
+export const CHANNEL_TYPE_SHORT_LABELS: Record<ChannelType, string> = {
+    [ChannelType.OpenAIChat]: 'Chat',
+    [ChannelType.OpenAIResponse]: 'Response',
+    [ChannelType.Anthropic]: 'Anthropic',
+    [ChannelType.Gemini]: 'Gemini',
+    [ChannelType.Volcengine]: 'Volcengine',
+    [ChannelType.OpenAIEmbedding]: 'Embedding',
+    [ChannelType.Codex]: 'Codex',
+    [ChannelType.Rerank]: 'Rerank',
+    [ChannelType.SystemOne]: 'SystemOne',
+};
+
+/**
  * 自动分组类型枚举
  */
 export enum AutoGroupType {

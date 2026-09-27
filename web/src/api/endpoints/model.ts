@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../client';
 import { logger } from '@/lib/logger';
+import type { ChannelType } from './channel';
 
 /**
  * LLM 价格信息
@@ -33,7 +34,8 @@ export interface LLMChannel {
     site_group_name?: string;
     site_name?: string;
     site_account_name?: string;
-    endpoint_type?: string;
+    /** 该模型实际使用的渠道类型：模型单独设置的类型优先于渠道类型 */
+    channel_type: ChannelType;
 }
 
 /**

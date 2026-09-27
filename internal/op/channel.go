@@ -9,7 +9,6 @@ import (
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
-	model2 "github.com/bestruirui/octopus/internal/transformer/outbound"
 	"github.com/bestruirui/octopus/internal/utils/cache"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/xstrings"
@@ -714,13 +713,13 @@ func ChannelLLMList(ctx context.Context) ([]model.LLMChannel, error) {
 		siteAccountName := ""
 		siteGroupKey := ""
 		siteGroupName := ""
-		endpointType := "openai"
 		var siteID *int
 		var siteAccountID *int
 		if binding != nil {
 			siteID = &binding.SiteID
 			siteAccountID = &binding.SiteAccountID
-			siteGroupKey = model.NormalizeSiteGroupKey(binding.GroupKey)
+			// 按协议拆分的站点渠道，绑定键带协议后缀（如 default::openai-response），分组只取前半段。
+			siteGroupKey, _ = model.ParseSiteChannelBindingKey(binding.GroupKey)
 			if site, ok := siteCache[binding.SiteID]; ok {
 				siteName = site.Name
 			} else if site, getErr := SiteGet(binding.SiteID, ctx); getErr == nil {
@@ -748,22 +747,6 @@ func ChannelLLMList(ctx context.Context) ([]model.LLMChannel, error) {
 			if siteGroupName == "" {
 				siteGroupName = model.NormalizeSiteGroupName(siteGroupKey, "")
 			}
-			switch channel.Type {
-			case model2.OutboundTypeAnthropic:
-				endpointType = "anthropic"
-			case model2.OutboundTypeGemini:
-				endpointType = "gemini"
-			case model2.OutboundTypeOpenAIResponse:
-				endpointType = "openai_response"
-			case model2.OutboundTypeVolcengine:
-				endpointType = "volcengine"
-			case model2.OutboundTypeOpenAIEmbedding:
-				endpointType = "openai_embedding"
-			case model2.OutboundTypeRerank:
-				endpointType = "rerank"
-			default:
-				endpointType = "openai"
-			}
 		}
 		modelNames := xstrings.SplitTrimCompact(",", channel.Model, channel.CustomModel)
 		for _, modelName := range modelNames {
@@ -781,7 +764,7 @@ func ChannelLLMList(ctx context.Context) ([]model.LLMChannel, error) {
 				SiteGroupName:   siteGroupName,
 				SiteName:        siteName,
 				SiteAccountName: siteAccountName,
-				EndpointType:    endpointType,
+				ChannelType:     channel.TypeForModel(modelName),
 			})
 		}
 	}

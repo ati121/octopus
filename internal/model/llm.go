@@ -1,5 +1,7 @@
 package model
 
+import "github.com/bestruirui/octopus/internal/transformer/outbound"
+
 type LLMPrice struct {
 	Input      float64 `json:"input"`
 	Output     float64 `json:"output"`
@@ -23,7 +25,8 @@ type LLMChannel struct {
 	SiteGroupName   string `json:"site_group_name,omitempty"`
 	SiteName        string `json:"site_name,omitempty"`
 	SiteAccountName string `json:"site_account_name,omitempty"`
-	EndpointType    string `json:"endpoint_type,omitempty"`
+	// ChannelType 是该模型实际使用的渠道类型：模型单独设置的类型优先于渠道类型。
+	ChannelType outbound.OutboundType `json:"channel_type"`
 }
 
 type GeminiModel struct {
