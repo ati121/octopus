@@ -189,8 +189,8 @@ outer:
 
 			item := iter.Item()
 
-			// 获取通道
-			channel, err := op.ChannelGet(item.ChannelID, c.Request.Context())
+			// 获取通道（Type 已按候选模型解析）
+			channel, err := op.ChannelGetForModel(item.ChannelID, item.ModelName, c.Request.Context())
 			if err != nil {
 				log.Warnf("failed to get channel %d: %v", item.ChannelID, err)
 				iter.Skip(item.ChannelID, 0, fmt.Sprintf("channel_%d", item.ChannelID), fmt.Sprintf("channel not found: %v", err))

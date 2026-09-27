@@ -323,7 +323,7 @@ func bestEffortWarmupUpstreamWS(
 	for iter.Next() {
 		item := iter.Item()
 
-		channel, err := op.ChannelGet(item.ChannelID, ctx)
+		channel, err := op.ChannelGetForModel(item.ChannelID, item.ModelName, ctx)
 		if err != nil {
 			lastErr = err
 			continue
@@ -481,7 +481,7 @@ func runWSRelay(ctx context.Context, req *relayRequest, group *dbmodel.Group) ws
 
 		item := req.iter.Item()
 
-		channel, err := op.ChannelGet(item.ChannelID, ctx)
+		channel, err := op.ChannelGetForModel(item.ChannelID, item.ModelName, ctx)
 		if err != nil {
 			req.iter.Skip(item.ChannelID, 0, fmt.Sprintf("channel_%d", item.ChannelID), fmt.Sprintf("channel not found: %v", err))
 			lastErr = err

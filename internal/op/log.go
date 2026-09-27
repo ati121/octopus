@@ -177,7 +177,7 @@ func fillRelayLogProtocols(relayLog *model.RelayLog) {
 	if relayLog == nil {
 		return
 	}
-	protocolForChannel := func(channelID int) string {
+	protocolForChannel := func(channelID int, modelName string) string {
 		if channelID == 0 {
 			return ""
 		}
@@ -185,14 +185,14 @@ func fillRelayLogProtocols(relayLog *model.RelayLog) {
 		if !ok {
 			return ""
 		}
-		return model.CompactOutboundProtocolName(channel.Type)
+		return model.CompactOutboundProtocolName(channel.TypeForModel(modelName))
 	}
 	if strings.TrimSpace(relayLog.Protocol) == "" {
-		relayLog.Protocol = protocolForChannel(relayLog.ChannelId)
+		relayLog.Protocol = protocolForChannel(relayLog.ChannelId, relayLog.ActualModelName)
 	}
 	for i := range relayLog.Attempts {
 		if strings.TrimSpace(relayLog.Attempts[i].Protocol) == "" {
-			relayLog.Attempts[i].Protocol = protocolForChannel(relayLog.Attempts[i].ChannelID)
+			relayLog.Attempts[i].Protocol = protocolForChannel(relayLog.Attempts[i].ChannelID, relayLog.Attempts[i].ModelName)
 		}
 	}
 	if strings.TrimSpace(relayLog.Protocol) == "" {

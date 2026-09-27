@@ -110,7 +110,7 @@ func HandleResponsesCompact(c *gin.Context) {
 		}
 
 		item := iter.Item()
-		channel, err := op.ChannelGet(item.ChannelID, c.Request.Context())
+		channel, err := op.ChannelGetForModel(item.ChannelID, item.ModelName, c.Request.Context())
 		if err != nil {
 			iter.Skip(item.ChannelID, 0, fmt.Sprintf("channel_%d", item.ChannelID), fmt.Sprintf("channel not found: %v", err))
 			lastErr = err
