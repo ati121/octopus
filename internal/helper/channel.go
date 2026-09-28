@@ -34,6 +34,8 @@ func ChannelHTTPClientWithContext(ctx context.Context, channel *model.Channel) (
 			return nil, err
 		}
 		return client.GetHTTPClientCustomProxy(proxyURL)
+	case model.ProxyUsageModeCustom:
+		return client.GetHTTPClientCustomProxy(channel.ProxyURL)
 	default:
 		return nil, fmt.Errorf("unsupported proxy mode: %s", channel.ProxyMode)
 	}

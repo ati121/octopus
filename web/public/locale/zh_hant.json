@@ -1159,7 +1159,15 @@
             "inherit": "繼承站點設定",
             "direct": "直連",
             "system": "系統代理",
-            "pool": "代理池"
+            "pool": "代理池",
+            "custom": "自訂代理"
+        },
+        "custom": {
+            "url": "代理位址",
+            "placeholder": "socks5://user:pass@127.0.0.1:1080",
+            "required": "請填寫代理位址",
+            "invalid": "代理位址格式不正確，僅支援帶主機的 http/https/socks5 位址",
+            "hint": "支援 http://、https://、socks5://，帳號密碼寫成 user:pass@主機:連接埠"
         },
         "dialog": {
             "title": "代理池",

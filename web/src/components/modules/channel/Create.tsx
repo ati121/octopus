@@ -8,6 +8,7 @@ import {
 import { useCreateChannel, ChannelType, AutoGroupType } from '@/api/endpoints/channel';
 import { useTranslations } from 'next-intl';
 import { toast } from '@/components/common/Toast';
+import { customProxyURLError } from '@/components/modules/proxy-pool/ProxySelector';
 import { ChannelForm, type ChannelFormData } from './Form';
 
 export function CreateDialogContent() {
@@ -21,6 +22,7 @@ export function CreateDialogContent() {
         ws_mode: 'inherit',
         proxy_mode: 'direct',
         proxy_config_id: null,
+        proxy_url: '',
         param_override: '',
         keys: [{ enabled: true, channel_key: '', remark: '' }],
         model: '',
@@ -54,6 +56,11 @@ export function CreateDialogContent() {
             toast.error(tProxy('selectRequired'));
             return;
         }
+        const proxyURLError = customProxyURLError(formData);
+        if (proxyURLError) {
+            toast.error(tProxy(proxyURLError));
+            return;
+        }
         createChannel.mutate(
             {
                 name: formData.name,
@@ -66,6 +73,7 @@ export function CreateDialogContent() {
                 model_types: formData.model_types,
                 proxy_mode: formData.proxy_mode,
                 proxy_config_id: formData.proxy_mode === 'pool' ? formData.proxy_config_id : null,
+                proxy_url: formData.proxy_mode === 'custom' ? formData.proxy_url.trim() : '',
                 auto_sync: formData.auto_sync,
                 skip_health_probe: formData.skip_health_probe,
                 auto_group: formData.auto_group,
@@ -85,6 +93,7 @@ export function CreateDialogContent() {
                         ws_mode: 'inherit',
                         proxy_mode: 'direct',
                         proxy_config_id: null,
+                        proxy_url: '',
                         param_override: '',
                         keys: [{ enabled: true, channel_key: '', remark: '' }],
                         model: '',

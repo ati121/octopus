@@ -22,6 +22,7 @@ import { Tabs, TabsContents, TabsContent } from '@/components/animate-ui/primiti
 import { type StatsMetricsFormatted } from '@/api/endpoints/stats';
 import { useTranslations } from 'next-intl';
 import { toast } from '@/components/common/Toast';
+import { customProxyURLError } from '@/components/modules/proxy-pool/ProxySelector';
 import { Button } from '@/components/ui/button';
 import { ChannelForm, type ChannelFormData } from './Form';
 import { formatMoney } from '@/lib/utils';
@@ -45,6 +46,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         ws_mode: channel.ws_mode ?? 'inherit',
         proxy_mode: channel.proxy_mode ?? 'direct',
         proxy_config_id: channel.proxy_config_id ?? null,
+        proxy_url: channel.proxy_url ?? '',
         param_override: channel.param_override ?? '',
         keys: channel.keys.length > 0
             ? channel.keys.map((k) => ({
@@ -103,10 +105,17 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
             toast.error(tProxy('selectRequired'));
             return;
         }
+        const proxyURLError = customProxyURLError(formData);
+        if (proxyURLError) {
+            toast.error(tProxy(proxyURLError));
+            return;
+        }
         if (formData.proxy_mode !== channel.proxy_mode) req.proxy_mode = formData.proxy_mode;
         if ((formData.proxy_config_id ?? null) !== (channel.proxy_config_id ?? null) || formData.proxy_mode !== channel.proxy_mode) {
             req.proxy_config_id = formData.proxy_mode === 'pool' ? formData.proxy_config_id : null;
         }
+        const nextProxyURL = formData.proxy_mode === 'custom' ? formData.proxy_url.trim() : '';
+        if (nextProxyURL !== (channel.proxy_url ?? '') || formData.proxy_mode !== channel.proxy_mode) req.proxy_url = nextProxyURL;
         if (formData.auto_sync !== channel.auto_sync) req.auto_sync = formData.auto_sync;
         if (formData.skip_health_probe !== channel.skip_health_probe) req.skip_health_probe = formData.skip_health_probe;
         if (formData.auto_group !== channel.auto_group) req.auto_group = formData.auto_group;

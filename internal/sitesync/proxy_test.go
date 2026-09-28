@@ -10,7 +10,7 @@ func TestResolveSiteAccountProxyPrefersAccountProxy(t *testing.T) {
 	accountProxyID := 2
 	siteProxyID := 1
 
-	proxyMode, proxyConfigID := resolveSiteAccountProxy(&model.Site{
+	selection := resolveSiteAccountProxy(&model.Site{
 		ProxyMode:     model.ProxyUsageModePool,
 		ProxyConfigID: &siteProxyID,
 	}, &model.SiteAccount{
@@ -18,40 +18,70 @@ func TestResolveSiteAccountProxyPrefersAccountProxy(t *testing.T) {
 		ProxyConfigID: &accountProxyID,
 	})
 
-	if proxyMode != model.ProxyUsageModePool {
-		t.Fatalf("expected account proxy mode pool, got %q", proxyMode)
+	if selection.Mode != model.ProxyUsageModePool {
+		t.Fatalf("expected account proxy mode pool, got %q", selection.Mode)
 	}
-	if proxyConfigID == nil || *proxyConfigID != accountProxyID {
-		t.Fatalf("expected account proxy id %d, got %#v", accountProxyID, proxyConfigID)
+	if selection.ConfigID == nil || *selection.ConfigID != accountProxyID {
+		t.Fatalf("expected account proxy id %d, got %#v", accountProxyID, selection.ConfigID)
 	}
 }
 
 func TestResolveSiteAccountProxyFallsBackToSiteSettings(t *testing.T) {
 	siteProxyID := 1
 
-	proxyMode, proxyConfigID := resolveSiteAccountProxy(&model.Site{
+	selection := resolveSiteAccountProxy(&model.Site{
 		ProxyMode:     model.ProxyUsageModePool,
 		ProxyConfigID: &siteProxyID,
 	}, &model.SiteAccount{ProxyMode: model.ProxyUsageModeInherit})
 
-	if proxyMode != model.ProxyUsageModePool {
-		t.Fatalf("expected site proxy mode pool, got %q", proxyMode)
+	if selection.Mode != model.ProxyUsageModePool {
+		t.Fatalf("expected site proxy mode pool, got %q", selection.Mode)
 	}
-	if proxyConfigID == nil || *proxyConfigID != siteProxyID {
-		t.Fatalf("expected site proxy id %d, got %#v", siteProxyID, proxyConfigID)
+	if selection.ConfigID == nil || *selection.ConfigID != siteProxyID {
+		t.Fatalf("expected site proxy id %d, got %#v", siteProxyID, selection.ConfigID)
 	}
 }
 
 func TestResolveSiteAccountProxyDisablesProxyWhenNoConfigExists(t *testing.T) {
-	proxyMode, proxyConfigID := resolveSiteAccountProxy(&model.Site{
+	selection := resolveSiteAccountProxy(&model.Site{
 		ProxyMode: model.ProxyUsageModeDirect,
 	})
 
-	if proxyMode != model.ProxyUsageModeDirect {
-		t.Fatalf("expected direct proxy mode, got %q", proxyMode)
+	if selection.Mode != model.ProxyUsageModeDirect {
+		t.Fatalf("expected direct proxy mode, got %q", selection.Mode)
 	}
-	if proxyConfigID != nil {
-		t.Fatalf("expected no proxy config id, got %#v", proxyConfigID)
+	if selection.ConfigID != nil || selection.URL != "" {
+		t.Fatalf("expected no proxy config, got %#v", selection)
+	}
+}
+
+func TestResolveSiteAccountProxyInheritsSiteCustomURL(t *testing.T) {
+	selection := resolveSiteAccountProxy(&model.Site{
+		ProxyMode: model.ProxyUsageModeCustom,
+		ProxyURL:  "http://127.0.0.1:7890",
+	}, &model.SiteAccount{ProxyMode: model.ProxyUsageModeInherit})
+
+	if selection.Mode != model.ProxyUsageModeCustom {
+		t.Fatalf("expected site custom proxy mode, got %q", selection.Mode)
+	}
+	if selection.URL != "http://127.0.0.1:7890" {
+		t.Fatalf("expected inherited custom proxy url, got %q", selection.URL)
+	}
+}
+
+func TestResolveSiteAccountProxyAccountOverridesSiteCustomURL(t *testing.T) {
+	accountProxyID := 3
+
+	selection := resolveSiteAccountProxy(&model.Site{
+		ProxyMode: model.ProxyUsageModeCustom,
+		ProxyURL:  "http://127.0.0.1:7890",
+	}, &model.SiteAccount{ProxyMode: model.ProxyUsageModePool, ProxyConfigID: &accountProxyID})
+
+	if selection.Mode != model.ProxyUsageModePool || selection.ConfigID == nil || *selection.ConfigID != accountProxyID {
+		t.Fatalf("expected account pool proxy %d, got %#v", accountProxyID, selection)
+	}
+	if selection.URL != "" {
+		t.Fatalf("expected site custom url to be ignored, got %q", selection.URL)
 	}
 }
 

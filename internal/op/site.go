@@ -76,6 +76,9 @@ func normalizeSiteProxyFields(site *model.Site) {
 	if site.ProxyMode != model.ProxyUsageModePool {
 		site.ProxyConfigID = nil
 	}
+	if site.ProxyMode != model.ProxyUsageModeCustom {
+		site.ProxyURL = ""
+	}
 	site.Proxy = site.ProxyMode != model.ProxyUsageModeDirect
 	site.UseSystemProxy = site.ProxyMode == model.ProxyUsageModeSystem
 	site.SiteProxy = nil
@@ -163,6 +166,12 @@ func SiteUpdate(req *model.SiteUpdateRequest, ctx context.Context) (*model.Site,
 		}
 		selectFields = append(selectFields, "proxy_config_id")
 	}
+	if req.ProxyURL != nil || req.ProxyMode != nil {
+		if req.ProxyURL != nil {
+			merged.ProxyURL = *req.ProxyURL
+		}
+		selectFields = append(selectFields, "proxy_url")
+	}
 	if req.ExternalCheckinSet {
 		merged.ExternalCheckinURL = req.ExternalCheckinURL
 		selectFields = append(selectFields, "external_checkin_url")
@@ -218,6 +227,9 @@ func SiteUpdate(req *model.SiteUpdateRequest, ctx context.Context) (*model.Site,
 	}
 	if req.ProxyConfigIDSet || (req.ProxyMode != nil && *req.ProxyMode != model.ProxyUsageModePool) {
 		updates.ProxyConfigID = merged.ProxyConfigID
+	}
+	if req.ProxyURL != nil || req.ProxyMode != nil {
+		updates.ProxyURL = merged.ProxyURL
 	}
 	if req.ExternalCheckinSet {
 		updates.ExternalCheckinURL = merged.ExternalCheckinURL

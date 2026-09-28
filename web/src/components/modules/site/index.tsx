@@ -1480,7 +1480,9 @@ export function Site() {
                       ? tProxy('mode.pool')
                       : site.proxy_mode === "system"
                         ? tProxy('mode.system')
-                        : tProxy('mode.direct')}
+                        : site.proxy_mode === "custom"
+                          ? tProxy('mode.custom')
+                          : tProxy('mode.direct')}
                   </span>
                   {site.custom_header.length > 0 ? (
                     <span>{site.custom_header.length} 个 Header</span>

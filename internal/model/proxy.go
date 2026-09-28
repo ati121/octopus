@@ -13,6 +13,7 @@ const (
 	ProxyUsageModeDirect  ProxyUsageMode = "direct"
 	ProxyUsageModeSystem  ProxyUsageMode = "system"
 	ProxyUsageModePool    ProxyUsageMode = "pool"
+	ProxyUsageModeCustom  ProxyUsageMode = "custom"
 	ProxyUsageModeInherit ProxyUsageMode = "inherit"
 )
 
@@ -72,7 +73,7 @@ type ProxyConfigurationReference struct {
 
 func (m ProxyUsageMode) Validate(allowInherit bool) error {
 	switch m {
-	case ProxyUsageModeDirect, ProxyUsageModeSystem, ProxyUsageModePool:
+	case ProxyUsageModeDirect, ProxyUsageModeSystem, ProxyUsageModePool, ProxyUsageModeCustom:
 		return nil
 	case ProxyUsageModeInherit:
 		if allowInherit {
@@ -102,6 +103,18 @@ func NormalizeProxyURL(value string) (string, error) {
 		return "", fmt.Errorf("proxy url must have a host")
 	}
 	return parsed.String(), nil
+}
+
+// NormalizeCustomProxyURL 返回自定义代理模式下应当保存的代理地址：
+// 非自定义模式一律返回空串，自定义模式要求地址非空且合法。
+func NormalizeCustomProxyURL(mode ProxyUsageMode, value string) (string, error) {
+	if mode != ProxyUsageModeCustom {
+		return "", nil
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("proxy url is required when proxy mode is custom")
+	}
+	return NormalizeProxyURL(value)
 }
 
 func (p *ProxyConfiguration) Normalize() error {

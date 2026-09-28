@@ -118,7 +118,7 @@ func ProjectAccount(ctx context.Context, accountID int) ([]int, error) {
 		groupTokens := tokenGroups[groupKey]
 		groupModels := modelsByGroup[groupKey]
 		modelBuckets := partitionSiteModelsByRouteType(groupModels, shouldSplit, siteRecord)
-		proxyMode, proxyConfigID := resolveSiteAccountProxy(siteRecord, account)
+		proxySelection := resolveSiteAccountProxy(siteRecord, account)
 		enabled := siteRecord.Enabled && account.Enabled && hasUsableToken(groupTokens)
 		for routeType, bucketModels := range modelBuckets {
 			if len(bucketModels) == 0 {
@@ -136,9 +136,10 @@ func ProjectAccount(ctx context.Context, accountID int) ([]int, error) {
 				Keys:          buildChannelKeys(groupTokens, siteRecord.Platform),
 				Model:         strings.Join(modelNames, ","),
 				CustomModel:   "",
-				ProxyMode:     proxyMode,
-				ProxyConfigID: proxyConfigID,
-				Proxy:         proxyMode != model.ProxyUsageModeDirect,
+				ProxyMode:     proxySelection.Mode,
+				ProxyConfigID: proxySelection.ConfigID,
+				ProxyURL:      proxySelection.URL,
+				Proxy:         proxySelection.Mode != model.ProxyUsageModeDirect,
 				AutoSync:      false,
 				AutoGroup:     model.AutoGroupTypeNone,
 				CustomHeader:  siteRecord.CustomHeader,
@@ -201,7 +202,7 @@ func ProjectAccount(ctx context.Context, accountID int) ([]int, error) {
 				continue
 			}
 
-			updateReq := &model.ChannelUpdateRequest{ID: existingChannel.ID, Name: &channelPayload.Name, Type: &channelPayload.Type, Enabled: &channelPayload.Enabled, BaseUrls: &channelPayload.BaseUrls, Model: &channelPayload.Model, CustomModel: &channelPayload.CustomModel, ProxyMode: &channelPayload.ProxyMode, ProxyConfigID: channelPayload.ProxyConfigID, AutoSync: &channelPayload.AutoSync, CustomHeader: &channelPayload.CustomHeader, BypassManagedCheck: true}
+			updateReq := &model.ChannelUpdateRequest{ID: existingChannel.ID, Name: &channelPayload.Name, Type: &channelPayload.Type, Enabled: &channelPayload.Enabled, BaseUrls: &channelPayload.BaseUrls, Model: &channelPayload.Model, CustomModel: &channelPayload.CustomModel, ProxyMode: &channelPayload.ProxyMode, ProxyConfigID: channelPayload.ProxyConfigID, ProxyURL: &channelPayload.ProxyURL, AutoSync: &channelPayload.AutoSync, CustomHeader: &channelPayload.CustomHeader, BypassManagedCheck: true}
 			updateReq.KeysToAdd, updateReq.KeysToUpdate, updateReq.KeysToDelete = diffManagedChannelKeys(existingChannel.Keys, channelPayload.Keys)
 			if _, err := op.ChannelUpdate(updateReq, ctx); err != nil {
 				return nil, fmt.Errorf("failed to update managed channel: %w", err)

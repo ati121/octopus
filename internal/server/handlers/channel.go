@@ -127,6 +127,12 @@ func createChannel(c *gin.Context) {
 	if channel.ProxyMode != model.ProxyUsageModePool {
 		channel.ProxyConfigID = nil
 	}
+	proxyURL, err := model.NormalizeCustomProxyURL(channel.ProxyMode, channel.ProxyURL)
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	channel.ProxyURL = proxyURL
 	// 新建渠道未指定自动分组时沿用顶部的全局默认模式；想让某个渠道不参与自动分组，
 	// 创建后在自动分组对话框里改回「关闭」即可。
 	channel.AutoGroup = op.DefaultChannelAutoGroup(channel.AutoGroup)
