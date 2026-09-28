@@ -1159,7 +1159,15 @@
             "inherit": "继承站点设置",
             "direct": "直连",
             "system": "系统代理",
-            "pool": "代理池"
+            "pool": "代理池",
+            "custom": "自定义代理"
+        },
+        "custom": {
+            "url": "代理地址",
+            "placeholder": "socks5://user:pass@127.0.0.1:1080",
+            "required": "请填写代理地址",
+            "invalid": "代理地址格式不正确，仅支持带主机的 http/https/socks5 地址",
+            "hint": "支持 http://、https://、socks5://，账号密码写成 user:pass@主机:端口"
         },
         "dialog": {
             "title": "代理池",

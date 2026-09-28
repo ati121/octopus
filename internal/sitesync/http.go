@@ -20,37 +20,50 @@ func siteHTTPClient(ctx context.Context, siteRecord *model.Site, accounts ...*mo
 	if siteRecord == nil {
 		return nil, fmt.Errorf("site is nil")
 	}
-	proxyMode, proxyConfigID := resolveSiteAccountProxy(siteRecord, accounts...)
-	switch proxyMode {
+	selection := resolveSiteAccountProxy(siteRecord, accounts...)
+	switch selection.Mode {
 	case "", model.ProxyUsageModeDirect:
 		return client.GetHTTPClientSystemProxy(false)
 	case model.ProxyUsageModeSystem:
 		return client.GetHTTPClientSystemProxy(true)
 	case model.ProxyUsageModePool:
-		if proxyConfigID == nil || *proxyConfigID <= 0 {
+		if selection.ConfigID == nil || *selection.ConfigID <= 0 {
 			return nil, fmt.Errorf("proxy config id is required when proxy mode is pool")
 		}
-		proxyURL, err := op.ProxyURLForConfig(*proxyConfigID, ctx)
+		proxyURL, err := op.ProxyURLForConfig(*selection.ConfigID, ctx)
 		if err != nil {
 			return nil, err
 		}
 		return client.GetHTTPClientCustomProxy(proxyURL)
+	case model.ProxyUsageModeCustom:
+		return client.GetHTTPClientCustomProxy(selection.URL)
 	default:
-		return nil, fmt.Errorf("unsupported proxy mode: %s", proxyMode)
+		return nil, fmt.Errorf("unsupported proxy mode: %s", selection.Mode)
 	}
 }
 
-func resolveSiteAccountProxy(siteRecord *model.Site, accounts ...*model.SiteAccount) (model.ProxyUsageMode, *int) {
+// siteProxySelection 是账号与站点代理设置合并后的结果，URL 只在自定义模式下有值。
+type siteProxySelection struct {
+	Mode     model.ProxyUsageMode
+	ConfigID *int
+	URL      string
+}
+
+func resolveSiteAccountProxy(siteRecord *model.Site, accounts ...*model.SiteAccount) siteProxySelection {
 	if len(accounts) > 0 && accounts[0] != nil && accounts[0].ProxyMode != "" && accounts[0].ProxyMode != model.ProxyUsageModeInherit {
-		return accounts[0].ProxyMode, accounts[0].ProxyConfigID
+		return siteProxySelection{Mode: accounts[0].ProxyMode, ConfigID: accounts[0].ProxyConfigID}
 	}
 	if siteRecord == nil {
-		return model.ProxyUsageModeDirect, nil
+		return siteProxySelection{Mode: model.ProxyUsageModeDirect}
 	}
 	if siteRecord.ProxyMode == "" {
-		return model.ProxyUsageModeDirect, nil
+		return siteProxySelection{Mode: model.ProxyUsageModeDirect}
 	}
-	return siteRecord.ProxyMode, siteRecord.ProxyConfigID
+	selection := siteProxySelection{Mode: siteRecord.ProxyMode, ConfigID: siteRecord.ProxyConfigID}
+	if siteRecord.ProxyMode == model.ProxyUsageModeCustom {
+		selection.URL = siteRecord.ProxyURL
+	}
+	return selection
 }
 
 func requestJSON(ctx context.Context, siteRecord *model.Site, method string, requestURL string, body any, headers map[string]string, accounts ...*model.SiteAccount) (map[string]any, error) {

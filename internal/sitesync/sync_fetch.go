@@ -247,14 +247,14 @@ func fetchModelsForSiteToken(ctx context.Context, siteRecord *model.Site, accoun
 	// (new-api family needs the "sk-" prefix; direct providers stay verbatim).
 	tokenValue := model.NormalizeSiteSyncTokenValueForPlatform(siteRecord.Platform, token.Token)
 
-	proxyMode, proxyConfigID := resolveSiteAccountProxy(siteRecord, account)
+	proxySelection := resolveSiteAccountProxy(siteRecord, account)
 	var (
 		firstErr error
 		models   []string
 	)
 
 	for _, baseURL := range buildModelFetchBaseURLs(siteRecord) {
-		channel := model.Channel{Type: platformOutboundType(siteRecord), BaseUrls: []model.BaseUrl{{URL: baseURL, Delay: 0}}, Keys: []model.ChannelKey{{Enabled: true, ChannelKey: tokenValue}}, ProxyMode: proxyMode, ProxyConfigID: proxyConfigID, CustomHeader: siteRecord.CustomHeader}
+		channel := model.Channel{Type: platformOutboundType(siteRecord), BaseUrls: []model.BaseUrl{{URL: baseURL, Delay: 0}}, Keys: []model.ChannelKey{{Enabled: true, ChannelKey: tokenValue}}, ProxyMode: proxySelection.Mode, ProxyConfigID: proxySelection.ConfigID, ProxyURL: proxySelection.URL, CustomHeader: siteRecord.CustomHeader}
 		fetched, err := helper.FetchModels(ctx, channel)
 		if err == nil && len(fetched) > 0 {
 			return normalizeModelNames(fetched), nil

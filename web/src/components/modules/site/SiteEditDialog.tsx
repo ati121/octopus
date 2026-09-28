@@ -28,7 +28,7 @@ import {
     TooltipContent,
     TooltipTrigger,
 } from '@/components/animate-ui/components/animate/tooltip';
-import { ProxySelector } from '@/components/modules/proxy-pool/ProxySelector';
+import { ProxySelector, customProxyURLError } from '@/components/modules/proxy-pool/ProxySelector';
 import { TagInput } from './TagInput';
 import { toast } from '@/components/common/Toast';
 import { useSettingStore } from '@/stores/setting';
@@ -51,6 +51,7 @@ type SiteFormState = {
     enabled: boolean;
     proxy_mode: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id: number | null;
+    proxy_url: string;
     external_checkin_url: string;
     is_pinned: boolean;
     sort_order: number;
@@ -100,6 +101,7 @@ function createEmptySiteForm(): SiteFormState {
         enabled: true,
         proxy_mode: 'direct',
         proxy_config_id: null,
+        proxy_url: '',
         external_checkin_url: '',
         is_pinned: false,
         sort_order: 0,
@@ -119,6 +121,7 @@ function createSiteForm(site: SiteRecord): SiteFormState {
         enabled: site.enabled,
         proxy_mode: site.proxy_mode ?? 'direct',
         proxy_config_id: site.proxy_config_id ?? null,
+        proxy_url: site.proxy_url ?? '',
         external_checkin_url: site.external_checkin_url ?? '',
         is_pinned: site.is_pinned,
         sort_order: site.sort_order,
@@ -140,6 +143,7 @@ function normalizeSiteRecord(site: SiteRecord): SiteRecord {
         tags: site.tags ?? [],
         proxy_mode: site.proxy_mode ?? 'direct',
         proxy_config_id: site.proxy_config_id ?? null,
+        proxy_url: site.proxy_url ?? '',
         external_checkin_url: site.external_checkin_url ?? null,
         is_pinned: site.is_pinned ?? false,
         sort_order: typeof site.sort_order === 'number' ? site.sort_order : 0,
@@ -279,6 +283,11 @@ export function SiteEditDialog({ open, onOpenChange, site, onCreated, allTags }:
                 toast.error(tProxy('selectRequired'));
                 return;
             }
+            const proxyURLError = customProxyURLError(siteForm);
+            if (proxyURLError) {
+                toast.error(tProxy(proxyURLError));
+                return;
+            }
 
             const payload = {
                 name: siteForm.name.trim(),
@@ -288,6 +297,7 @@ export function SiteEditDialog({ open, onOpenChange, site, onCreated, allTags }:
                 proxy_mode: siteForm.proxy_mode,
                 proxy_config_id:
                     siteForm.proxy_mode === 'pool' ? siteForm.proxy_config_id : null,
+                proxy_url: siteForm.proxy_mode === 'custom' ? siteForm.proxy_url.trim() : '',
                 external_checkin_url: siteForm.external_checkin_url.trim() || null,
                 is_pinned: siteForm.is_pinned,
                 sort_order: siteForm.sort_order,
@@ -500,12 +510,14 @@ export function SiteEditDialog({ open, onOpenChange, site, onCreated, allTags }:
                         </label>
 
                         <ProxySelector
-                            value={{ proxy_mode: siteForm.proxy_mode, proxy_config_id: siteForm.proxy_config_id }}
+                            value={{ proxy_mode: siteForm.proxy_mode, proxy_config_id: siteForm.proxy_config_id, proxy_url: siteForm.proxy_url }}
                             onChange={(next) => setSiteForm((current) => ({
                                 ...current,
                                 proxy_mode: next.proxy_mode as Exclude<ProxyMode, 'inherit'>,
                                 proxy_config_id: next.proxy_config_id ?? null,
+                                proxy_url: next.proxy_url ?? '',
                             }))}
+                            allowCustom
                         />
 
                         <div className="flex items-center justify-between rounded-xl border border-border/60 bg-muted/20 px-4 py-3">

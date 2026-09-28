@@ -96,6 +96,7 @@ export type Channel = {
     model_types: ChannelModelTypes;
     proxy_mode: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
+    proxy_url?: string;
     auto_sync: boolean;
     skip_health_probe: boolean;
     auto_group: AutoGroupType;
@@ -131,6 +132,7 @@ export type CreateChannelRequest = {
     model_types?: ChannelModelTypes;
     proxy_mode?: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
+    proxy_url?: string;
     auto_sync?: boolean;
     skip_health_probe?: boolean;
     auto_group?: AutoGroupType;
@@ -156,6 +158,7 @@ export type UpdateChannelRequest = {
     model_types?: ChannelModelTypes;
     proxy_mode?: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
+    proxy_url?: string;
     auto_sync?: boolean;
     skip_health_probe?: boolean;
     auto_group?: AutoGroupType;
@@ -176,6 +179,7 @@ export type FetchModelRequest = {
     keys: Array<Pick<ChannelKey, 'enabled' | 'channel_key'>>;
     proxy_mode?: Exclude<ProxyMode, 'inherit'>;
     proxy_config_id?: number | null;
+    proxy_url?: string;
     match_regex?: string | null;
     custom_header?: CustomHeader[];
 };
@@ -209,6 +213,7 @@ export function useChannelList() {
                 model_types: item.model_types ?? {},
                 proxy_mode: item.proxy_mode ?? 'direct',
                 proxy_config_id: item.proxy_config_id ?? null,
+                proxy_url: item.proxy_url ?? '',
                 skip_health_probe: item.skip_health_probe ?? false,
             }) satisfies Channel,
             formatted: {

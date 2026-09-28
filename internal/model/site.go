@@ -170,6 +170,7 @@ type Site struct {
 	EnabledSet         bool               `json:"-" gorm:"-"`
 	ProxyMode          ProxyUsageMode     `json:"proxy_mode" gorm:"type:varchar(16);not null;default:'direct'"`
 	ProxyConfigID      *int               `json:"proxy_config_id"`
+	ProxyURL           string             `json:"proxy_url" gorm:"column:proxy_url;type:varchar(1024);not null;default:''"`
 	Proxy              bool               `json:"-" gorm:"default:false"`
 	SiteProxy          *string            `json:"-" gorm:"column:site_proxy"`
 	UseSystemProxy     bool               `json:"-" gorm:"default:false"`
@@ -365,6 +366,7 @@ type SiteUpdateRequest struct {
 	ProxyMode          *ProxyUsageMode     `json:"proxy_mode,omitempty"`
 	ProxyConfigID      *int                `json:"proxy_config_id,omitempty"`
 	ProxyConfigIDSet   bool                `json:"-"`
+	ProxyURL           *string             `json:"proxy_url,omitempty"`
 	Proxy              *bool               `json:"-"`
 	SiteProxy          *string             `json:"-"`
 	UseSystemProxy     *bool               `json:"-"`
@@ -958,6 +960,11 @@ func (s *Site) Normalize() {
 	if s.ProxyMode != ProxyUsageModePool {
 		s.ProxyConfigID = nil
 	}
+	if s.ProxyMode == ProxyUsageModeCustom {
+		s.ProxyURL = strings.TrimSpace(s.ProxyURL)
+	} else {
+		s.ProxyURL = ""
+	}
 	if s.GlobalWeight <= 0 {
 		s.GlobalWeight = 1
 	}
@@ -1013,6 +1020,11 @@ func (s *Site) Validate() error {
 	if s.ProxyMode == ProxyUsageModePool && (s.ProxyConfigID == nil || *s.ProxyConfigID <= 0) {
 		return fmt.Errorf("proxy config id is required when proxy mode is pool")
 	}
+	proxyURL, err := NormalizeCustomProxyURL(s.ProxyMode, s.ProxyURL)
+	if err != nil {
+		return err
+	}
+	s.ProxyURL = proxyURL
 	if err := ValidateSiteTags(s.Tags); err != nil {
 		return err
 	}
@@ -1098,6 +1110,9 @@ func (a *SiteAccount) Validate() error {
 	}
 	if err := a.ProxyMode.Validate(true); err != nil {
 		return err
+	}
+	if a.ProxyMode == ProxyUsageModeCustom {
+		return fmt.Errorf("site account proxy mode does not support custom")
 	}
 	if a.ProxyMode == ProxyUsageModePool && (a.ProxyConfigID == nil || *a.ProxyConfigID <= 0) {
 		return fmt.Errorf("proxy config id is required when proxy mode is pool")

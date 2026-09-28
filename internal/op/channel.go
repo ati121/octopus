@@ -40,6 +40,9 @@ func normalizeChannelProxyFields(channel *model.Channel) {
 	if channel.ProxyMode != model.ProxyUsageModePool {
 		channel.ProxyConfigID = nil
 	}
+	if channel.ProxyMode != model.ProxyUsageModeCustom {
+		channel.ProxyURL = ""
+	}
 	channel.Proxy = channel.ProxyMode != model.ProxyUsageModeDirect
 	channel.ChannelProxy = nil
 }
@@ -64,6 +67,11 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 	} else {
 		channel.ProxyConfigID = nil
 	}
+	proxyURL, err := model.NormalizeCustomProxyURL(channel.ProxyMode, channel.ProxyURL)
+	if err != nil {
+		return err
+	}
+	channel.ProxyURL = proxyURL
 	// Channel.Enabled 和 ChannelKey.Enabled 都带 `default:true`，GORM 会把 false
 	// 顶替成 true 落库并改掉内存里的值，所以得在 Create 之前记下真实意图，之后再补
 	// 写一次。整个过程放进事务，避免补写失败留下一个本该停用却是启用的渠道。
@@ -256,6 +264,7 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	}
 	effectiveProxyMode := existingChannel.ProxyMode
 	effectiveProxyConfigID := existingChannel.ProxyConfigID
+	effectiveProxyURL := existingChannel.ProxyURL
 	proxyTouched := false
 	if req.ProxyMode != nil {
 		proxyTouched = true
@@ -277,6 +286,10 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 			updates.ProxyConfigID = nil
 		}
 	}
+	if req.ProxyURL != nil {
+		proxyTouched = true
+		effectiveProxyURL = *req.ProxyURL
+	}
 	if proxyTouched {
 		if effectiveProxyMode == "" {
 			effectiveProxyMode = model.ProxyUsageModeDirect
@@ -295,6 +308,14 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 				return nil, err
 			}
 		}
+		// 自定义代理地址跟随模式：切到自定义时必须有合法地址，切走时一并清空。
+		proxyURL, err := model.NormalizeCustomProxyURL(effectiveProxyMode, effectiveProxyURL)
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		selectFields = append(selectFields, "proxy_url")
+		updates.ProxyURL = proxyURL
 	}
 	if req.AutoSync != nil {
 		selectFields = append(selectFields, "auto_sync")

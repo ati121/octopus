@@ -108,6 +108,7 @@ type Channel struct {
 	ModelTypes      ChannelModelTypes     `json:"model_types" gorm:"serializer:json"`
 	ProxyMode       ProxyUsageMode        `json:"proxy_mode" gorm:"type:varchar(16);not null;default:'direct'"`
 	ProxyConfigID   *int                  `json:"proxy_config_id"`
+	ProxyURL        string                `json:"proxy_url" gorm:"column:proxy_url;type:varchar(1024);not null;default:''"`
 	Proxy           bool                  `json:"-" gorm:"default:false"`
 	AutoSync        bool                  `json:"auto_sync" gorm:"default:false"`
 	SkipHealthProbe bool                  `json:"skip_health_probe" gorm:"default:false"`
@@ -187,6 +188,7 @@ type ChannelUpdateRequest struct {
 	ModelTypes      *ChannelModelTypes     `json:"model_types,omitempty"`
 	ProxyMode       *ProxyUsageMode        `json:"proxy_mode,omitempty"`
 	ProxyConfigID   *int                   `json:"proxy_config_id,omitempty"`
+	ProxyURL        *string                `json:"proxy_url,omitempty"`
 	Proxy           *bool                  `json:"-"`
 	AutoSync        *bool                  `json:"auto_sync,omitempty"`
 	SkipHealthProbe *bool                  `json:"skip_health_probe,omitempty"`

@@ -34,6 +34,7 @@ export interface ChannelFormData {
     ws_mode: ChannelWSMode;
     proxy_mode: Channel['proxy_mode'];
     proxy_config_id: number | null;
+    proxy_url: string;
     param_override: string;
     keys: ChannelKeyFormItem[];
     model: string;
@@ -164,6 +165,7 @@ export function ChannelForm({
                     .map((k) => ({ enabled: k.enabled, channel_key: k.channel_key.trim() })),
                 proxy_mode: formData.proxy_mode,
                 proxy_config_id: formData.proxy_mode === 'pool' ? formData.proxy_config_id : null,
+                proxy_url: formData.proxy_mode === 'custom' ? formData.proxy_url.trim() : '',
                 match_regex: formData.match_regex.trim() || null,
                 custom_header: formData.custom_header?.filter((h) => h.header_key.trim()) || [],
             },
@@ -530,12 +532,14 @@ export function ChannelForm({
 
             <div className="rounded-xl border bg-card p-4">
                 <ProxySelector
-                    value={{ proxy_mode: formData.proxy_mode, proxy_config_id: formData.proxy_config_id }}
+                    value={{ proxy_mode: formData.proxy_mode, proxy_config_id: formData.proxy_config_id, proxy_url: formData.proxy_url }}
                     onChange={(next) => onFormDataChange({
                         ...formData,
                         proxy_mode: next.proxy_mode as Channel['proxy_mode'],
                         proxy_config_id: next.proxy_config_id ?? null,
+                        proxy_url: next.proxy_url ?? '',
                     })}
+                    allowCustom
                 />
             </div>
 

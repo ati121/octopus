@@ -1159,7 +1159,15 @@
             "inherit": "Inherit site settings",
             "direct": "Direct",
             "system": "System proxy",
-            "pool": "Proxy pool"
+            "pool": "Proxy pool",
+            "custom": "Custom proxy"
+        },
+        "custom": {
+            "url": "Proxy URL",
+            "placeholder": "socks5://user:pass@127.0.0.1:1080",
+            "required": "Please enter a proxy URL",
+            "invalid": "Unsupported proxy URL, use http/https/socks5 with a host and port",
+            "hint": "Supports http://, https:// and socks5://, credentials can be written as user:pass@host:port"
         },
         "dialog": {
             "title": "Proxy Pool",

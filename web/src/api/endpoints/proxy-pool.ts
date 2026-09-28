@@ -3,7 +3,7 @@ import { useTranslations } from 'next-intl';
 import { apiClient } from '../client';
 import { logger } from '@/lib/logger';
 
-export type ProxyMode = 'direct' | 'system' | 'pool' | 'inherit';
+export type ProxyMode = 'direct' | 'system' | 'pool' | 'custom' | 'inherit';
 
 export type ProxyConfiguration = {
     id: number;
