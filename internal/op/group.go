@@ -3,11 +3,13 @@ package op
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/utils/cache"
+	"github.com/bestruirui/octopus/internal/utils/xstrings"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -24,8 +26,8 @@ func GroupList(ctx context.Context) ([]model.Group, error) {
 }
 
 // GroupListAvailable returns groups with only currently available items. Items
-// backed by a disabled channel or managed site/account stay persisted but are
-// omitted until their source becomes available again.
+// backed by a disabled channel, managed site/account, or a model no longer in
+// the channel's model lists stay persisted but are omitted until available again.
 func GroupListAvailable(ctx context.Context) ([]model.Group, error) {
 	groups, err := GroupList(ctx)
 	if err != nil {
@@ -54,7 +56,7 @@ func GroupListAvailable(ctx context.Context) ([]model.Group, error) {
 		items := make([]model.GroupItem, 0, len(groups[index].Items))
 		for _, item := range groups[index].Items {
 			channel, ok := channelCache.Get(item.ChannelID)
-			if !ok || !channel.Enabled {
+			if !ok || !channel.Enabled || !channelHasGroupModel(channel, item.ModelName) {
 				continue
 			}
 			if _, managed := bindingMap[item.ChannelID]; managed && !managedAvailability[item.ChannelID] {
@@ -120,7 +122,7 @@ func GroupGetEnabledMap(name string, ctx context.Context) (model.Group, error) {
 	enabledItems := make([]model.GroupItem, 0, len(group.Items))
 	for _, item := range group.Items {
 		channel, ok := channelCache.Get(item.ChannelID)
-		if !ok || !channel.Enabled {
+		if !ok || !channel.Enabled || !channelHasGroupModel(channel, item.ModelName) {
 			continue
 		}
 		if _, managed := bindingMap[item.ChannelID]; managed && !managedAvailability[item.ChannelID] {
@@ -130,6 +132,12 @@ func GroupGetEnabledMap(name string, ctx context.Context) (model.Group, error) {
 	}
 	group.Items = enabledItems
 	return group, nil
+}
+
+// 分组可能保留已从渠道移除的模型。路由必须与 ChannelLLMList 的可见模型一致，
+// 同时认可自动同步模型和自定义模型，按完整名称精确匹配。
+func channelHasGroupModel(channel model.Channel, modelName string) bool {
+	return slices.Contains(xstrings.SplitTrimCompact(",", channel.Model, channel.CustomModel), modelName)
 }
 
 func GroupCreate(group *model.Group, ctx context.Context) error {
@@ -542,6 +550,25 @@ func GroupItemBatchDelByChannelAndModels(keys []model.GroupIDAndLLMName, ctx con
 	}
 	resetBalancerStateForChannels(channelIDs...)
 	return nil
+}
+
+// GroupItemPruneUnavailableForChannel 清理已不在渠道任一模型列表中的映射。
+// 不依赖本轮同步差异，因此历史残留条目也会在下一次成功同步时被清理。
+func GroupItemPruneUnavailableForChannel(channel model.Channel, ctx context.Context) error {
+	query := db.GetDB().WithContext(ctx).Model(&model.GroupItem{}).
+		Where("channel_id = ?", channel.ID).Distinct("model_name")
+	if names := xstrings.SplitTrimCompact(",", channel.Model, channel.CustomModel); len(names) > 0 {
+		query = query.Where("model_name NOT IN ?", names)
+	}
+	var staleModels []string
+	if err := query.Pluck("model_name", &staleModels).Error; err != nil {
+		return err
+	}
+	keys := make([]model.GroupIDAndLLMName, 0, len(staleModels))
+	for _, name := range staleModels {
+		keys = append(keys, model.GroupIDAndLLMName{ChannelID: channel.ID, ModelName: name})
+	}
+	return GroupItemBatchDelByChannelAndModels(keys, ctx)
 }
 
 func GroupItemList(groupID int, ctx context.Context) ([]model.GroupItem, error) {

@@ -28,6 +28,59 @@ func TestOpenAIModelListURLs(t *testing.T) {
 	}
 }
 
+func TestFetchModelsDistinguishesEmptyAndInvalidLists(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		kind      outbound.OutboundType
+		body      string
+		wantError bool
+	}{
+		{"chat-empty", outbound.OutboundTypeOpenAIChat, `{"data":[]}`, false},
+		{"anthropic-empty", outbound.OutboundTypeAnthropic, `{"data":[],"has_more":false}`, false},
+		{"gemini-empty", outbound.OutboundTypeGemini, `{"models":[]}`, false},
+		{"systemone-empty", outbound.OutboundTypeSystemOne, `{"models":[]}`, false},
+		{"missing-array", outbound.OutboundTypeOpenAIChat, `{}`, true},
+		{"null-array", outbound.OutboundTypeOpenAIChat, `{"data":null}`, true},
+		{"empty-body", outbound.OutboundTypeOpenAIChat, ``, true},
+		{"invalid-model", outbound.OutboundTypeOpenAIChat, `{"data":[{}]}`, true},
+		{"systemone-invalid", outbound.OutboundTypeSystemOne, `{"models":[{}]}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			models, err := FetchModels(context.Background(), model.Channel{
+				Type: tc.kind, BaseUrls: []model.BaseUrl{{URL: server.URL + "/v1"}},
+				Keys: []model.ChannelKey{{Enabled: true, ChannelKey: "test-key"}},
+			})
+			if (err != nil) != tc.wantError || len(models) != 0 {
+				t.Fatalf("models=%v err=%v, want empty models and error=%t", models, err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestFetchModelsPrefersNonEmptyFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/models" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"available"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer server.Close()
+	models, err := FetchModels(context.Background(), model.Channel{
+		Type: outbound.OutboundTypeOpenAIChat, BaseUrls: []model.BaseUrl{{URL: server.URL}},
+		Keys: []model.ChannelKey{{Enabled: true, ChannelKey: "test-key"}},
+	})
+	if err != nil || len(models) != 1 || models[0] != "available" {
+		t.Fatalf("models=%v err=%v", models, err)
+	}
+}
+
 func TestFetchModelsFallsBackFromRootToV1(t *testing.T) {
 	var hits []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

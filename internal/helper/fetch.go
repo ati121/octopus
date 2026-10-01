@@ -105,7 +105,7 @@ func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.C
 }
 
 // fetchModelListCandidates 依次尝试 openAIModelListURLs 生成的候选地址，
-// 返回第一个非空模型列表。
+// 优先返回非空模型列表；所有候选均无模型时，认可明确成功的空列表。
 func fetchModelListCandidates(request model.Channel, fetchAt func(modelsURL string) ([]string, error)) ([]string, error) {
 	base := strings.TrimRight(strings.TrimSpace(request.GetBaseUrl()), "/")
 	urls := openAIModelListURLs(base)
@@ -113,6 +113,7 @@ func fetchModelListCandidates(request model.Channel, fetchAt func(modelsURL stri
 		return nil, fmt.Errorf("empty channel base url")
 	}
 	var lastErr error
+	sawEmptyList := false
 	for _, modelsURL := range urls {
 		models, err := fetchAt(modelsURL)
 		if err != nil {
@@ -120,10 +121,13 @@ func fetchModelListCandidates(request model.Channel, fetchAt func(modelsURL stri
 			continue
 		}
 		if len(models) == 0 {
-			lastErr = fmt.Errorf("%s: empty model list", modelsURL)
+			sawEmptyList = true
 			continue
 		}
 		return models, nil
+	}
+	if sawEmptyList {
+		return []string{}, nil
 	}
 	if lastErr != nil {
 		return nil, lastErr
@@ -149,12 +153,18 @@ func fetchOpenAIModelsAt(client *http.Client, ctx context.Context, request model
 	if err := decodeModelJSONResponse(resp, &result); err != nil {
 		return nil, err
 	}
+	if result.Data == nil {
+		return nil, fmt.Errorf("invalid model list: expected data array")
+	}
 
 	models := newModelFetchAccumulator(len(result.Data))
 	for _, m := range result.Data {
 		if err := models.Add(m.ID); err != nil {
 			return nil, err
 		}
+	}
+	if len(result.Data) > 0 && len(models.models) == 0 {
+		return nil, fmt.Errorf("invalid model list: no model IDs")
 	}
 	return models.models, nil
 }
@@ -193,6 +203,9 @@ func fetchSystemOneModelsAt(client *http.Client, ctx context.Context, request mo
 	if err := decodeModelJSONResponse(resp, &result); err != nil {
 		return nil, err
 	}
+	if result.Models == nil && result.Data == nil {
+		return nil, fmt.Errorf("invalid model list: expected models or data array")
+	}
 
 	models := newModelFetchAccumulator(len(result.Models) + len(result.Data))
 	for _, m := range result.Models {
@@ -204,6 +217,9 @@ func fetchSystemOneModelsAt(client *http.Client, ctx context.Context, request mo
 		if err := models.Add(m.ID); err != nil {
 			return nil, err
 		}
+	}
+	if len(result.Models)+len(result.Data) > 0 && len(models.models) == 0 {
+		return nil, fmt.Errorf("invalid model list: no model names")
 	}
 	return models.models, nil
 }
@@ -288,6 +304,9 @@ func fetchGeminiModels(client *http.Client, ctx context.Context, request model.C
 
 		nextPageToken := strings.TrimSpace(result.NextPageToken)
 		if nextPageToken == "" {
+			if result.Models != nil && len(result.Models) == 0 {
+				return allModels.models, nil
+			}
 			break
 		}
 		if _, exists := seenPageTokens[nextPageToken]; exists {
@@ -348,6 +367,9 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 		}
 
 		if !result.HasMore {
+			if result.Data != nil && len(result.Data) == 0 {
+				return allModels.models, nil
+			}
 			break
 		}
 
@@ -372,11 +394,11 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 
 func fetchAnthropicModelsOrOpenAI(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
 	models, err := fetchAnthropicModels(client, ctx, request)
-	if err == nil && len(models) > 0 {
+	if err == nil {
 		return models, nil
 	}
 	if err != nil {
-		if fallback, fallbackErr := fetchOpenAIModels(client, ctx, request); fallbackErr == nil && len(fallback) > 0 {
+		if fallback, fallbackErr := fetchOpenAIModels(client, ctx, request); fallbackErr == nil {
 			return fallback, nil
 		} else if fallbackErr != nil {
 			return nil, fmt.Errorf("anthropic models: %v; openai fallback: %w", err, fallbackErr)
