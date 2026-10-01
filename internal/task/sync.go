@@ -57,30 +57,27 @@ func SyncModelsTask() {
 		deletedModels, addedModels := diff.Diff(oldModels, newModels)
 		if len(deletedModels) > 0 || len(addedModels) > 0 {
 			fetchModelStr := strings.Join(newModels, ",")
-			if _, err := op.ChannelUpdate(&model.ChannelUpdateRequest{
+			updatedChannel, err := op.ChannelUpdate(&model.ChannelUpdateRequest{
 				ID:    channel.ID,
 				Model: &fetchModelStr,
-			}, ctx); err != nil {
+			}, ctx)
+			if err != nil {
 				log.Errorf("failed to update channel %s: %v", channel.Name, err)
 				continue
 			}
+			channel = *updatedChannel
 		}
-		// 批量删除消失的模型对应的 GroupItem
+		// 每次成功同步都清理失效映射，也修复历史遗留条目；自定义模型仍然有效。
 		if len(deletedModels) > 0 {
 			log.Infof("deleted channel %s models: %v", channel.Name, deletedModels)
-			keys := make([]model.GroupIDAndLLMName, len(deletedModels))
-			for i, m := range deletedModels {
-				keys[i] = model.GroupIDAndLLMName{ChannelID: channel.ID, ModelName: m}
-			}
-			if err := op.GroupItemBatchDelByChannelAndModels(keys, ctx); err != nil {
-				log.Errorf("failed to batch delete group items for channel %s: %v", channel.Name, err)
-			}
+		}
+		if err := op.GroupItemPruneUnavailableForChannel(channel, ctx); err != nil {
+			log.Errorf("failed to prune group items for channel %s: %v", channel.Name, err)
+			continue
 		}
 
-		// 自动分组
-		if len(newModels) > 0 {
-			helper.ChannelAutoGroup(&channel, ctx)
-		}
+		// 自动分组使用最新模型快照；空的同步列表也可能包含自定义模型。
+		helper.ChannelAutoGroup(&channel, ctx)
 	}
 	llmPrice, err := op.LLMList(ctx)
 	if err != nil {
