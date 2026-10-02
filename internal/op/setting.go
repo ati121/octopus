@@ -12,7 +12,11 @@ import (
 
 var settingCache = cache.New[model.SettingKey, string](16)
 
-var removedGatewaySearchSettingKeys = []model.SettingKey{"web_search_enabled", "web_search_max_rounds"}
+var removedSettingKeys = []model.SettingKey{
+	"web_search_enabled", "web_search_max_rounds",
+	"webdav_url", "webdav_username", "webdav_password", "webdav_backup_path",
+	"webdav_backup_interval", "webdav_retention_count", "webdav_include_stats",
+}
 
 func SettingList(ctx context.Context) ([]model.Setting, error) {
 	settings := make([]model.Setting, 0, settingCache.Len())
@@ -99,9 +103,9 @@ func SettingSetInt(key model.SettingKey, value int) error {
 func settingRefreshCache(ctx context.Context) error {
 	db := db.GetDB().WithContext(ctx)
 
-	// 升级与重新加载时清理废弃开关，不改动用户已保存的 SSE 心跳值。
-	if err := db.Where("key IN ?", removedGatewaySearchSettingKeys).Delete(&model.Setting{}).Error; err != nil {
-		return fmt.Errorf("failed to remove obsolete gateway search settings: %w", err)
+	// 升级与重新加载时清理废弃模块设置，包括不再使用的 WebDAV 凭据。
+	if err := db.Where("key IN ?", removedSettingKeys).Delete(&model.Setting{}).Error; err != nil {
+		return fmt.Errorf("failed to remove obsolete settings: %w", err)
 	}
 
 	var settings []model.Setting

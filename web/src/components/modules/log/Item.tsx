@@ -640,7 +640,6 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
     return (
         <TooltipProvider>
             <MorphingDialog
-                disableLayoutAnimation
                 open={isDetailOpen}
                 onOpenChange={(open) => {
                     setIsDetailOpen(open);

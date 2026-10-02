@@ -22,13 +22,13 @@ func TestSettingRefreshRemovesGatewaySearchAndPreservesHeartbeat(t *testing.T) {
 		if err := settingRefreshCache(ctx); err != nil {
 			t.Fatal(err)
 		}
-		for _, key := range removedGatewaySearchSettingKeys {
+		for _, key := range removedSettingKeys {
 			if _, err := SettingGetString(key); err == nil {
 				t.Fatalf("obsolete setting remains in cache: %s", key)
 			}
 		}
 		var count int64
-		if err := db.GetDB().Model(&model.Setting{}).Where("key IN ?", removedGatewaySearchSettingKeys).Count(&count).Error; err != nil || count != 0 {
+		if err := db.GetDB().Model(&model.Setting{}).Where("key IN ?", removedSettingKeys).Count(&count).Error; err != nil || count != 0 {
 			t.Fatalf("obsolete settings remain in database: count=%d err=%v", count, err)
 		}
 		for _, row := range rows[2:] {

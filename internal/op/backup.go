@@ -773,10 +773,10 @@ func createUpsertAll[T any](tx *gorm.DB, rows []T, columns []clause.Column) (int
 }
 
 func createUpsertSettings(tx *gorm.DB, rows []model.Setting) (int64, error) {
-	// 旧备份不能重新引入已移除的网关搜索设置，且不能原地修改调用方的备份。
+	// 旧备份不能重新引入已移除的模块设置，且不能原地修改调用方的备份。
 	activeRows := make([]model.Setting, 0, len(rows))
 	for _, row := range rows {
-		if !slices.Contains(removedGatewaySearchSettingKeys, row.Key) {
+		if !slices.Contains(removedSettingKeys, row.Key) {
 			activeRows = append(activeRows, row)
 		}
 	}
