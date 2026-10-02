@@ -27,13 +27,14 @@ function trimDecimals(value: number, digits: number): string {
   return value.toFixed(digits).replace(/\.?0+$/, '');
 }
 
-// Token 全站统一为万 / 亿；不足一万保留到单个 Token，避免小用量显示为零。
+// Token 不足一万显示整数，达到一万 / 一亿后再使用对应单位。
 export function formatTokens(num: number | undefined): { raw: number, formatted: { value: string, unit: string } } {
   const raw = num ?? 0;
-  if (!Number.isFinite(raw)) return { raw: 0, formatted: { value: '0', unit: '万' } };
+  if (!Number.isFinite(raw)) return { raw: 0, formatted: { value: '0', unit: '' } };
   const abs = Math.abs(raw);
   if (abs >= 100000000) return { raw, formatted: { value: trimDecimals(raw / 100000000, 2), unit: '亿' } };
-  return { raw, formatted: { value: trimDecimals(raw / 10000, abs < 10000 ? 4 : 2), unit: '万' } };
+  if (abs >= 10000) return { raw, formatted: { value: trimDecimals(raw / 10000, 2), unit: '万' } };
+  return { raw, formatted: { value: raw.toFixed(0), unit: '' } };
 }
 
 export function formatTime(ms: number | undefined): { raw: number, formatted: { value: string, unit: string } } {
