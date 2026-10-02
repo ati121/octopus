@@ -195,8 +195,6 @@ func siteModelHourlyConflictUpdatesForDialect(dialect string) map[string]interfa
 		"date":            gorm.Expr(excluded("date")),
 		"input_token":     gorm.Expr(table + "input_token + " + excluded("input_token")),
 		"output_token":    gorm.Expr(table + "output_token + " + excluded("output_token")),
-		"input_cost":      gorm.Expr(table + "input_cost + " + excluded("input_cost")),
-		"output_cost":     gorm.Expr(table + "output_cost + " + excluded("output_cost")),
 		"wait_time":       gorm.Expr(table + "wait_time + " + excluded("wait_time")),
 		"request_success": gorm.Expr(table + "request_success + " + excluded("request_success")),
 		"request_failed":  gorm.Expr(table + "request_failed + " + excluded("request_failed")),

@@ -9,14 +9,8 @@ import (
 type SettingKey string
 
 const (
-	DefaultWebSearchMaxRounds = 10
-	MaxWebSearchMaxRounds     = 100
-)
-
-const (
 	SettingKeyProxyURL                         SettingKey = "proxy_url"
 	SettingKeyStatsSaveInterval                SettingKey = "stats_save_interval"                  // 将统计信息写入数据库的周期(分钟)
-	SettingKeyModelInfoUpdateInterval          SettingKey = "model_info_update_interval"           // 模型信息更新间隔(小时)
 	SettingKeySyncLLMInterval                  SettingKey = "sync_llm_interval"                    // LLM 同步间隔(小时)
 	SettingKeySiteSyncInterval                 SettingKey = "site_sync_interval"                   // 站点账号同步间隔(小时)
 	SettingKeySiteCheckinInterval              SettingKey = "site_checkin_interval"                // 站点自动签到间隔(小时)
@@ -55,8 +49,6 @@ const (
 	SettingKeyWebDAVBackupInterval             SettingKey = "webdav_backup_interval"               // WebDAV 自动备份间隔(小时)，0=禁用
 	SettingKeyWebDAVRetentionCount             SettingKey = "webdav_retention_count"               // WebDAV 保留备份份数
 	SettingKeyWebDAVIncludeStats               SettingKey = "webdav_include_stats"                 // WebDAV 备份是否包含统计数据
-	SettingKeyWebSearchEnabled                 SettingKey = "web_search_enabled"                   // 是否在网关侧执行 provider-native web search（0关闭/1开启）
-	SettingKeyWebSearchMaxRounds               SettingKey = "web_search_max_rounds"                // web search 重放最大轮数
 	SettingKeyUpstreamGlobalHeaders            SettingKey = "upstream_global_headers"              // 全局上游请求头（CustomHeader JSON 数组）
 	SettingKeyUpstreamModelHeaderRules         SettingKey = "upstream_model_header_rules"          // 按模型匹配的上游请求头规则（UpstreamHeaderRule JSON 数组）
 	SettingKeyUpstreamGlobalParamOverride      SettingKey = "upstream_global_param_override"       // 全局上游请求体参数覆盖（JSON 对象，不可含 model）
@@ -73,7 +65,6 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyProxyURL, Value: ""},
 		{Key: SettingKeyStatsSaveInterval, Value: "10"},                // 默认10分钟保存一次统计信息
 		{Key: SettingKeyCORSAllowOrigins, Value: ""},                   // CORS 默认不允许跨域，设置为 "*" 才允许所有来源
-		{Key: SettingKeyModelInfoUpdateInterval, Value: "24"},          // 默认24小时更新一次模型信息
 		{Key: SettingKeySyncLLMInterval, Value: "24"},                  // 默认24小时同步一次LLM
 		{Key: SettingKeySiteSyncInterval, Value: "12"},                 // 默认12小时同步一次站点账号信息
 		{Key: SettingKeySiteCheckinInterval, Value: "24"},              // 默认24小时自动签到一次
@@ -83,7 +74,7 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyCircuitBreakerCooldown, Value: "60"},           // 默认基础冷却60秒
 		{Key: SettingKeyCircuitBreakerMaxCooldown, Value: "600"},       // 默认最大冷却600秒（10分钟）
 		{Key: SettingKeyResponsesWSEnabled, Value: "false"},            // 默认关闭 OpenAI Responses WS 新路径
-		{Key: SettingKeyResponsesWSDefaultMode, Value: "passthrough"},  // 启用后默认使用协议保真的 passthrough
+		{Key: SettingKeyResponsesWSDefaultMode, Value: "transform"},    // 启用后统一由 AxonHub 处理协议
 		{Key: SettingKeySSEHeartbeatInterval, Value: "0"},              // 默认禁用 SSE 流式心跳
 		{Key: SettingKeySSEPreStreamHeartbeatDelay, Value: "0"},        // 默认禁用 SSE 上游流建立前心跳
 		{Key: SettingKeyGroupHealthEnabled, Value: "false"},            // 默认不显示/运行分组健康检查，避免打扰主界面
@@ -111,8 +102,6 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyWebDAVBackupInterval, Value: "0"},            // 默认禁用自动备份
 		{Key: SettingKeyWebDAVRetentionCount, Value: "10"},           // 默认保留10份
 		{Key: SettingKeyWebDAVIncludeStats, Value: "true"},           // 默认包含统计数据
-		{Key: SettingKeyWebSearchEnabled, Value: "1"},                // 默认开启网关侧 web search 执行
-		{Key: SettingKeyWebSearchMaxRounds, Value: "10"},             // 默认最多重放 10 轮
 		{Key: SettingKeyUpstreamGlobalHeaders, Value: "[]"},          // 默认无全局请求头
 		{Key: SettingKeyUpstreamModelHeaderRules, Value: "[]"},       // 默认无模型请求头规则
 		{Key: SettingKeyUpstreamGlobalParamOverride, Value: "{}"},    // 默认无全局参数覆盖
@@ -122,7 +111,7 @@ func DefaultSettings() []Setting {
 
 func (s *Setting) Validate() error {
 	switch s.Key {
-	case SettingKeyModelInfoUpdateInterval, SettingKeySyncLLMInterval, SettingKeySiteSyncInterval,
+	case SettingKeySyncLLMInterval, SettingKeySiteSyncInterval,
 		SettingKeySiteCheckinInterval, SettingKeyRelayLogKeepPeriod,
 		SettingKeyCircuitBreakerThreshold, SettingKeyCircuitBreakerCooldown, SettingKeyCircuitBreakerMaxCooldown:
 		_, err := strconv.Atoi(s.Value)
@@ -142,8 +131,6 @@ func (s *Setting) Validate() error {
 		SettingKeyWebDAVRetentionCount:
 		// 时间窗/样本/连击/间隔等：0 或负值无意义，下限为 1。
 		return validateIntMin(s.Value, 1)
-	case SettingKeyWebSearchMaxRounds:
-		return validateIntRange(s.Value, 1, MaxWebSearchMaxRounds)
 	case SettingKeySSEHeartbeatInterval, SettingKeySSEPreStreamHeartbeatDelay, SettingKeyWebDAVBackupInterval, SettingKeyRelayRequestTimeout:
 		value, err := strconv.Atoi(s.Value)
 		if err != nil {

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"errors"
+	"github.com/looplj/axonhub/llm"
 	"io"
 	"net"
 	"net/http"
@@ -21,16 +22,16 @@ type wsPublicError struct {
 
 func classifyWSPublicError(err error, statusCode int) (wsPublicError, bool) {
 	message := relayErrorMessage(err)
-	var wsErr *wsUpstreamEventError
+	var wsErr *llm.ResponseError
 	if errors.As(err, &wsErr) && wsErr != nil {
-		if wsErr.Status > 0 {
-			statusCode = wsErr.Status
+		if wsErr.StatusCode > 0 {
+			statusCode = wsErr.StatusCode
 		}
-		if wsErr.Code != "" {
-			message += " " + strings.ToLower(wsErr.Code)
+		if wsErr.Detail.Code != "" {
+			message += " " + strings.ToLower(wsErr.Detail.Code)
 		}
-		if wsErr.Type != "" {
-			message += " " + strings.ToLower(wsErr.Type)
+		if wsErr.Detail.Type != "" {
+			message += " " + strings.ToLower(wsErr.Detail.Type)
 		}
 	}
 	switch {
@@ -126,7 +127,7 @@ func isUpstreamWSConnectionBroken(err error) bool {
 
 func shouldReconnectUpstreamWSBeforeReplay(err error) bool {
 	// Empty stream before first event should trigger reconnect
-	if errors.Is(err, stream.ErrEmptyUpstreamStream) {
+	if errors.Is(err, stream.ErrEmptyUpstreamStream) || errors.Is(err, llm.ErrStreamIncomplete) {
 		log.Debugf("ws continuation error marked reconnectable before replay: %v", err)
 		return true
 	}

@@ -10,9 +10,8 @@ import (
 type responsesWSMode string
 
 const (
-	responsesWSModeOff         responsesWSMode = "off"
-	responsesWSModePassthrough responsesWSMode = "passthrough"
-	responsesWSModeTransform   responsesWSMode = "transform"
+	responsesWSModeOff       responsesWSMode = "off"
+	responsesWSModeTransform responsesWSMode = "transform"
 )
 
 func effectiveResponsesWSMode(channel *dbmodel.Channel) responsesWSMode {
@@ -20,9 +19,7 @@ func effectiveResponsesWSMode(channel *dbmodel.Channel) responsesWSMode {
 		switch channel.WSMode.Normalize() {
 		case dbmodel.ChannelWSModeOff:
 			return responsesWSModeOff
-		case dbmodel.ChannelWSModePassthrough:
-			return responsesWSModePassthrough
-		case dbmodel.ChannelWSModeTransform:
+		case dbmodel.ChannelWSModePassthrough, dbmodel.ChannelWSModeTransform:
 			return responsesWSModeTransform
 		}
 	}
@@ -32,10 +29,9 @@ func effectiveResponsesWSMode(channel *dbmodel.Channel) responsesWSMode {
 		return responsesWSModeOff
 	case string(responsesWSModeTransform):
 		return responsesWSModeTransform
-	case string(responsesWSModePassthrough):
-		fallthrough
 	default:
-		return responsesWSModePassthrough
+		// Legacy passthrough settings now use the same AxonHub pipeline.
+		return responsesWSModeTransform
 	}
 }
 

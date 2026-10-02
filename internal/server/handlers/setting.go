@@ -69,13 +69,6 @@ func setSetting(c *gin.Context) {
 		return
 	}
 	switch setting.Key {
-	case model.SettingKeyModelInfoUpdateInterval:
-		hours, err := strconv.Atoi(setting.Value)
-		if err != nil {
-			resp.Error(c, http.StatusBadRequest, err.Error())
-			return
-		}
-		task.Update(string(setting.Key), time.Duration(hours)*time.Hour)
 	case model.SettingKeySyncLLMInterval:
 		hours, err := strconv.Atoi(setting.Value)
 		if err != nil {
@@ -248,7 +241,6 @@ func decodeDBDump(body []byte, dump *model.DBDump) error {
 		len(dump.GroupItems) == 0 &&
 		len(dump.Settings) == 0 &&
 		len(dump.APIKeys) == 0 &&
-		len(dump.LLMInfos) == 0 &&
 		len(dump.RelayLogs) == 0 &&
 		len(dump.StatsDaily) == 0 &&
 		len(dump.StatsHourly) == 0 &&

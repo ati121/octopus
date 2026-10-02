@@ -170,7 +170,7 @@ func TestDBImportDeduplicatesOnSecondImport(t *testing.T) {
 	}
 }
 
-func TestDBImportSkipsOrphanedStats(t *testing.T) {
+func TestDBImportKeepsHistoricalRankings(t *testing.T) {
 	ctx := setupBackupTestDB(t)
 
 	dump := buildTestDump()
@@ -191,14 +191,31 @@ func TestDBImportSkipsOrphanedStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DBImportIncremental failed: %v", err)
 	}
-	if result.RowsAffected["stats_channel"] != 1 {
-		t.Fatalf("expected 1 stats_channel imported, got %d", result.RowsAffected["stats_channel"])
+	if result.RowsAffected["stats_channel"] != 2 {
+		t.Fatalf("expected 2 stats_channel imported, got %d", result.RowsAffected["stats_channel"])
 	}
-	if result.RowsAffected["stats_model"] != 1 {
-		t.Fatalf("expected 1 stats_model imported, got %d", result.RowsAffected["stats_model"])
+	if result.RowsAffected["stats_model"] != 2 {
+		t.Fatalf("expected 2 stats_model imported, got %d", result.RowsAffected["stats_model"])
 	}
 	if result.RowsAffected["stats_api_key"] != 0 {
 		t.Fatalf("expected 0 stats_api_key imported, got %d", result.RowsAffected["stats_api_key"])
+	}
+	if _, err := DBImportIncremental(ctx, dump); err != nil {
+		t.Fatal(err)
+	}
+	var rows []model.StatsChannel
+	if err := dbpkg.GetDB().Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("duplicate import duplicated history: %+v", rows)
+	}
+	var historical model.StatsChannel
+	if err := dbpkg.GetDB().Where("channel_id < 0").First(&historical).Error; err != nil {
+		t.Fatal(err)
+	}
+	if historical.RequestSuccess != 2 || historical.HistoryID == "" {
+		t.Fatalf("unexpected imported history: %+v", historical)
 	}
 }
 

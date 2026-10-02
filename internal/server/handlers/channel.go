@@ -146,9 +146,6 @@ func createChannel(c *gin.Context) {
 	safe.Go("channel-create-postprocess", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		modelStr := createdChannel.Model + "," + createdChannel.CustomModel
-		modelArray := strings.Split(modelStr, ",")
-		helper.LLMPriceAddToDB(modelArray, ctx)
 		helper.ChannelBaseUrlDelayUpdate(&createdChannel, ctx)
 		helper.ChannelAutoGroup(&createdChannel, ctx)
 	})
@@ -184,9 +181,6 @@ func updateChannel(c *gin.Context) {
 	safe.Go("channel-update-postprocess", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		modelStr := updatedChannel.Model + "," + updatedChannel.CustomModel
-		modelArray := strings.Split(modelStr, ",")
-		helper.LLMPriceAddToDB(modelArray, ctx)
 		helper.ChannelBaseUrlDelayUpdate(&updatedChannel, ctx)
 		helper.ChannelAutoGroup(&updatedChannel, ctx)
 	})

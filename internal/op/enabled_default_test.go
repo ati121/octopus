@@ -151,7 +151,6 @@ func TestChannelKeySaveDBOnlyWritesRuntimeColumns(t *testing.T) {
 	stale.Remark = "stale snapshot"
 	stale.StatusCode = 200
 	stale.LastUseTimeStamp = 1717000000
-	stale.TotalCost = 9.5
 	if err := ChannelKeyUpdate(stale); err != nil {
 		t.Fatalf("ChannelKeyUpdate failed: %v", err)
 	}
@@ -169,8 +168,8 @@ func TestChannelKeySaveDBOnlyWritesRuntimeColumns(t *testing.T) {
 	if row.Remark != "user remark" {
 		t.Fatalf("陈旧快照覆盖了用户改的备注，got %q", row.Remark)
 	}
-	if row.StatusCode != 200 || row.LastUseTimeStamp != 1717000000 || row.TotalCost != 9.5 {
-		t.Fatalf("运行时统计三列没有照常写入: %+v", row)
+	if row.StatusCode != 200 || row.LastUseTimeStamp != 1717000000 {
+		t.Fatalf("运行时状态没有照常写入: %+v", row)
 	}
 }
 

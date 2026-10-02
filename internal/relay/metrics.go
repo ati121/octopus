@@ -9,7 +9,6 @@ import (
 	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
-	"github.com/bestruirui/octopus/internal/price"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/tokenizer"
@@ -101,8 +100,6 @@ func (m *RelayMetrics) ResetAttemptResponse() {
 	m.Stats.OutputToken = 0
 	m.Stats.CacheReadToken = 0
 	m.Stats.CacheWriteToken = 0
-	m.Stats.InputCost = 0
-	m.Stats.OutputCost = 0
 	m.BillInputTokens = nil
 	m.CacheReadTokens = nil
 	m.CacheWriteTokens = nil
@@ -162,24 +159,15 @@ func (m *RelayMetrics) SetInternalResponse(resp *transformerModel.InternalLLMRes
 		m.Stats.CacheWriteToken = cacheWriteTokens
 		inputReported = usage.EffectiveInputTokens() > 0
 
-		if modelPrice := resolveModelPrice(actualModel); modelPrice != nil {
-			m.Stats.InputCost = (float64(cacheReadTokens)*modelPrice.CacheRead +
-				float64(cacheWriteTokens)*modelPrice.CacheWrite +
-				float64(nonCachedInput)*modelPrice.Input) * 1e-6
-			m.Stats.OutputCost = float64(usage.CompletionTokens) * modelPrice.Output * 1e-6
-		}
 	}
 
 	// 降级：上游未上报 input（usage 缺失，或 usage 中输入侧全为 0）时，用请求侧
-	// 估算的 TransportInputTokens 兜底，使 input token/费用不为 0；output 无法从
+	// 估算的 TransportInputTokens 兜底，使 input token 不为 0；output 无法从
 	// 请求侧估算，保持 0。tiktoken 统一用 o200k_base，对 Claude/Gemini 为近似值。
 	if !inputReported && m.TransportInputTokens != nil && *m.TransportInputTokens > 0 {
 		estimated := int64(*m.TransportInputTokens)
 		m.Stats.InputToken = estimated
 		m.BillInputTokens = intPtr(int(estimated))
-		if modelPrice := resolveModelPrice(actualModel); modelPrice != nil {
-			m.Stats.InputCost = float64(estimated) * modelPrice.Input * 1e-6
-		}
 	}
 }
 
@@ -209,8 +197,6 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 		OutputToken:     m.Stats.OutputToken,
 		CacheReadToken:  m.Stats.CacheReadToken,
 		CacheWriteToken: m.Stats.CacheWriteToken,
-		InputCost:       m.Stats.InputCost,
-		OutputCost:      m.Stats.OutputCost,
 	}
 	if success {
 		globalStats.RequestSuccess = 1
@@ -268,9 +254,6 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 			"duration_ms", duration.Milliseconds(),
 			"input_token", m.Stats.InputToken,
 			"output_token", m.Stats.OutputToken,
-			"input_cost", m.Stats.InputCost,
-			"output_cost", m.Stats.OutputCost,
-			"total_cost", m.Stats.InputCost + m.Stats.OutputCost,
 			"attempts", len(attempts),
 			"ws", m.UsedWS,
 		}
@@ -395,7 +378,6 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 		relayLog.InputTokens = int(m.InternalResponse.Usage.PromptTokens)
 	}
 	relayLog.OutputTokens = int(m.Stats.OutputToken)
-	relayLog.Cost = m.Stats.InputCost + m.Stats.OutputCost
 	relayLog.TransportInputTokens = m.TransportInputTokens
 	relayLog.BillInputTokens = m.BillInputTokens
 	relayLog.CacheReadTokens = m.CacheReadTokens
@@ -447,10 +429,8 @@ func updateFinalChannelUsageStats(channelID int, metrics model.StatsMetrics) {
 		OutputToken:     metrics.OutputToken,
 		CacheReadToken:  metrics.CacheReadToken,
 		CacheWriteToken: metrics.CacheWriteToken,
-		InputCost:       metrics.InputCost,
-		OutputCost:      metrics.OutputCost,
 	}
-	if usageStats.InputToken == 0 && usageStats.OutputToken == 0 && usageStats.CacheReadToken == 0 && usageStats.CacheWriteToken == 0 && usageStats.InputCost == 0 && usageStats.OutputCost == 0 {
+	if usageStats.InputToken == 0 && usageStats.OutputToken == 0 && usageStats.CacheReadToken == 0 && usageStats.CacheWriteToken == 0 {
 		return
 	}
 	op.StatsChannelUpdate(channelID, usageStats)
@@ -458,11 +438,6 @@ func updateFinalChannelUsageStats(channelID int, metrics model.StatsMetrics) {
 
 func intPtr(value int) *int {
 	return &value
-}
-
-// resolveModelPrice returns the global price configured for the actual model.
-func resolveModelPrice(actualModel string) *model.LLMPrice {
-	return price.GetLLMPrice(actualModel)
 }
 
 func wsModePtr(value model.RelayLogWSMode) *model.RelayLogWSMode {

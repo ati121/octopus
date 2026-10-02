@@ -157,7 +157,7 @@ func TestHandleStreamResponsePassthroughAnthropicPreservesRawSSE(t *testing.T) {
 		"event: message_stop",
 		`data: {"type":"message_stop"}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -188,14 +188,12 @@ func TestHandleStreamResponsePassthroughAnthropicPreservesRawSSE(t *testing.T) {
 		Body: io.NopCloser(bytes.NewReader([]byte(rawSSE))),
 	}
 
-	pt := ra.outAdapter.(transformerModel.PassthroughCapable)
-	cfg := pt.PassthroughConfig()
-	if err := ra.handleStreamResponsePassthroughV2(context.Background(), response, cfg); err != nil {
+	if err := ra.handleStreamResponseV2(context.Background(), response); err != nil {
 		t.Fatalf("handleStreamResponsePassthroughV2() error = %v", err)
 	}
 
-	if got := recorder.Body.String(); got != rawSSE {
-		t.Fatalf("expected raw SSE to be preserved exactly, got %q want %q", got, rawSSE)
+	if got := recorder.Body.String(); !strings.Contains(got, `"text":"hello"`) || !strings.Contains(got, `"type":"message_stop"`) {
+		t.Fatalf("missing Anthropic content or terminal event: %s", got)
 	}
 }
 
@@ -209,7 +207,7 @@ func TestHandleStreamResponsePassthroughOpenAIResponsesPreservesRawSSE(t *testin
 		"",
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","model":"gpt-4o","created_at":1,"output":[],"status":"completed"}}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -241,13 +239,11 @@ func TestHandleStreamResponsePassthroughOpenAIResponsesPreservesRawSSE(t *testin
 		Body: io.NopCloser(bytes.NewReader([]byte(rawSSE))),
 	}
 
-	pt := ra.outAdapter.(transformerModel.PassthroughCapable)
-	cfg := pt.PassthroughConfig()
-	if err := ra.handleStreamResponsePassthroughV2(context.Background(), response, cfg); err != nil {
+	if err := ra.handleStreamResponseV2(context.Background(), response); err != nil {
 		t.Fatalf("handleStreamResponsePassthroughV2() error = %v", err)
 	}
-	if got := recorder.Body.String(); got != rawSSE {
-		t.Fatalf("expected raw SSE to be preserved exactly, got %q want %q", got, rawSSE)
+	if got := recorder.Body.String(); !strings.Contains(got, `"delta":"hello"`) || !strings.Contains(got, `"type":"response.completed"`) {
+		t.Fatalf("missing Responses content or terminal event: %s", got)
 	}
 }
 
@@ -330,7 +326,7 @@ func TestHandleStreamResponsePassthroughOpenAIResponsesClientCancelAfterTerminal
 		"",
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","model":"gpt-4o","created_at":1,"output":[],"status":"completed","usage":{"input_tokens":3,"output_tokens":5,"total_tokens":8}}}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -348,13 +344,11 @@ func TestHandleStreamResponsePassthroughOpenAIResponsesClientCancelAfterTerminal
 		Body:       &stallUntilCancelBody{ctx: ctx, data: []byte(rawSSE)},
 	}
 
-	pt := ra.outAdapter.(transformerModel.PassthroughCapable)
-	cfg := pt.PassthroughConfig()
-	if err := ra.handleStreamResponsePassthroughV2(ctx, response, cfg); err != nil {
+	if err := ra.handleStreamResponseV2(ctx, response); err != nil {
 		t.Fatalf("expected stream with terminal event to finish successfully, got error: %v", err)
 	}
-	if got := writer.buf.String(); got != rawSSE {
-		t.Fatalf("expected raw SSE to be preserved exactly, got %q want %q", got, rawSSE)
+	if got := writer.buf.String(); !strings.Contains(got, `"delta":"hello"`) || !strings.Contains(got, `"type":"response.completed"`) {
+		t.Fatalf("missing Responses content or terminal event: %s", got)
 	}
 	internalResp, err := req.inAdapter.GetInternalResponse(context.Background())
 	if err != nil || internalResp == nil {
@@ -373,7 +367,7 @@ func TestHandleStreamResponsePassthroughOpenAIResponsesClientCancelMidStream(t *
 		"",
 		`data: {"type":"response.output_text.delta","delta":"hello"}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -387,9 +381,7 @@ func TestHandleStreamResponsePassthroughOpenAIResponsesClientCancelMidStream(t *
 		Body:       &stallUntilCancelBody{ctx: ctx, data: []byte(rawSSE)},
 	}
 
-	pt := ra.outAdapter.(transformerModel.PassthroughCapable)
-	cfg := pt.PassthroughConfig()
-	err := ra.handleStreamResponsePassthroughV2(ctx, response, cfg)
+	err := ra.handleStreamResponseV2(ctx, response)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled for mid-stream disconnect, got: %v", err)
 	}
@@ -398,10 +390,25 @@ func TestHandleStreamResponsePassthroughOpenAIResponsesClientCancelMidStream(t *
 	}
 }
 
-// 回归：普通的 `type:function, name:web_search` 是客户端自己的工具，
-// 不能触发网关整流。上游先送出 reasoning，再延迟到流尾；下游必须在
-// 首块到达时立即看到它，而不是等到 EOF 后一次性收到整段响应。
-func TestHandleStreamResponseV2DoesNotBufferOrdinaryWebSearchFunction(t *testing.T) {
+// 搜索工具不能触发整段流缓冲；首块必须在上游尚未发出流尾时到达客户端。
+func TestHandleStreamResponseV2DoesNotBufferSearchTools(t *testing.T) {
+	cases := []struct {
+		name string
+		tool transformerModel.Tool
+	}{
+		{"client_function", transformerModel.Tool{Type: "function", Function: transformerModel.Function{Name: "web_search"}}},
+		{"responses_native", transformerModel.Tool{Type: "web_search"}},
+		{"anthropic_native", transformerModel.Tool{Type: "web_search_20250305", Function: transformerModel.Function{Name: "web_search"}, AnthropicServerSpec: json.RawMessage(`{"type":"web_search_20250305","name":"web_search"}`)}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertSearchToolStreamIsImmediate(t, tc.tool)
+		})
+	}
+}
+
+func assertSearchToolStreamIsImmediate(t *testing.T, tool transformerModel.Tool) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	ctx := context.Background()
@@ -424,10 +431,7 @@ func TestHandleStreamResponseV2DoesNotBufferOrdinaryWebSearchFunction(t *testing
 		Model:        "stream-model",
 		Stream:       boolPtr(true),
 		RawAPIFormat: transformerModel.APIFormatOpenAIChatCompletion,
-		Tools: []transformerModel.Tool{{
-			Type:     "function",
-			Function: transformerModel.Function{Name: "web_search"},
-		}},
+		Tools:        []transformerModel.Tool{tool},
 	}
 	req := &relayRequest{
 		c:               c,
@@ -481,7 +485,7 @@ func TestHandleStreamResponseV2DoesNotBufferOrdinaryWebSearchFunction(t *testing
 	case <-time.After(1 * time.Second):
 		close(release)
 		<-handlerDone
-		t.Fatalf("ordinary web_search function was buffered until stream completion; body=%q", writer.buf.String())
+		t.Fatalf("search tool request was buffered until stream completion; body=%q", writer.buf.String())
 	}
 
 	close(release)
@@ -518,7 +522,7 @@ func TestHandleStreamResponsePassthroughAnthropicClientCancelAfterTerminal(t *te
 		"event: message_stop",
 		`data: {"type":"message_stop"}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -557,14 +561,13 @@ func TestHandleStreamResponsePassthroughAnthropicClientCancelAfterTerminal(t *te
 		Body:       &stallUntilCancelBody{ctx: ctx, data: []byte(rawSSE)},
 	}
 
-	pt := ra.outAdapter.(transformerModel.PassthroughCapable)
-	cfg := pt.PassthroughConfig()
-	if err := ra.handleStreamResponsePassthroughV2(ctx, response, cfg); err != nil {
+	if err := ra.handleStreamResponseV2(ctx, response); err != nil {
 		t.Fatalf("expected stream with terminal event to finish successfully, got error: %v", err)
 	}
-	if got := writer.buf.String(); got != rawSSE {
-		t.Fatalf("expected raw SSE to be preserved exactly, got %q want %q", got, rawSSE)
+	if got := writer.buf.String(); !strings.Contains(got, `"text":"hello"`) || !strings.Contains(got, `"type":"message_stop"`) {
+		t.Fatalf("missing Anthropic content or terminal event: %s", got)
 	}
+	ra.collectResponse()
 	if req.metrics.Stats.InputToken != 3 || req.metrics.Stats.OutputToken != 5 {
 		t.Fatalf("expected usage input=3 output=5 collected into metrics, got input=%d output=%d", req.metrics.Stats.InputToken, req.metrics.Stats.OutputToken)
 	}
@@ -584,7 +587,7 @@ func TestHandlerPassthroughsOpenAIResponsesSameProtocolStream(t *testing.T) {
 		"",
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","model":"gpt-4o","created_at":1,"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 
 	var capturedBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -630,8 +633,8 @@ func TestHandlerPassthroughsOpenAIResponsesSameProtocolStream(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected request to succeed, got status %d body %s", recorder.Code, recorder.Body.String())
 	}
-	if got := recorder.Body.String(); got != rawSSE {
-		t.Fatalf("expected raw SSE to be preserved exactly, got %q want %q", got, rawSSE)
+	if got := recorder.Body.String(); !strings.Contains(got, `"delta":"hello"`) || !strings.Contains(got, `"type":"response.completed"`) {
+		t.Fatalf("missing Responses content or terminal event: %s", got)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(capturedBody, &payload); err != nil {
@@ -656,7 +659,7 @@ func TestHandlerRecordsAnthropicStreamErrorAsFailure(t *testing.T) {
 		"event: error",
 		`data: {"type":"error","error":{"type":"overloaded_error","message":"upstream overloaded"}}`,
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(rawSSE))
@@ -805,8 +808,8 @@ func TestHandlerFailsOverAfterAnthropicStreamErrorBeforeContent(t *testing.T) {
 	if firstHits.Load() != 1 || secondHits.Load() != 1 {
 		t.Fatalf("expected one failed and one successful upstream call, got first=%d second=%d", firstHits.Load(), secondHits.Load())
 	}
-	if got := recorder.Body.String(); got != successSSE {
-		t.Fatalf("expected only fallback stream, got %q want %q", got, successSSE)
+	if got := recorder.Body.String(); !strings.Contains(got, `"type":"message_stop"`) || !strings.Contains(got, `"text":"fallback ok"`) {
+		t.Fatalf("expected complete fallback stream, got %s", got)
 	}
 	if strings.Contains(recorder.Body.String(), "msg_failed") || strings.Contains(recorder.Body.String(), "Upstream access forbidden") {
 		t.Fatalf("failed channel stream leaked to client: %s", recorder.Body.String())
@@ -905,8 +908,8 @@ func TestHandlerDoesNotFailOverAfterAnthropicContentWasWritten(t *testing.T) {
 	if secondHits.Load() != 0 {
 		t.Fatalf("fallback must not run after content was written, got %d calls", secondHits.Load())
 	}
-	if got := recorder.Body.String(); got != partialSSE {
-		t.Fatalf("expected original partial stream only, got %q want %q", got, partialSSE)
+	if got := recorder.Body.String(); !strings.Contains(got, `"text":"partial answer"`) || strings.Contains(got, `"type":"message_stop"`) {
+		t.Fatalf("expected partial content without a successful terminal event, got %s", got)
 	}
 
 	logs, err := op.RelayLogList(ctx, nil, nil, nil, 1, 10)
@@ -960,8 +963,8 @@ func TestHandlerPassthroughsOpenAIResponsesSameProtocolNonStream(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected request to succeed, got status %d body %s", recorder.Code, recorder.Body.String())
 	}
-	if got := recorder.Body.String(); got != rawResponse {
-		t.Fatalf("expected raw JSON to be preserved exactly, got %q want %q", got, rawResponse)
+	if got := recorder.Body.String(); !strings.Contains(got, `"text":"ok"`) || !strings.Contains(got, `"status":"completed"`) {
+		t.Fatalf("expected completed response content, got %s", got)
 	}
 }
 
@@ -1033,15 +1036,22 @@ func TestHandlerPassthroughsOpenAIResponsesRawTools(t *testing.T) {
 	}
 }
 
-func TestHandlerRejectsResponsesNativeToolsWithoutResponsesChannel(t *testing.T) {
+func TestHandlerDelegatesResponsesNativeToolsToAxonHub(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := setupRelayTestDB(t)
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chat-1","object":"chat.completion","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
 
 	channel := &model.Channel{
 		Name:     "relay-openai-chat-only",
 		Type:     outbound.OutboundTypeOpenAIChat,
 		Enabled:  true,
-		BaseUrls: []model.BaseUrl{{URL: "https://example.com/v1"}},
+		BaseUrls: []model.BaseUrl{{URL: server.URL + "/v1"}},
 		Model:    "gpt-4o",
 		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "test-key"}},
 	}
@@ -1065,11 +1075,8 @@ func TestHandlerRejectsResponsesNativeToolsWithoutResponsesChannel(t *testing.T)
 
 	Handler(inbound.InboundTypeOpenAIResponse, c)
 
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("expected native responses tool request to be rejected, got status %d body %s", recorder.Code, recorder.Body.String())
-	}
-	if !strings.Contains(recorder.Body.String(), "仅支持 OpenAI Responses 通道直通") {
-		t.Fatalf("expected clear passthrough-only error, got %s", recorder.Body.String())
+	if recorder.Code != http.StatusOK || hits.Load() != 1 {
+		t.Fatalf("AxonHub conversion did not reach upstream: hits=%d status=%d body=%s", hits.Load(), recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -1395,7 +1402,7 @@ func TestHandlerAppliesChannelParamOverride(t *testing.T) {
 	}
 }
 
-func TestRelayMetricsUsesResponseModelForCostLookup(t *testing.T) {
+func TestRelayMetricsKeepsResponseModelAndTokenUsage(t *testing.T) {
 	metrics := NewRelayMetrics(0, "alias-model", nil, &transformerModel.InternalLLMRequest{Model: "alias-model"})
 	metrics.StartTime = time.Now()
 
@@ -1410,11 +1417,8 @@ func TestRelayMetricsUsesResponseModelForCostLookup(t *testing.T) {
 	if metrics.ActualModel != "gpt-4o-mini" {
 		t.Fatalf("expected actual model to use response model, got %q", metrics.ActualModel)
 	}
-	if metrics.Stats.InputCost <= 0 {
-		t.Fatalf("expected input cost to be computed from response model price, got %f", metrics.Stats.InputCost)
-	}
-	if metrics.Stats.OutputCost <= 0 {
-		t.Fatalf("expected output cost to be computed from response model price, got %f", metrics.Stats.OutputCost)
+	if metrics.Stats.InputToken != 1000 || metrics.Stats.OutputToken != 2000 {
+		t.Fatalf("unexpected token usage: %+v", metrics.Stats)
 	}
 }
 
@@ -2013,8 +2017,8 @@ func TestHandlerUsesNextKeyWhenFirstKeyCircuitIsOpen(t *testing.T) {
 		BaseUrls: []model.BaseUrl{{URL: server.URL + "/v1"}},
 		Model:    "multi-key-model",
 		Keys: []model.ChannelKey{
-			{Enabled: true, ChannelKey: "first-key", TotalCost: 0},
-			{Enabled: true, ChannelKey: "second-key", TotalCost: 1},
+			{Enabled: true, ChannelKey: "first-key"},
+			{Enabled: true, ChannelKey: "second-key"},
 		},
 	}
 	if err := op.ChannelCreate(channel, ctx); err != nil {

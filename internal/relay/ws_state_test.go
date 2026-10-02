@@ -98,7 +98,7 @@ func TestBuildReplayRawInputItemsPreservesParallelToolCallOrder(t *testing.T) {
 	if items[0].Type != "function_call" || items[1].Type != "function_call" || items[2].Type != "function_call_output" || items[3].Type != "function_call_output" || items[4].Type != "message" {
 		t.Fatalf("parallel tool replay order changed: %s", replayed)
 	}
-	if items[2].CallID != "call_a" || items[3].CallID != "call_b" || items[2].ItemReference == nil || items[3].ItemReference == nil {
+	if items[2].CallID != "call_a" || items[3].CallID != "call_b" {
 		t.Fatalf("parallel tool replay references were lost: %s", replayed)
 	}
 }

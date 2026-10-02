@@ -29,8 +29,6 @@ func SyncModelsTask() {
 		log.Errorf("failed to list channels: %v", err)
 		return
 	}
-	totalNewModels := make([]string, 0, 128)
-	seenTotalNewModels := make(map[string]struct{}, 128)
 	for _, channel := range channels {
 		if !channel.AutoSync {
 			continue
@@ -42,18 +40,6 @@ func SyncModelsTask() {
 		}
 		oldModels := xstrings.SplitTrimCompact(",", channel.Model)
 		newModels := xstrings.TrimCompact(fetchModels)
-		for _, m := range newModels {
-			m = strings.TrimSpace(m)
-			if m == "" {
-				continue
-			}
-			m = strings.ToLower(m)
-			if _, ok := seenTotalNewModels[m]; ok {
-				continue
-			}
-			seenTotalNewModels[m] = struct{}{}
-			totalNewModels = append(totalNewModels, m)
-		}
 		deletedModels, addedModels := diff.Diff(oldModels, newModels)
 		if len(deletedModels) > 0 || len(addedModels) > 0 {
 			fetchModelStr := strings.Join(newModels, ",")
@@ -78,27 +64,6 @@ func SyncModelsTask() {
 
 		// 自动分组使用最新模型快照；空的同步列表也可能包含自定义模型。
 		helper.ChannelAutoGroup(&channel, ctx)
-	}
-	llmPrice, err := op.LLMList(ctx)
-	if err != nil {
-		log.Errorf("failed to list models price: %v", err)
-		return
-	}
-	llmPriceNames := make([]string, 0, len(llmPrice))
-	for _, price := range llmPrice {
-		llmPriceNames = append(llmPriceNames, price.Name)
-	}
-
-	deletedNorm, addedNorm := diff.Diff(llmPriceNames, totalNewModels)
-	if len(deletedNorm) > 0 {
-		if err := helper.LLMPriceDeleteFromDBWithNoPrice(deletedNorm, ctx); err != nil {
-			log.Errorf("failed to batch delete models price: %v", err)
-		}
-	}
-	if len(addedNorm) > 0 {
-		if err := helper.LLMPriceAddToDB(addedNorm, ctx); err != nil {
-			log.Errorf("failed to add models price: %v", err)
-		}
 	}
 	lastSyncModelsTime = time.Now()
 }

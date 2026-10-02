@@ -1,17 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Clock, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, DollarSign, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, CircleOff, Link } from 'lucide-react';
+import { Clock, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, CircleOff, Link } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { motion, AnimatePresence } from 'motion/react';
-import JsonView from '@uiw/react-json-view';
-import { githubDarkTheme } from '@uiw/react-json-view/githubDark';
-import { githubLightTheme } from '@uiw/react-json-view/githubLight';
-import { useTheme } from 'next-themes';
+import { LogContent } from './LogContent';
 import { getLogDetail, type RelayLog, type RelayLogWSMode, type RelayLogWSExecMode, type RelayLogWSRecovery, type ChannelAttempt, type AttemptStatus, type LogSiteActionTarget as ApiLogSiteActionTarget, type LogSiteActionTargets as ApiLogSiteActionTargets } from '@/api/endpoints/log';
 import { getModelIcon } from '@/lib/model-icons';
 import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
+import { cn, formatTokens } from '@/lib/utils';
 import { CopyIconButton } from '@/components/common/CopyButton';
 import {
     AlertDialog,
@@ -31,7 +28,6 @@ import {
     MorphingDialogClose,
     MorphingDialogTitle,
     MorphingDialogDescription,
-    useMorphingDialog,
 } from '@/components/ui/morphing-dialog';
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/animate-ui/components/animate/tooltip';
 import { toast } from '@/components/common/Toast';
@@ -164,15 +160,8 @@ function makeDisableTargetKey(target: LogSiteActionTarget | null | undefined) {
 }
 
 function formatCompactTokenCount(value: number): string {
-    if (value < 1000) return value.toLocaleString();
-    // 截断到指定小数位（非四舍五入）：先放大取 floor 再缩回，1e-9 修正浮点下溢。
-    const trunc = (n: number, decimals: number) => {
-        const factor = 10 ** decimals;
-        return (Math.floor(n * factor + 1e-9) / factor).toFixed(decimals);
-    };
-    if (value < 10000) return `${trunc(value / 1000, 2)}K`;
-    if (value < 1000000) return `${trunc(value / 1000, 1)}K`;
-    return `${trunc(value / 1000000, 2)}M`;
+    const token = formatTokens(value).formatted;
+    return `${token.value}${token.unit}`;
 }
 
 function hasCacheTokens(log: RelayLog) {
@@ -493,91 +482,6 @@ function WSModeBadge({ log }: { log: RelayLog }) {
     );
 }
 
-function DeferredJsonContent({ content, fallbackText, isLoading }: { content: string | undefined; fallbackText: string; isLoading?: boolean }) {
-    const { resolvedTheme } = useTheme();
-    const { isOpen } = useMorphingDialog();
-    const [shouldRender, setShouldRender] = useState(false);
-
-    const parsed = useMemo(() => {
-        if (!content) return { isJson: false, data: null };
-        try {
-            return { isJson: true, data: JSON.parse(content) };
-        } catch {
-            return { isJson: false, data: content };
-        }
-    }, [content]);
-
-    useEffect(() => {
-        if (isOpen) {
-            const timer = setTimeout(() => setShouldRender(true), 300);
-            return () => clearTimeout(timer);
-        }
-    }, [isOpen]);
-
-    if (!isOpen) {
-        if (shouldRender) setShouldRender(false);
-        return null;
-    }
-
-    if (!content) {
-        return (
-            <pre className="p-4 text-xs text-muted-foreground whitespace-pre-wrap wrap-break-word leading-relaxed">
-                {isLoading ? 'Loading…' : fallbackText}
-            </pre>
-        );
-    }
-
-    return (
-        <AnimatePresence mode="wait">
-            {!shouldRender ? (
-                <motion.div
-                    key="loading"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.15 }}
-                    className="p-4 flex items-center justify-center h-full"
-                >
-                    <Loader2 className="h-5 w-5 text-muted-foreground animate-spin" />
-                </motion.div>
-            ) : parsed.isJson ? (
-                <motion.div
-                    key="json"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="p-4"
-                >
-                    <JsonView
-                        value={parsed.data as object}
-                        style={{
-                            ...(resolvedTheme === 'dark' ? githubDarkTheme : githubLightTheme),
-                            fontSize: '12px',
-                            fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-                            backgroundColor: 'transparent',
-                        }}
-                        displayDataTypes={false}
-                        displayObjectSize={false}
-                        collapsed={false}
-                    />
-                </motion.div>
-            ) : (
-                <motion.pre
-                    key="text"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="p-4 text-xs text-muted-foreground whitespace-pre-wrap wrap-break-word font-mono leading-relaxed"
-                >
-                    {content}
-                </motion.pre>
-            )}
-        </AnimatePresence>
-    );
-}
-
 function AttemptDisableButton({
     target,
     pending,
@@ -647,6 +551,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
     const [detailLog, setDetailLog] = useState<RelayLog | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
     const [detailRequestID, setDetailRequestID] = useState(0);
+    const [isDetailOpen, setIsDetailOpen] = useState(false);
 
     const attemptTargets = siteTargets?.attempt_targets ?? [];
     const legacyErrorTarget = siteTargets?.legacy_error_target ?? null;
@@ -734,14 +639,20 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
 
     return (
         <TooltipProvider>
-            <MorphingDialog>
-                <MorphingDialogTrigger
-                    onClick={() => {
+            <MorphingDialog
+                disableLayoutAnimation
+                open={isDetailOpen}
+                onOpenChange={(open) => {
+                    setIsDetailOpen(open);
+                    if (open) {
                         if (!detailLog && !detailLoading) {
                             setDetailLoading(true);
                             setDetailRequestID((value) => value + 1);
                         }
-                    }}
+                    }
+                }}
+            >
+                <MorphingDialogTrigger
                     className={cn(
                         'rounded-3xl border bg-card w-full text-left',
                         hasError ? 'border-destructive/40' : 'border-border',
@@ -811,7 +722,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                     <ArrowDownToLine className={cn('size-3.5 shrink-0', hasCacheTokens(log) ? 'text-sky-500' : 'text-green-500')} />
                                     <span className="flex min-w-0 items-center gap-1 whitespace-nowrap">
                                         {t('input')}
-                                        <span className="tabular-nums">{getHeadlineInputTokens(log).toLocaleString()}</span>
+                                        <span className="tabular-nums">{formatCompactTokenCount(getHeadlineInputTokens(log))}</span>
                                         {hasCacheTokens(log) && log.cache_read_tokens != null && log.cache_read_tokens > 0 ? (
                                             <>
                                                 <Badge
@@ -839,13 +750,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                 </div>
                                 <div className="flex items-center gap-1.5">
                                     <ArrowUpFromLine className="size-3.5 shrink-0 text-purple-500" />
-                                    <span>{t('output')} {log.output_tokens.toLocaleString()}</span>
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                    <DollarSign className="size-3.5 shrink-0 text-emerald-500" />
-                                    <span className="font-medium text-emerald-600 dark:text-emerald-400">
-                                        {t('cost')} {Number(log.cost).toFixed(6)}
-                                    </span>
+                                    <span>{t('output')} {formatCompactTokenCount(log.output_tokens)}</span>
                                 </div>
                             </div>
                             {hasError ? (
@@ -893,7 +798,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                             <WSModeBadge log={log} />
                         </MorphingDialogTitle>
 
-                        <MorphingDialogDescription className="flex-1 min-h-0">
+                        <MorphingDialogDescription className="flex-1 min-h-0" disableLayoutAnimation>
                             <div className="flex flex-col min-h-0 h-full gap-4">
                                 {showDiagnosticPanel ? (
                                     <div
@@ -1081,11 +986,11 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                 <Send className="size-4 text-green-500" />
                                                 <span className="text-sm font-medium text-card-foreground">{t('requestContent')}</span>
                                                 <Badge variant="secondary" className="ml-auto text-xs">
-                                                    {getHeadlineInputTokens(displayLog).toLocaleString()} {t('tokens')}
+                                                    {formatCompactTokenCount(getHeadlineInputTokens(displayLog))} {t('tokens')}
                                                 </Badge>
                                             </div>
                                             <div className="flex-1 overflow-auto min-h-0">
-                                                <DeferredJsonContent content={displayLog.request_content} fallbackText={t('noRequestContent')} isLoading={detailLoading} />
+                                                <LogContent kind="request" content={displayLog.request_content} fallbackText={t('noRequestContent')} isLoading={detailLoading} />
                                             </div>
                                         </div>
                                         <div className="flex flex-col rounded-2xl border border-border bg-muted/30 overflow-hidden min-h-0">
@@ -1093,11 +998,11 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                 <MessageSquare className="size-4 text-purple-500" />
                                                 <span className="text-sm font-medium text-card-foreground">{t('responseContent')}</span>
                                                 <Badge variant="secondary" className="ml-auto text-xs">
-                                                    {displayLog.output_tokens.toLocaleString()} {t('tokens')}
+                                                    {formatCompactTokenCount(displayLog.output_tokens)} {t('tokens')}
                                                 </Badge>
                                             </div>
                                             <div className="flex-1 overflow-auto min-h-0">
-                                                <DeferredJsonContent content={displayLog.response_content} fallbackText={t('noResponseContent')} isLoading={detailLoading} />
+                                                <LogContent kind="response" content={displayLog.response_content} fallbackText={t('noResponseContent')} isLoading={detailLoading} />
                                             </div>
                                         </div>
                                     </div>
@@ -1122,12 +1027,6 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                 <Zap className={cn('size-3.5 text-amber-500', displayLog.processing && 'animate-pulse')} />
                                 <span>
                                     {t('duration')}: {durationPairText(displayLog.ftut, dialogLiveElapsedMs, displayLog.use_time)}
-                                </span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                                <DollarSign className="size-3.5 text-emerald-500" />
-                                <span className="font-medium text-emerald-600 dark:text-emerald-400">
-                                    {t('cost')}: {Number(log.cost).toFixed(6)}
                                 </span>
                             </div>
                         </div>

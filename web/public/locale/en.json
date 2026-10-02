@@ -28,11 +28,8 @@
         "requestCount": "Requests",
         "timeConsumed": "Time Consumed",
         "totalToken": "Tokens Used",
-        "totalCost": "Total Cost",
         "inputTokens": "Input Tokens",
-        "inputCost": "Input Cost",
         "outputTokens": "Output Tokens",
-        "outputCost": "Output Cost",
         "successRequests": "Successful",
         "failedRequests": "Failed",
         "quota": "Remaining Quota",
@@ -49,7 +46,6 @@
         "channel": "Channel",
         "group": "Group",
         "key": "Key",
-        "model": "Price",
         "log": "Log",
         "setting": "Setting"
     },
@@ -64,8 +60,6 @@
             "nameDesc": "Name Desc",
             "createdAsc": "Time Asc",
             "createdDesc": "Time Desc",
-            "balanceDesc": "Balance High to Low",
-            "balanceAsc": "Balance Low to High",
             "asc": "Asc",
             "desc": "Desc",
             "logRefresh": {
@@ -113,7 +107,6 @@
             "requestCount": "Requests",
             "waitTime": "Wait Time",
             "totalToken": "Tokens Used",
-            "totalCost": "Total Cost",
             "noData": "No Data"
         },
         "summary": {
@@ -124,10 +117,10 @@
                 "allTime": "All time"
             },
             "headline": {
-                "today": "Today's cost",
-                "last7Days": "Last 7 days",
-                "last30Days": "Last 30 days",
-                "allTime": "Total cost"
+                "today": "Today's Tokens",
+                "last7Days": "Tokens · Last 7 days",
+                "last30Days": "Tokens · Last 30 days",
+                "allTime": "Total Tokens"
             },
             "metrics": {
                 "requests": "Requests",
@@ -141,7 +134,7 @@
             },
             "clearStats": "Clear statistics",
             "clearStatsTitle": "Clear aggregated statistics?",
-            "clearStatsDescription": "This clears token, cost, request, and cache aggregates. Request logs and settings will be kept.",
+            "clearStatsDescription": "Clear all Token, request and cache statistics, including historical channel and model rankings. Request logs and configuration are kept.",
             "clearStatsContinue": "Continue",
             "clearStatsFinalTitle": "Confirm clearing statistics",
             "clearStatsFinalDescription": "This cannot be undone. New requests will start a fresh statistics baseline.",
@@ -152,7 +145,6 @@
         },
         "rank": {
             "title": "Ranking",
-            "sortByCost": "Cost",
             "sortByCount": "Count",
             "sortByTokens": "Tokens",
             "noData": "No ranking data",
@@ -210,30 +202,18 @@
         },
         "responsesWS": {
             "label": "OpenAI Responses WebSocket",
-            "description": "Opt-in upstream WebSocket for client WebSocket /v1/responses ingress. \"Enabled · Default off\" turns the capability on without using it by default (channels can opt in); Passthrough/Transform is the default mode unless overridden per channel.",
+            "description": "Enable upstream WebSocket for client WebSocket /v1/responses ingress. \"Enabled · Default off\" lets channels opt in individually. AxonHub handles the protocol in every mode.",
             "mode": {
                 "disabled": "Disabled",
                 "defaultOff": "Enabled · Default off",
-                "passthrough": "Enabled · Passthrough",
-                "transform": "Enabled · Transform"
+                "transform": "Enabled · Default on"
             }
         },
         "sseHeartbeat": {
             "label": "SSE Heartbeat Interval (seconds)",
-            "description": "Applies to both the in-stream heartbeat interval and the first heartbeat delay before the upstream stream is established; 0 disables. 30-60 seconds is recommended behind Cloudflare.",
-            "compatibility": "Some clients may mishandle SSE comments, so disable it if compatibility issues occur.",
-            "placeholder": "0 = disabled, recommend 30-60"
-        },
-        "webSearch": {
-            "enabled": {
-                "label": "Gateway Web Search",
-                "description": "When the upstream model only returns a web_search tool call, Octopus queries the external Bing search engine and replays the results to the model. Provider-native searches that already completed upstream do not use this flow."
-            },
-            "maxRounds": {
-                "label": "Maximum Search Replay Rounds",
-                "description": "Maximum external search and model replay cycles per client request. Exceeding it returns 502. Range: 1-100; higher values may increase latency, upstream requests, and cost.",
-                "placeholder": "1-100, default 10"
-            }
+            "description": "Default: 0 (off). Enable only if long waits cause idle connection drops. This controls both the first heartbeat delay and subsequent intervals to help keep the client connected; it does not speed up the model or extend upstream timeouts.",
+            "compatibility": "Sends SSE comments and may commit HTTP 200 early; subsequent failures are reported as stream errors. Set to 0 if your client is incompatible.",
+            "placeholder": "0 = off (default)"
         },
         "groupHealth": {
             "label": "Group Health Checks",
@@ -353,8 +333,6 @@
             },
             "form": {
                 "name": "Name",
-                "maxCost": "Max Cost",
-                "maxCostPlaceholder": "Enter amount",
                 "unlimited": "Unlimited",
                 "maxRPM": "Max RPM (Requests/Min)",
                 "maxRPMPlaceholder": "Enter limit",
@@ -377,8 +355,6 @@
                 "noData": "No statistics available",
                 "inputToken": "Input Token",
                 "outputToken": "Output Token",
-                "inputCost": "Input Cost",
-                "outputCost": "Output Cost",
                 "requestSuccess": "Request Success",
                 "requestFailed": "Request Failed"
             },
@@ -465,13 +441,6 @@
                 "pending": "Syncing...",
                 "success": "Channel synced successfully",
                 "failed": "Failed to sync channel"
-            },
-            "llmPrice": {
-                "label": "Model price update",
-                "button": "Update Now",
-                "pending": "Updating...",
-                "success": "Price updated successfully",
-                "failed": "Failed to update price"
             },
             "siteSync": {
                 "label": "Site full sync",
@@ -570,7 +539,7 @@
             "globalParamPlaceholder": "Leave empty for no override; must be a JSON object",
             "modelParamRules": "Model Param Override Rules",
             "mergeOrder": "Merge priority: body < global < rules < channel override (later wins).",
-            "scopeHint": "Scope: main HTTP path (standard protocol conversion and Anthropic/Responses passthrough). Image endpoints, /responses/compact, WebSocket and group health probes are not covered yet.",
+            "scopeHint": "Scope: main HTTP path (all protocol handling uses AxonHub). Image endpoints, /responses/compact, WebSocket and group health probes are not covered yet.",
             "save": "Save",
             "cancel": "Cancel",
             "saving": "Saving...",
@@ -776,41 +745,21 @@
             }
         }
     },
-    "model": {
-        "create": {
-            "title": "Create Model",
-            "name": "Model Name",
-            "input": "Input Price",
-            "output": "Output Price",
-            "cacheRead": "Cache Read",
-            "cacheWrite": "Cache Write",
-            "submit": "Create",
-            "submitting": "Creating..."
-        },
-        "toast": {
-            "updated": "Model price updated",
-            "updateFailed": "Update failed",
-            "deleted": "Model deleted",
-            "deleteFailed": "Delete failed"
-        },
-        "card": {
-            "inputCache": "Input/Cache",
-            "outputCache": "Output/Cache",
-            "edit": "Edit",
-            "delete": "Delete"
-        },
-        "overlay": {
-            "cancel": "Cancel",
-            "deleting": "Deleting...",
-            "confirmDelete": "Confirm Delete",
-            "input": "Input",
-            "output": "Output",
-            "cacheRead": "Cache Read",
-            "cacheWrite": "Cache Write",
-            "save": "Save"
-        }
-    },
     "log": {
+        "content": {
+            "previous": "Previous",
+            "next": "Next",
+            "page": "Page {current} / {total}",
+            "items": "{count} items",
+            "copyFull": "Copy full content",
+            "expandText": "Expand text",
+            "collapseText": "Collapse text",
+            "loading": "Loading…",
+            "latestInput": "Latest user input",
+            "latestOutput": "Last model output",
+            "details": "Full details",
+            "noText": "No conversation text to preview. Expand full details to view this record."
+        },
         "list": {
             "noMore": "No more logs"
         },
@@ -822,7 +771,6 @@
             "duration": "Latency",
             "input": "Input",
             "output": "Output",
-            "cost": "Cost",
             "requestContent": "Request Content",
             "responseContent": "Response Content",
             "noRequestContent": "(No request content)",
@@ -887,7 +835,6 @@
         },
         "card": {
             "requestCount": "Requests",
-            "totalCost": "Total Cost",
             "toast": {
                 "enabled": "Channel enabled",
                 "disabled": "Channel disabled"
@@ -901,7 +848,6 @@
             "sections": {
                 "requests": "Request Details",
                 "tokens": "Token Usage",
-                "costs": "Cost Details",
                 "baseUrls": "Base URLs",
                 "keys": "Keys"
             },
@@ -910,13 +856,10 @@
             "metrics": {
                 "totalRequests": "Total Requests",
                 "totalToken": "Total Tokens",
-                "totalCost": "Total Cost",
                 "successRequests": "Successful Requests",
                 "failedRequests": "Failed Requests",
                 "inputToken": "Input Tokens",
                 "outputToken": "Output Tokens",
-                "inputCost": "Input Cost",
-                "outputCost": "Output Cost",
                 "avgWaitTime": "Wait Time"
             },
             "actions": {
@@ -983,15 +926,14 @@
             "autoGroupRegex": "Regex",
             "wsMode": "Responses WS Mode",
             "wsModeInherit": "Inherit global",
-            "wsModePassthrough": "Passthrough",
-            "wsModeTransform": "Transform",
+            "wsModeTransform": "On",
             "wsModeOff": "Off",
             "matchRegex": "Sync Filter Regex",
             "matchRegexPlaceholder": "e.g. ^(gpt|claude)- , empty syncs everything",
             "matchRegexHint": "On auto sync or manual refresh, only upstream models matching this regex are kept; custom models are unaffected",
             "matchRegexInvalid": "Invalid regex",
             "roundRobin": "Round Robin",
-            "roundRobinHint": "When enabled, keys within this channel are rotated in round-robin order; otherwise the key with lowest total cost is preferred",
+            "roundRobinHint": "When enabled, keys rotate in order; otherwise the least recently used key is preferred.",
             "remark": "Remark"
         }
     },
@@ -1005,7 +947,6 @@
                 "totalRequests": "Requests",
                 "successRequests": "Success",
                 "failedRequests": "Failed",
-                "totalCost": "Cost",
                 "lastRequestAt": "Last used"
             }
         },
@@ -1060,7 +1001,6 @@
             "api_key_missing": "The API key is missing.",
             "password_incorrect": "The old password is incorrect.",
             "api_key_disabled": "The API key is disabled.",
-            "api_key_cost_exceeded": "The API key has reached the maximum cost limit.",
             "api_key_rate_limited": "The API key has exceeded the rate limit. Please wait and try again."
         },
         "site_channel": {
@@ -1087,8 +1027,6 @@
             "delete_failed": "Failed to delete the group."
         },
         "model": {
-            "price_update_failed": "Failed to update model prices.",
-            "price_delete_failed": "Failed to delete model prices.",
             "create_failed": "Failed to create the model.",
             "update_failed": "Failed to update the model.",
             "delete_failed": "Failed to delete the model."

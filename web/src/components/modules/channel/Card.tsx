@@ -4,7 +4,7 @@ import {
     MorphingDialogContainer,
     MorphingDialogContent,
 } from '@/components/ui/morphing-dialog';
-import { CheckCircle2, DollarSign, Key, Layers, MessageSquare, XCircle } from 'lucide-react';
+import { CheckCircle2, FileText, Key, Layers, MessageSquare, XCircle } from 'lucide-react';
 import { type StatsMetricsFormatted } from '@/api/endpoints/stats';
 import { type Channel, useEnableChannel } from '@/api/endpoints/channel';
 import { CardContent } from './CardContent';
@@ -117,12 +117,12 @@ export function Card({ channel, stats, layout = 'grid' }: { channel: Channel; st
                             </div>
                             <div className="rounded-2xl border border-border/70 bg-background/80 p-2">
                                 <dt className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                                    <DollarSign className="size-3.5 text-primary" />
-                                    {t('totalCost')}
+                                    <FileText className="size-3.5 text-primary" />
+                                    {tMetrics('totalToken')}
                                 </dt>
                                 <dd className="text-sm font-semibold">
-                                    {stats.total_cost.formatted.value}
-                                    <span className="ml-1 text-xs text-muted-foreground">{stats.total_cost.formatted.unit}</span>
+                                    {stats.total_token.formatted.value}
+                                    <span className="ml-1 text-xs text-muted-foreground">{stats.total_token.formatted.unit}</span>
                                 </dd>
                             </div>
                         </dl>
@@ -144,13 +144,13 @@ export function Card({ channel, stats, layout = 'grid' }: { channel: Channel; st
                             <div className="flex items-center justify-between rounded-2xl border border-border/70 bg-background/80 p-2">
                                 <div className="flex items-center gap-3">
                                     <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                                        <DollarSign className="h-5 w-5" />
+                                        <FileText className="h-5 w-5" />
                                     </span>
-                                    <dt className="text-sm text-muted-foreground">{t('totalCost')}</dt>
+                                    <dt className="text-sm text-muted-foreground">{tMetrics('totalToken')}</dt>
                                 </div>
                                 <dd className="text-base">
-                                    {stats.total_cost.formatted.value}
-                                    <span className="ml-1 text-xs text-muted-foreground">{stats.total_cost.formatted.unit}</span>
+                                    {stats.total_token.formatted.value}
+                                    <span className="ml-1 text-xs text-muted-foreground">{stats.total_token.formatted.unit}</span>
                                 </dd>
                             </div>
                         </dl>

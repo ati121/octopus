@@ -62,8 +62,8 @@ func migrateChannelKeyToChannelKeys(db *gorm.DB) error {
 		colRef := "c." + quoted.String()
 
 		insertSQL := fmt.Sprintf(`
-INSERT INTO channel_keys (channel_id, channel_key, status_code, last_use_time_stamp, total_cost)
-SELECT c.id, %s, 0, 0, 0
+INSERT INTO channel_keys (channel_id, channel_key, status_code, last_use_time_stamp)
+SELECT c.id, %s, 0, 0
 FROM channels c
 WHERE %s IS NOT NULL AND TRIM(%s) != ''
   AND NOT EXISTS (SELECT 1 FROM channel_keys k WHERE k.channel_id = c.id)

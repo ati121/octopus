@@ -3,7 +3,7 @@ package relay
 import (
 	"testing"
 
-	openaiInbound "github.com/bestruirui/octopus/internal/transformer/inbound/openai"
+	"github.com/bestruirui/octopus/internal/transformer/inbound"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 )
 
@@ -51,7 +51,7 @@ func TestChatStreamResponseCompleted(t *testing.T) {
 }
 
 func TestInboundStreamTerminalEventsForOpenAIResponses(t *testing.T) {
-	events := inboundStreamTerminalEvents(&openaiInbound.ResponseInbound{})
+	events := inboundStreamTerminalEvents(inbound.Get(inbound.InboundTypeOpenAIResponse))
 	for _, eventType := range []string{"response.completed", "response.incomplete", "response.failed"} {
 		if _, ok := events[eventType]; !ok {
 			t.Fatalf("missing Responses terminal event %q", eventType)

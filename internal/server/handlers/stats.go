@@ -38,6 +38,10 @@ func init() {
 				Handle(getStatsModel),
 		).
 		AddRoute(
+			router.NewRoute("/channel", http.MethodGet).
+				Handle(func(c *gin.Context) { resp.Success(c, op.StatsChannelList()) }),
+		).
+		AddRoute(
 			router.NewRoute("/clear", http.MethodDelete).
 				Handle(clearStats),
 		)

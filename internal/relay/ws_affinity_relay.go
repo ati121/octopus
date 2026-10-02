@@ -8,6 +8,7 @@ import (
 )
 
 func (ra *relayAttempt) recordSuccessfulWSAffinity(pc *pooledConn) {
+	ra.collectResponse()
 	if ra == nil || ra.metrics == nil || ra.metrics.InternalResponse == nil || pc == nil {
 		return
 	}

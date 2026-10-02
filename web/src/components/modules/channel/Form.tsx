@@ -22,7 +22,6 @@ export interface ChannelKeyFormItem {
     channel_key: string;
     status_code?: number;
     last_use_time_stamp?: number;
-    total_cost?: number;
     remark?: string;
 }
 
@@ -556,7 +555,7 @@ export function ChannelForm({
                                         {t('wsMode')}
                                     </label>
                                     <Select
-                                        value={formData.ws_mode ?? 'inherit'}
+                                        value={formData.ws_mode === 'passthrough' ? 'transform' : (formData.ws_mode ?? 'inherit')}
                                         onValueChange={(value) => onFormDataChange({ ...formData, ws_mode: value as ChannelWSMode })}
                                     >
                                         <SelectTrigger id={`${idPrefix}-ws-mode`} className="rounded-xl w-full border border-border px-4 py-2 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -564,7 +563,6 @@ export function ChannelForm({
                                         </SelectTrigger>
                                         <SelectContent className='rounded-xl'>
                                             <SelectItem className='rounded-xl' value="inherit">{t('wsModeInherit')}</SelectItem>
-                                            <SelectItem className='rounded-xl' value="passthrough">{t('wsModePassthrough')}</SelectItem>
                                             <SelectItem className='rounded-xl' value="transform">{t('wsModeTransform')}</SelectItem>
                                             <SelectItem className='rounded-xl' value="off">{t('wsModeOff')}</SelectItem>
                                         </SelectContent>

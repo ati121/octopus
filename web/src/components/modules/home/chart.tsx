@@ -5,7 +5,7 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/
 import { useMemo, useState } from 'react';
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 import { useTranslations } from 'next-intl';
-import { formatCount, formatMoney, formatTime } from '@/lib/utils';
+import { formatCount, formatTokens, formatTime } from '@/lib/utils';
 import dayjs from 'dayjs';
 import { AnimatedNumber } from '@/components/common/AnimatedNumber';
 import { Tabs, TabsList, TabsTrigger } from '@/components/animate-ui/components/animate/tabs';
@@ -41,7 +41,7 @@ type HeroValue = {
     unit: string;
 };
 
-type ChartPoint = { date: string; total_cost: number };
+type ChartPoint = { date: string; total_token: number };
 
 const PERIOD_KEY: Record<ChartPeriod, 'today' | 'last7Days' | 'last30Days' | 'allTime'> = {
     '1': 'today',
@@ -59,11 +59,11 @@ function buildMetrics(
 ): MetricsRow {
     return {
         requests: formatCount(requests).formatted,
-        inputTokens: formatCount(inputTokens).formatted,
-        outputTokens: formatCount(outputTokens).formatted,
-        cacheReadTokens: formatCount(cacheReadTokens).formatted,
+        inputTokens: formatTokens(inputTokens).formatted,
+        outputTokens: formatTokens(outputTokens).formatted,
+        cacheReadTokens: formatTokens(cacheReadTokens).formatted,
         cacheHitRate: formatCacheHitRate(inputTokens, cacheReadTokens).formatted,
-        totalTokens: formatCount(inputTokens + outputTokens).formatted,
+        totalTokens: formatTokens(inputTokens + outputTokens).formatted,
         waitTime: formatTime(waitTime).formatted,
     };
 }
@@ -98,14 +98,14 @@ export function StatsChart() {
             // 累计档：优先使用 statsTotal；否则 fallback 到 statsDaily 全量聚合
             const points: ChartPoint[] = sortedDaily.map((stat) => ({
                 date: dayjs(stat.date).format('MM/DD'),
-                total_cost: stat.total_cost.raw,
+                total_token: stat.total_token.raw,
             }));
 
             if (statsTotal) {
                 return {
                     hero: {
-                        value: statsTotal.total_cost.formatted.value,
-                        unit: statsTotal.total_cost.formatted.unit,
+                        value: statsTotal.total_token.formatted.value,
+                        unit: statsTotal.total_token.formatted.unit,
                     },
                     metrics: buildMetrics(
                         statsTotal.request_count.raw,
@@ -122,15 +122,15 @@ export function StatsChart() {
                 return { hero: emptyHero, metrics: emptyMetrics, chartData: [] };
             }
 
-            const cost = sortedDaily.reduce((acc, s) => acc + s.total_cost.raw, 0);
+            const total_token = sortedDaily.reduce((acc, s) => acc + s.total_token.raw, 0);
             const requests = sortedDaily.reduce((acc, s) => acc + s.request_count.raw, 0);
             const inputTokens = sortedDaily.reduce((acc, s) => acc + s.input_token.raw, 0);
             const outputTokens = sortedDaily.reduce((acc, s) => acc + s.output_token.raw, 0);
             const cacheReadTokens = sortedDaily.reduce((acc, s) => acc + s.cache_read_token.raw, 0);
             const wait = sortedDaily.reduce((acc, s) => acc + s.wait_time.raw, 0);
-            const costFmt = formatMoney(cost).formatted;
+            const tokenFmt = formatTokens(total_token).formatted;
             return {
-                hero: { value: costFmt.value, unit: costFmt.unit },
+                hero: { value: tokenFmt.value, unit: tokenFmt.unit },
                 metrics: buildMetrics(requests, inputTokens, outputTokens, cacheReadTokens, wait),
                 chartData: points,
             };
@@ -143,17 +143,17 @@ export function StatsChart() {
             }
             const points: ChartPoint[] = statsHourly.map((stat) => ({
                 date: `${stat.hour}:00`,
-                total_cost: stat.total_cost.raw,
+                total_token: stat.total_token.raw,
             }));
-            const cost = statsHourly.reduce((acc, s) => acc + s.total_cost.raw, 0);
+            const total_token = statsHourly.reduce((acc, s) => acc + s.total_token.raw, 0);
             const requests = statsHourly.reduce((acc, s) => acc + s.request_count.raw, 0);
             const inputTokens = statsHourly.reduce((acc, s) => acc + s.input_token.raw, 0);
             const outputTokens = statsHourly.reduce((acc, s) => acc + s.output_token.raw, 0);
             const cacheReadTokens = statsHourly.reduce((acc, s) => acc + s.cache_read_token.raw, 0);
             const wait = statsHourly.reduce((acc, s) => acc + s.wait_time.raw, 0);
-            const costFmt = formatMoney(cost).formatted;
+            const tokenFmt = formatTokens(total_token).formatted;
             return {
-                hero: { value: costFmt.value, unit: costFmt.unit },
+                hero: { value: tokenFmt.value, unit: tokenFmt.unit },
                 metrics: buildMetrics(requests, inputTokens, outputTokens, cacheReadTokens, wait),
                 chartData: points,
             };
@@ -164,22 +164,22 @@ export function StatsChart() {
         const recent = sortedDaily.slice(-days);
         const points: ChartPoint[] = recent.map((stat) => ({
             date: dayjs(stat.date).format('MM/DD'),
-            total_cost: stat.total_cost.raw,
+            total_token: stat.total_token.raw,
         }));
 
         if (recent.length === 0) {
             return { hero: emptyHero, metrics: emptyMetrics, chartData: [] };
         }
 
-        const cost = recent.reduce((acc, s) => acc + s.total_cost.raw, 0);
+        const total_token = recent.reduce((acc, s) => acc + s.total_token.raw, 0);
         const requests = recent.reduce((acc, s) => acc + s.request_count.raw, 0);
         const inputTokens = recent.reduce((acc, s) => acc + s.input_token.raw, 0);
         const outputTokens = recent.reduce((acc, s) => acc + s.output_token.raw, 0);
         const cacheReadTokens = recent.reduce((acc, s) => acc + s.cache_read_token.raw, 0);
         const wait = recent.reduce((acc, s) => acc + s.wait_time.raw, 0);
-        const costFmt = formatMoney(cost).formatted;
+        const tokenFmt = formatTokens(total_token).formatted;
         return {
-            hero: { value: costFmt.value, unit: costFmt.unit },
+            hero: { value: tokenFmt.value, unit: tokenFmt.unit },
             metrics: buildMetrics(requests, inputTokens, outputTokens, cacheReadTokens, wait),
             chartData: points,
         };
@@ -187,19 +187,12 @@ export function StatsChart() {
 
     const chartConfig = useMemo(
         () => ({
-            total_cost: { label: t('headline.allTime') },
+            total_token: { label: t('headline.allTime') },
         }),
         [t]
     );
 
-    // hero unit 处理：formatMoney 返回 unit 形如 '$' / 'K$' / 'M$' / 'B$'
-    // 展示时 $ 前置、其余单位（K/M/B）后置。
-    const heroUnitSuffix = useMemo(() => {
-        if (!hero.unit) return '';
-        // 去掉结尾 $ 留下数量级字符
-        if (hero.unit === '$') return '';
-        return hero.unit.replace(/\$$/, '');
-    }, [hero.unit]);
+    const heroUnitSuffix = hero.unit;
 
     return (
         <section className="rounded-3xl bg-card border-card-border border text-card-foreground custom-shadow">
@@ -212,8 +205,7 @@ export function StatsChart() {
                             <span className="text-muted-foreground">—</span>
                         ) : (
                             <>
-                                <span className="text-muted-foreground text-2xl mr-1">$</span>
-                                <AnimatedNumber value={hero.value} />
+                                <AnimatedNumber key={hero.unit} value={hero.value} />
                                 {heroUnitSuffix && (
                                     <span className="ml-1 text-xl text-muted-foreground">{heroUnitSuffix}</span>
                                 )}
@@ -255,11 +247,11 @@ export function StatsChart() {
                 <StatItem label={t('metrics.waitTime')} value={metrics.waitTime} />
             </div>
 
-            {/* Area chart — only total_cost */}
+            {/* Area chart — only total_token */}
             <ChartContainer config={chartConfig} className="h-40 w-full">
                 <AreaChart accessibilityLayer data={chartData}>
                     <defs>
-                        <linearGradient id="fillCost" x1="0" y1="0" x2="0" y2="1">
+                        <linearGradient id="total_token" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="var(--chart-1)" stopOpacity={0.35} />
                             <stop offset="95%" stopColor="var(--chart-1)" stopOpacity={0.05} />
                         </linearGradient>
@@ -270,16 +262,19 @@ export function StatsChart() {
                         tickLine={false}
                         axisLine={false}
                         tickFormatter={(value) => {
-                            const formatted = formatMoney(value);
+                            const formatted = formatTokens(value);
                             return `${formatted.formatted.value}${formatted.formatted.unit}`;
                         }}
                     />
-                    <ChartTooltip cursor={false} content={<ChartTooltipContent indicator="line" />} />
+                    <ChartTooltip cursor={false} content={<ChartTooltipContent indicator="line" formatter={(value) => {
+                        const token = formatTokens(Number(value)).formatted;
+                        return `${t('metrics.totalTokens')}: ${token.value}${token.unit}`;
+                    }} />} />
                     <Area
                         type="monotone"
-                        dataKey="total_cost"
+                        dataKey="total_token"
                         stroke="var(--chart-1)"
-                        fill="url(#fillCost)"
+                        fill="url(#total_token)"
                     />
                 </AreaChart>
             </ChartContainer>
@@ -337,7 +332,7 @@ function StatItem({ label, value }: { label: string; value: Formatted | undefine
             <span className="font-medium">
                 {value ? (
                     <>
-                        <AnimatedNumber value={value.value} />
+                        <AnimatedNumber key={value.unit} value={value.value} />
                         {value.unit && (
                             <span className="ml-0.5 text-xs text-muted-foreground">{value.unit}</span>
                         )}

@@ -18,7 +18,6 @@ import {
     CirclePause,
     CircleOff,
     Clock,
-    DollarSign,
     Eye,
     EyeOff,
     ExternalLink,
@@ -74,7 +73,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/h
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/animate-ui/components/animate/tooltip';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/components/common/Toast';
-import { cn, formatCount, formatMoney } from '@/lib/utils';
+import { cn, formatCount } from '@/lib/utils';
 import { getModelIcon } from '@/lib/model-icons';
 import type { ToolbarSortField, ToolbarSortOrder } from '@/components/modules/toolbar/view-options-store';
 import { useSettingStore } from '@/stores/setting';
@@ -559,7 +558,6 @@ function collectSiteSummary(card: SiteChannelCard) {
 function collectSiteRuntimeSummary(card: SiteChannelCard) {
     let successCount = 0;
     let failureCount = 0;
-    let totalCost = 0;
     let lastRequestAt: number | null = null;
     let maskedPendingKeys = 0;
 
@@ -567,7 +565,6 @@ function collectSiteRuntimeSummary(card: SiteChannelCard) {
         for (const group of account.groups) {
             maskedPendingKeys += group.masked_pending_key_count;
             for (const key of group.projected_keys) {
-                totalCost += key.total_cost;
                 if (key.last_use_time_stamp > 0) {
                     lastRequestAt = Math.max(lastRequestAt ?? 0, key.last_use_time_stamp);
                 }
@@ -588,7 +585,6 @@ function collectSiteRuntimeSummary(card: SiteChannelCard) {
         totalRequests: successCount + failureCount,
         successCount,
         failureCount,
-        totalCost,
         lastRequestAt,
         maskedPendingKeys,
     };
@@ -3124,7 +3120,6 @@ function SiteCardImpl({
     const totalRequestsFmt = formatCount(runtime.totalRequests).formatted;
     const successFmt = formatCount(runtime.successCount).formatted;
     const failureFmt = formatCount(runtime.failureCount).formatted;
-    const costFmt = formatMoney(runtime.totalCost).formatted;
 
     // Stable navigation callbacks. Building these inside SiteCard (rather than
     // inside SiteChannelGrid.renderCard) keeps SiteCard's prop identity stable
@@ -3217,18 +3212,6 @@ function SiteCardImpl({
                                     {failureFmt.value}
                                     {failureFmt.unit && (
                                         <span className="ml-1 text-xs font-normal text-muted-foreground">{failureFmt.unit}</span>
-                                    )}
-                                </dd>
-                            </div>
-                            <div className="rounded-2xl border border-border/70 bg-background/80 p-2">
-                                <dt className="mb-1 flex items-center gap-1 text-xs text-muted-foreground">
-                                    <DollarSign className="size-3.5 text-primary" />
-                                    {tMetrics('totalCost')}
-                                </dt>
-                                <dd className="text-sm font-semibold tabular-nums">
-                                    {costFmt.value}
-                                    {costFmt.unit && (
-                                        <span className="ml-1 text-xs font-normal text-muted-foreground">{costFmt.unit}</span>
                                     )}
                                 </dd>
                             </div>

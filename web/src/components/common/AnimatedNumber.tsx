@@ -40,8 +40,7 @@ export function AnimatedNumber({ value, duration = 800 }: AnimatedNumberProps) {
         return <span>-</span>;
     }
 
-    const shouldShowDecimals = typeof value === 'string' && value.includes('.');
-    const decimalPlaces = shouldShowDecimals ? 2 : 0;
+    const decimalPlaces = typeof value === 'string' ? Math.min(6, value.split('.')[1]?.length ?? 0) : 0;
 
     const formattedValue = displayValue.toLocaleString('en-US', {
         minimumFractionDigits: decimalPlaces,

@@ -29,7 +29,6 @@ func TestMigrateGroupHealthTables(t *testing.T) {
 		&model.SiteChannelBinding{},
 		&model.Group{},
 		&model.GroupItem{},
-		&model.LLMInfo{},
 		&model.APIKey{},
 		&model.Setting{},
 		&model.StatsTotal{},

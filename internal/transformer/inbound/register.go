@@ -1,10 +1,7 @@
 package inbound
 
 import (
-	"github.com/bestruirui/octopus/internal/transformer/inbound/anthropic"
-	"github.com/bestruirui/octopus/internal/transformer/inbound/openai"
-	"github.com/bestruirui/octopus/internal/transformer/inbound/rerank"
-	"github.com/bestruirui/octopus/internal/transformer/inbound/systemone"
+	"github.com/bestruirui/octopus/internal/transformer/axon"
 	"github.com/bestruirui/octopus/internal/transformer/model"
 )
 
@@ -20,12 +17,12 @@ const (
 )
 
 var inboundFactories = map[InboundType]func() model.Inbound{
-	InboundTypeOpenAIChat:      func() model.Inbound { return &openai.ChatInbound{} },
-	InboundTypeOpenAIResponse:  func() model.Inbound { return &openai.ResponseInbound{} },
-	InboundTypeOpenAIEmbedding: func() model.Inbound { return &openai.EmbeddingInbound{} },
-	InboundTypeAnthropic:       func() model.Inbound { return &anthropic.MessagesInbound{} },
-	InboundTypeRerank:          func() model.Inbound { return &rerank.Inbound{} },
-	InboundTypeSystemOne:       func() model.Inbound { return &systemone.Inbound{} },
+	InboundTypeOpenAIChat:      func() model.Inbound { return axon.NewInbound(0) },
+	InboundTypeOpenAIResponse:  func() model.Inbound { return axon.NewInbound(1) },
+	InboundTypeOpenAIEmbedding: func() model.Inbound { return axon.NewInbound(3) },
+	InboundTypeAnthropic:       func() model.Inbound { return axon.NewInbound(2) },
+	InboundTypeRerank:          func() model.Inbound { return axon.NewInbound(4) },
+	InboundTypeSystemOne:       func() model.Inbound { return axon.NewInbound(5) },
 }
 
 func Get(inboundType InboundType) model.Inbound {

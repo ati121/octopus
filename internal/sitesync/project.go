@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/bestruirui/octopus/internal/db"
-	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
@@ -87,9 +86,6 @@ func ProjectAccount(ctx context.Context, accountID int) ([]int, error) {
 	}
 	for groupKey, items := range modelsByGroup {
 		modelsByGroup[groupKey] = compactSiteModels(items)
-	}
-	if err := syncProjectedModelPrices(ctx, modelsByGroup); err != nil {
-		log.Warnf("failed to sync projected model prices (account=%d): %v", account.ID, err)
 	}
 
 	existingBindings, err := listChannelBindingsByAccount(ctx, account.ID)
@@ -508,28 +504,6 @@ func diffManagedChannelKeys(existingKeys []model.ChannelKey, desiredKeys []model
 		deletes = append(deletes, existing.ID)
 	}
 	return adds, updates, deletes
-}
-
-func syncProjectedModelPrices(ctx context.Context, modelsByGroup map[string][]model.SiteModel) error {
-	modelNames := make([]string, 0)
-	seen := make(map[string]struct{})
-	for _, groupModels := range modelsByGroup {
-		for _, item := range groupModels {
-			modelName := strings.TrimSpace(item.ModelName)
-			if modelName == "" {
-				continue
-			}
-			if _, ok := seen[modelName]; ok {
-				continue
-			}
-			seen[modelName] = struct{}{}
-			modelNames = append(modelNames, modelName)
-		}
-	}
-	if len(modelNames) == 0 {
-		return nil
-	}
-	return helper.LLMPriceAddToDB(modelNames, ctx)
 }
 
 func platformOutboundType(site *model.Site) outbound.OutboundType {

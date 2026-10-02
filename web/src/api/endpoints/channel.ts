@@ -1,8 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../client';
 import { logger } from '@/lib/logger';
-import { formatCount, formatMoney, formatTime } from '@/lib/utils';
-import { formatCacheHitRate, StatsChannel, type StatsMetricsFormatted } from './stats';
+import { formatStatsMetrics, StatsChannel, type StatsMetricsFormatted } from './stats';
 import type { ProxyMode } from './proxy-pool';
 /**
  * 渠道类型枚举
@@ -70,7 +69,6 @@ export type ChannelKey = {
     channel_key: string;
     status_code: number;
     last_use_time_stamp: number;
-    total_cost: number;
     remark: string;
 };
 
@@ -216,20 +214,7 @@ export function useChannelList() {
                 proxy_url: item.proxy_url ?? '',
                 skip_health_probe: item.skip_health_probe ?? false,
             }) satisfies Channel,
-            formatted: {
-                input_token: formatCount(item.stats.input_token),
-                output_token: formatCount(item.stats.output_token),
-                cache_read_token: formatCount(item.stats.cache_read_token),
-                cache_hit_rate: formatCacheHitRate(item.stats.input_token, item.stats.cache_read_token),
-                total_token: formatCount(item.stats.input_token + item.stats.output_token),
-                input_cost: formatMoney(item.stats.input_cost),
-                output_cost: formatMoney(item.stats.output_cost),
-                total_cost: formatMoney(item.stats.input_cost + item.stats.output_cost),
-                request_success: formatCount(item.stats.request_success),
-                request_failed: formatCount(item.stats.request_failed),
-                request_count: formatCount(item.stats.request_success + item.stats.request_failed),
-                wait_time: formatTime(item.stats.wait_time),
-            }
+            formatted: formatStatsMetrics(item.stats),
         })) as Array<{ raw: Channel; formatted: StatsMetricsFormatted }>,
         refetchInterval: 30000,
     });

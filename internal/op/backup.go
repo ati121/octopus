@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -83,9 +84,6 @@ func DBExportAll(ctx context.Context, includeLogs, includeStats bool) (*model.DB
 	}
 	if err := conn.Find(&d.GroupItems).Error; err != nil {
 		return nil, fmt.Errorf("export group_items: %w", err)
-	}
-	if err := conn.Find(&d.LLMInfos).Error; err != nil {
-		return nil, fmt.Errorf("export llm_infos: %w", err)
 	}
 	if err := conn.Find(&d.APIKeys).Error; err != nil {
 		return nil, fmt.Errorf("export api_keys: %w", err)
@@ -452,13 +450,6 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			res.RowsAffected["group_items"]++
 		}
 
-		// 12. LLMInfos (upsert by name - unchanged)
-		if n, err := createUpsertAll(tx, dump.LLMInfos, []clause.Column{{Name: "name"}}); err != nil {
-			return fmt.Errorf("import llm_infos: %w", err)
-		} else {
-			res.RowsAffected["llm_infos"] = n
-		}
-
 		// 13. APIKeys (dedup by api_key field)
 		for i := range dump.APIKeys {
 			key := dump.APIKeys[i]
@@ -504,16 +495,11 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 				res.RowsAffected["stats_hourly"] = n
 			}
 
-			// StatsModel: remap ChannelID, clear ID. Skip orphaned rows whose channel
-			// is not present in the dump, otherwise SQLite foreign keys can fail.
+			// 模型榜按名称累计，与渠道是否仍存在无关。
 			filteredStatsModel := make([]model.StatsModel, 0, len(dump.StatsModel))
 			for _, row := range dump.StatsModel {
-				newID, ok := channelIDMap[row.ChannelID]
-				if !ok {
-					continue
-				}
-				row.ID = 0
-				row.ChannelID = newID
+				row.ID = statsModelNameID(row.Name)
+				row.ChannelID = channelIDMap[row.ChannelID]
 				filteredStatsModel = append(filteredStatsModel, row)
 			}
 			if n, err := createDoNothing(tx, filteredStatsModel); err != nil {
@@ -522,13 +508,32 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 				res.RowsAffected["stats_model"] = n
 			}
 
-			// StatsChannel: remap ChannelID (which is the PK). Skip orphaned rows whose
-			// channel is not present in the dump, otherwise SQLite foreign keys can fail.
+			// 已删除渠道使用负数本地主键，避免与未来新建渠道混用；HistoryID 保证重复导入幂等。
 			filteredStatsChannel := make([]model.StatsChannel, 0, len(dump.StatsChannel))
 			for _, row := range dump.StatsChannel {
 				newID, ok := channelIDMap[row.ChannelID]
 				if !ok {
-					continue
+					if row.HistoryID == "" {
+						row.HistoryID = fmt.Sprintf("legacy:%d:%s", row.ChannelID, row.Name)
+					}
+					var existing model.StatsChannel
+					err := tx.Where("history_id = ?", row.HistoryID).First(&existing).Error
+					if err == nil {
+						newID = existing.ChannelID
+					} else if errors.Is(err, gorm.ErrRecordNotFound) {
+						var lowest int
+						if err := tx.Model(&model.StatsChannel{}).Select("COALESCE(MIN(channel_id), 0)").Scan(&lowest).Error; err != nil {
+							return err
+						}
+						newID = min(lowest, 0) - 1
+						for _, pending := range filteredStatsChannel {
+							if pending.ChannelID <= newID {
+								newID = pending.ChannelID - 1
+							}
+						}
+					} else {
+						return err
+					}
 				}
 				row.ChannelID = newID
 				filteredStatsChannel = append(filteredStatsChannel, row)
@@ -768,6 +773,14 @@ func createUpsertAll[T any](tx *gorm.DB, rows []T, columns []clause.Column) (int
 }
 
 func createUpsertSettings(tx *gorm.DB, rows []model.Setting) (int64, error) {
+	// 旧备份不能重新引入已移除的网关搜索设置，且不能原地修改调用方的备份。
+	activeRows := make([]model.Setting, 0, len(rows))
+	for _, row := range rows {
+		if !slices.Contains(removedGatewaySearchSettingKeys, row.Key) {
+			activeRows = append(activeRows, row)
+		}
+	}
+	rows = activeRows
 	if len(rows) == 0 {
 		return 0, nil
 	}
@@ -836,9 +849,6 @@ func DBExportZip(ctx context.Context, w io.Writer, includeLogs, includeStats boo
 		return err
 	}
 	if err := writeZipTable(ctx, zw, conn, "group_items.json", &[]model.GroupItem{}); err != nil {
-		return err
-	}
-	if err := writeZipTable(ctx, zw, conn, "llm_infos.json", &[]model.LLMInfo{}); err != nil {
 		return err
 	}
 	if err := writeZipTable(ctx, zw, conn, "api_keys.json", &[]model.APIKey{}); err != nil {

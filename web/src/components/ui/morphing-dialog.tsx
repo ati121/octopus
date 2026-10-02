@@ -36,6 +36,7 @@ export type MorphingDialogContextType = {
   setIsOpen: React.Dispatch<React.SetStateAction<boolean>>;
   uniqueId: string;
   triggerRef: React.RefObject<HTMLDivElement | null>;
+  disableLayoutAnimation: boolean;
 };
 
 const MorphingDialogContext =
@@ -56,6 +57,7 @@ export type MorphingDialogProviderProps = {
   transition?: Transition;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  disableLayoutAnimation?: boolean;
 };
 
 function MorphingDialogProvider({
@@ -63,6 +65,7 @@ function MorphingDialogProvider({
   transition,
   open: controlledOpen,
   onOpenChange,
+  disableLayoutAnimation = false,
 }: MorphingDialogProviderProps) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isControlled = controlledOpen !== undefined;
@@ -95,8 +98,9 @@ function MorphingDialogProvider({
       setIsOpen,
       uniqueId,
       triggerRef,
+      disableLayoutAnimation,
     }),
-    [isOpen, setIsOpen, uniqueId]
+    [isOpen, setIsOpen, uniqueId, disableLayoutAnimation]
   );
 
   return (
@@ -111,11 +115,13 @@ export type MorphingDialogProps = {
   transition?: Transition;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** 大正文弹窗停用共享布局测量和背景模糊，避免展开正文时反复重绘。 */
+  disableLayoutAnimation?: boolean;
 };
 
-function MorphingDialog({ children, transition, open, onOpenChange }: MorphingDialogProps) {
+function MorphingDialog({ children, transition, open, onOpenChange, disableLayoutAnimation }: MorphingDialogProps) {
   return (
-    <MorphingDialogProvider transition={transition} open={open} onOpenChange={onOpenChange}>
+    <MorphingDialogProvider transition={transition} open={open} onOpenChange={onOpenChange} disableLayoutAnimation={disableLayoutAnimation}>
       {children}
     </MorphingDialogProvider>
   );
@@ -138,7 +144,7 @@ function MorphingDialogTrigger({
   onClick,
   'aria-label': ariaLabel,
 }: MorphingDialogTriggerProps) {
-  const { setIsOpen, isOpen, uniqueId, triggerRef } = useMorphingDialog();
+  const { setIsOpen, isOpen, uniqueId, triggerRef, disableLayoutAnimation } = useMorphingDialog();
 
   const handleClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -179,7 +185,7 @@ function MorphingDialogTrigger({
   return (
     <motion.div
       ref={triggerRefProp ?? triggerRef}
-      layoutId={`dialog-${uniqueId}`}
+      layoutId={disableLayoutAnimation ? undefined : `dialog-${uniqueId}`}
       className={cn('relative cursor-pointer', className)}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
@@ -207,7 +213,7 @@ function MorphingDialogContent({
   className,
   style,
 }: MorphingDialogContentProps) {
-  const { setIsOpen, isOpen, uniqueId, triggerRef } = useMorphingDialog();
+  const { setIsOpen, isOpen, uniqueId, triggerRef, disableLayoutAnimation } = useMorphingDialog();
   const containerRef = useRef<HTMLDivElement>(null!);
   const firstFocusableElementRef = useRef<HTMLElement | null>(null);
   const lastFocusableElementRef = useRef<HTMLElement | null>(null);
@@ -296,7 +302,7 @@ function MorphingDialogContent({
   return (
     <motion.div
       ref={containerRef}
-      layoutId={`dialog-${uniqueId}`}
+      layoutId={disableLayoutAnimation ? undefined : `dialog-${uniqueId}`}
       className={cn('overflow-hidden', className)}
       style={style}
       role='dialog'
@@ -316,7 +322,7 @@ export type MorphingDialogContainerProps = {
 };
 
 function MorphingDialogContainer({ children }: MorphingDialogContainerProps) {
-  const { isOpen, uniqueId } = useMorphingDialog();
+  const { isOpen, uniqueId, disableLayoutAnimation } = useMorphingDialog();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -336,7 +342,7 @@ function MorphingDialogContainer({ children }: MorphingDialogContainerProps) {
         <>
           <motion.div
             key={`backdrop-${uniqueId}`}
-            className='fixed inset-0 h-full w-full bg-white/40 backdrop-blur-xs dark:bg-black/40 z-50'
+            className={cn('fixed inset-0 h-full w-full bg-white/40 dark:bg-black/40 z-50', !disableLayoutAnimation && 'backdrop-blur-xs')}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -362,14 +368,14 @@ function MorphingDialogTitle({
   className,
   style,
 }: MorphingDialogTitleProps) {
-  const { uniqueId } = useMorphingDialog();
+  const { uniqueId, disableLayoutAnimation } = useMorphingDialog();
 
   return (
     <motion.div
-      layoutId={`dialog-title-container-${uniqueId}`}
+      layoutId={disableLayoutAnimation ? undefined : `dialog-title-container-${uniqueId}`}
       className={className}
       style={style}
-      layout
+      layout={!disableLayoutAnimation}
     >
       {children}
     </motion.div>

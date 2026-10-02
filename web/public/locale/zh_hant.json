@@ -28,11 +28,8 @@
         "requestCount": "請求次數",
         "timeConsumed": "消耗時間",
         "totalToken": "消耗 Token",
-        "totalCost": "消耗費用",
         "inputTokens": "輸入 Tokens",
-        "inputCost": "輸入費用",
         "outputTokens": "輸出 Tokens",
-        "outputCost": "輸出費用",
         "successRequests": "成功請求",
         "failedRequests": "失敗請求",
         "quota": "剩餘額度",
@@ -49,7 +46,6 @@
         "channel": "供應源",
         "group": "分組",
         "key": "金鑰",
-        "model": "價格",
         "log": "日誌",
         "setting": "設定"
     },
@@ -64,8 +60,6 @@
             "nameDesc": "名稱倒序",
             "createdAsc": "時間正序",
             "createdDesc": "時間倒序",
-            "balanceDesc": "餘額高到低",
-            "balanceAsc": "餘額低到高",
             "asc": "升序",
             "desc": "降序",
             "logRefresh": {
@@ -113,7 +107,6 @@
             "requestCount": "請求次數",
             "waitTime": "等待時間",
             "totalToken": "消耗 Token",
-            "totalCost": "消耗費用",
             "noData": "無數據"
         },
         "summary": {
@@ -124,10 +117,10 @@
                 "allTime": "累計"
             },
             "headline": {
-                "today": "今日花費",
-                "last7Days": "近 7 天花費",
-                "last30Days": "近 30 天花費",
-                "allTime": "累計總花費"
+                "today": "今日 Token 走勢",
+                "last7Days": "近 7 天 Token 走勢",
+                "last30Days": "近 30 天 Token 走勢",
+                "allTime": "累計 Token 走勢"
             },
             "metrics": {
                 "requests": "請求",
@@ -141,7 +134,7 @@
             },
             "clearStats": "清空統計",
             "clearStatsTitle": "清空統計資料？",
-            "clearStatsDescription": "將清空 Token、費用、請求和快取聚合統計，但會保留請求日誌和設定。",
+            "clearStatsDescription": "將清空 Token、請求和快取聚合統計，包含已刪除供應源的歷史排行榜；保留請求日誌和設定。",
             "clearStatsContinue": "繼續",
             "clearStatsFinalTitle": "再次確認清空統計",
             "clearStatsFinalDescription": "此操作無法復原，後續請求將從新的統計基線開始。",
@@ -152,7 +145,6 @@
         },
         "rank": {
             "title": "排行榜",
-            "sortByCost": "金額",
             "sortByCount": "次數",
             "sortByTokens": "Tokens",
             "noData": "暫無排行數據",
@@ -210,30 +202,18 @@
         },
         "responsesWS": {
             "label": "OpenAI Responses WebSocket",
-            "description": "為客戶端 WebSocket /v1/responses 入站啟用上游 WebSocket。「啟用 · 預設關閉」表示能力開啟但預設不使用，渠道可單獨開啟；直通/轉換為渠道未覆蓋時的預設模式。",
+            "description": "為客戶端 WebSocket /v1/responses 入站啟用上游 WebSocket。「啟用 · 預設關閉」允許渠道單獨開啟；所有模式都由 AxonHub 處理協定。",
             "mode": {
                 "disabled": "禁用",
                 "defaultOff": "啟用 · 預設關閉",
-                "passthrough": "啟用 · 直通",
-                "transform": "啟用 · 轉換"
+                "transform": "啟用 · 預設開啟"
             }
         },
         "sseHeartbeat": {
             "label": "SSE 心跳間隔（秒）",
-            "description": "同時作為流中心跳間隔與上游流建立前的首次心跳延遲；設定為 0 禁用。Cloudflare 反代場景建議 30-60 秒。",
-            "compatibility": "部分客戶端可能錯誤處理 SSE 註解，如遇相容問題可關閉。",
-            "placeholder": "0 = 禁用，建議 30-60"
-        },
-        "webSearch": {
-            "enabled": {
-                "label": "閘道 Web Search",
-                "description": "上游模型只返回 web_search 工具呼叫時，Octopus 會存取外部 Bing 搜尋、回填結果後重放給模型；上游已自行完成的原生搜尋不走此流程。"
-            },
-            "maxRounds": {
-                "label": "最大搜尋重放輪數",
-                "description": "單次客戶端請求最多執行的「外部搜尋 + 模型重放」次數，超過後返回 502。範圍 1-100；數值越高，延遲、上游請求次數和費用可能越高。",
-                "placeholder": "1-100，預設 10"
-            }
+            "description": "預設 0，關閉心跳。僅在長時間等待導致閒置斷流時按需開啟；此值同時控制首次心跳延遲和後續間隔，協助保持客戶端連線，不會加快模型回應或延長上游逾時。",
+            "compatibility": "開啟後會傳送 SSE 註解，並可能提前回傳 HTTP 200；後續失敗透過串流內錯誤回報。客戶端不相容時請設為 0。",
+            "placeholder": "0 = 關閉（預設）"
         },
         "groupHealth": {
             "label": "分組健康檢查",
@@ -353,8 +333,6 @@
             },
             "form": {
                 "name": "名稱",
-                "maxCost": "最大金額",
-                "maxCostPlaceholder": "請輸入金額",
                 "unlimited": "無限制",
                 "maxRPM": "每分鐘最大請求數 (RPM)",
                 "maxRPMPlaceholder": "請輸入限制",
@@ -377,8 +355,6 @@
                 "noData": "暫無統計數據",
                 "inputToken": "輸入 Token",
                 "outputToken": "輸出 Token",
-                "inputCost": "輸入費用",
-                "outputCost": "輸出費用",
                 "requestSuccess": "成功請求",
                 "requestFailed": "失敗請求"
             },
@@ -465,13 +441,6 @@
                 "pending": "同步中...",
                 "success": "供應源同步成功",
                 "failed": "供應源同步失敗"
-            },
-            "llmPrice": {
-                "label": "模型價格更新",
-                "button": "立即更新",
-                "pending": "更新中...",
-                "success": "價格更新成功",
-                "failed": "價格更新失敗"
             },
             "siteSync": {
                 "label": "站點全量同步",
@@ -570,7 +539,7 @@
             "globalParamPlaceholder": "留空表示無覆蓋；非空時必須是 JSON 物件",
             "modelParamRules": "模型參數覆蓋規則",
             "mergeOrder": "合併優先級：請求體 < 全域 < 規則 < 渠道覆蓋（後者覆蓋前者）。",
-            "scopeHint": "生效範圍：主鏈路 HTTP（標準協議轉換與 Anthropic/Responses 透傳）。圖片介面、/responses/compact、WebSocket 與分組健康探活暫不生效。",
+            "scopeHint": "生效範圍：主鏈路 HTTP（協定統一由 AxonHub 處理）。圖片介面、/responses/compact、WebSocket 與分組健康探活暫不生效。",
             "save": "儲存",
             "cancel": "取消",
             "saving": "儲存中...",
@@ -776,41 +745,21 @@
             }
         }
     },
-    "model": {
-        "create": {
-            "title": "建立模型",
-            "name": "模型名稱",
-            "input": "輸入價格",
-            "output": "輸出價格",
-            "cacheRead": "快取讀取",
-            "cacheWrite": "快取寫入",
-            "submit": "建立",
-            "submitting": "建立中..."
-        },
-        "toast": {
-            "updated": "模型價格已更新",
-            "updateFailed": "更新失敗",
-            "deleted": "模型已刪除",
-            "deleteFailed": "刪除失敗"
-        },
-        "card": {
-            "inputCache": "輸入/快取",
-            "outputCache": "輸出/快取",
-            "edit": "編輯",
-            "delete": "刪除"
-        },
-        "overlay": {
-            "cancel": "取消",
-            "deleting": "刪除中...",
-            "confirmDelete": "確認刪除",
-            "input": "輸入",
-            "output": "輸出",
-            "cacheRead": "快取讀取",
-            "cacheWrite": "快取寫入",
-            "save": "儲存"
-        }
-    },
     "log": {
+        "content": {
+            "previous": "上一頁",
+            "next": "下一頁",
+            "page": "第 {current} / {total} 頁",
+            "items": "{count} 項",
+            "copyFull": "複製完整內容",
+            "expandText": "展開文字",
+            "collapseText": "收起文字",
+            "loading": "正在載入…",
+            "latestInput": "最近一條使用者輸入",
+            "latestOutput": "最後一條模型輸出",
+            "details": "詳細內容",
+            "noText": "本筆記錄沒有可預覽的對話文字，請展開詳細內容查看。"
+        },
         "list": {
             "noMore": "沒有更多日誌了"
         },
@@ -822,7 +771,6 @@
             "duration": "耗時",
             "input": "輸入",
             "output": "輸出",
-            "cost": "費用",
             "requestContent": "請求內容",
             "responseContent": "響應內容",
             "noRequestContent": "(無請求內容)",
@@ -887,7 +835,6 @@
         },
         "card": {
             "requestCount": "請求次數",
-            "totalCost": "總成本",
             "toast": {
                 "enabled": "供應源已啟用",
                 "disabled": "供應源已停用"
@@ -901,7 +848,6 @@
             "sections": {
                 "requests": "請求詳情",
                 "tokens": "Token 使用",
-                "costs": "成本詳情",
                 "baseUrls": "Base URLs",
                 "keys": "金鑰"
             },
@@ -910,13 +856,10 @@
             "metrics": {
                 "totalRequests": "總請求",
                 "totalToken": "總 Token",
-                "totalCost": "總成本",
                 "successRequests": "成功請求",
                 "failedRequests": "失敗請求",
                 "inputToken": "輸入 Token",
                 "outputToken": "輸出 Token",
-                "inputCost": "輸入成本",
-                "outputCost": "輸出成本",
                 "avgWaitTime": "等待時間"
             },
             "actions": {
@@ -983,15 +926,14 @@
             "autoGroupRegex": "正規比對",
             "wsMode": "Responses WS 模式",
             "wsModeInherit": "跟隨全域",
-            "wsModePassthrough": "直通",
-            "wsModeTransform": "轉換",
+            "wsModeTransform": "開啟",
             "wsModeOff": "關閉",
             "matchRegex": "同步過濾正規",
             "matchRegexPlaceholder": "例：^(gpt|claude)- ，留空同步全部",
             "matchRegexHint": "開啟自動同步或點擊重新整理時，只保留符合該正規的上游模型；自訂模型不受影響",
             "matchRegexInvalid": "正規無效",
             "roundRobin": "輪詢",
-            "roundRobinHint": "開啟後同一供應源內多個 API Key 輪流使用；關閉則優先使用累計成本最低的 Key",
+            "roundRobinHint": "開啟後同一供應源內多個 API Key 輪流使用；關閉則優先使用最久未使用的 Key",
             "remark": "備註"
         }
     },
@@ -1005,7 +947,6 @@
                 "totalRequests": "請求",
                 "successRequests": "成功",
                 "failedRequests": "失敗",
-                "totalCost": "成本",
                 "lastRequestAt": "最近使用"
             }
         },
@@ -1060,7 +1001,6 @@
             "api_key_missing": "缺少 API Key。",
             "password_incorrect": "原密碼不正確。",
             "api_key_disabled": "API Key 已被停用。",
-            "api_key_cost_exceeded": "API Key 已達到最大費用限制。",
             "api_key_rate_limited": "API Key 已超出速率限制，請稍後重試。"
         },
         "site_channel": {
@@ -1087,8 +1027,6 @@
             "delete_failed": "刪除分組失敗。"
         },
         "model": {
-            "price_update_failed": "更新模型價格失敗。",
-            "price_delete_failed": "刪除模型價格失敗。",
             "create_failed": "建立模型失敗。",
             "update_failed": "更新模型失敗。",
             "delete_failed": "刪除模型失敗。"

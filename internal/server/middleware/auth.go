@@ -71,12 +71,6 @@ func APIKeyAuth() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		statsAPIKey := op.StatsAPIKeyGet(apiKeyObj.ID)
-		if apiKeyObj.MaxCost > 0 && apiKeyObj.MaxCost < statsAPIKey.StatsMetrics.OutputCost+statsAPIKey.StatsMetrics.InputCost {
-			resp.ErrorWithAppError(c, http.StatusUnauthorized, apperror.New(apperror.CodeAuthAPIKeyCostExceeded, "API key has reached the max cost").WithStatus(http.StatusUnauthorized))
-			c.Abort()
-			return
-		}
 		if apiKeyObj.MaxRPM > 0 {
 			allowed, retryAfter := op.RateLimitCheck(apiKeyObj.ID, apiKeyObj.MaxRPM)
 			if !allowed {

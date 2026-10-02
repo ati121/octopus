@@ -12,6 +12,8 @@ import (
 
 var settingCache = cache.New[model.SettingKey, string](16)
 
+var removedGatewaySearchSettingKeys = []model.SettingKey{"web_search_enabled", "web_search_max_rounds"}
+
 func SettingList(ctx context.Context) ([]model.Setting, error) {
 	settings := make([]model.Setting, 0, settingCache.Len())
 	for key, value := range settingCache.GetAll() {
@@ -96,6 +98,11 @@ func SettingSetInt(key model.SettingKey, value int) error {
 
 func settingRefreshCache(ctx context.Context) error {
 	db := db.GetDB().WithContext(ctx)
+
+	// 升级与重新加载时清理废弃开关，不改动用户已保存的 SSE 心跳值。
+	if err := db.Where("key IN ?", removedGatewaySearchSettingKeys).Delete(&model.Setting{}).Error; err != nil {
+		return fmt.Errorf("failed to remove obsolete gateway search settings: %w", err)
+	}
 
 	var settings []model.Setting
 	if err := db.Find(&settings).Error; err != nil {

@@ -1,4 +1,7 @@
-This directory contains code derived from the looplj/axonhub project.
+This directory contains historical code derived from the looplj/axonhub project.
+The MIT notice below applies only to that historical derived code.
+The separately linked github.com/looplj/axonhub/llm module is LGPL-3.0.
+See ../../THIRD_PARTY_NOTICES.md and ../../licenses/ for its notice and licenses.
 
 Original Project: https://github.com/looplj/axonhub
 Original License: MIT License

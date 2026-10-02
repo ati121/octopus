@@ -27,9 +27,9 @@ func TestHandleStreamResponsePassthroughSynthesizesMissingDoneEvents(t *testing.
 	rawSSE := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_1","object":"response","model":"gpt-4o","created_at":1,"output":[],"status":"in_progress"}}`,
 		"",
-		`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"get_weather"}}`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"get_weather"}}`,
 		"",
-		`data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"city\":\"beijing\"}"}`,
+		`data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"{\"city\":\"beijing\"}"}`,
 		"",
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","model":"gpt-4o","created_at":1,"output":[],"status":"completed"}}`,
 		"",
@@ -65,9 +65,7 @@ func TestHandleStreamResponsePassthroughSynthesizesMissingDoneEvents(t *testing.
 		Body: io.NopCloser(bytes.NewReader([]byte(rawSSE))),
 	}
 
-	pt := ra.outAdapter.(transformerModel.PassthroughCapable)
-	cfg := pt.PassthroughConfig()
-	if err := ra.handleStreamResponsePassthroughV2(context.Background(), response, cfg); err != nil {
+	if err := ra.handleStreamResponseV2(context.Background(), response); err != nil {
 		t.Fatalf("handleStreamResponsePassthroughV2() error = %v", err)
 	}
 
@@ -97,7 +95,6 @@ func TestHandleStreamResponsePassthroughSynthesizesMissingDoneEvents(t *testing.
 
 	// 合成载荷内容：身份、全量 arguments、completed 状态。
 	for _, fragment := range []string{
-		`"item_id":"fc_1"`,
 		`"arguments":"{\"city\":\"beijing\"}"`,
 		`"call_id":"call_1"`,
 		`"name":"get_weather"`,
@@ -162,12 +159,16 @@ func TestHandleStreamResponsePassthroughDoesNotDuplicateDoneEvents(t *testing.T)
 		Body: io.NopCloser(bytes.NewReader([]byte(rawSSE))),
 	}
 
-	pt := ra.outAdapter.(transformerModel.PassthroughCapable)
-	cfg := pt.PassthroughConfig()
-	if err := ra.handleStreamResponsePassthroughV2(context.Background(), response, cfg); err != nil {
+	if err := ra.handleStreamResponseV2(context.Background(), response); err != nil {
 		t.Fatalf("handleStreamResponsePassthroughV2() error = %v", err)
 	}
-	if got := recorder.Body.String(); got != rawSSE {
-		t.Fatalf("complete upstream must be forwarded byte-for-byte, got %q want %q", got, rawSSE)
+	got := recorder.Body.String()
+	for _, event := range []string{`"type":"response.function_call_arguments.done"`, `"type":"response.output_item.done"`, `"type":"response.completed"`} {
+		if strings.Count(got, event) != 1 {
+			t.Fatalf("expected exactly one %s: %s", event, got)
+		}
+	}
+	if !strings.Contains(got, `"arguments":"{\"city\":\"beijing\"}"`) {
+		t.Fatalf("tool arguments lost: %s", got)
 	}
 }

@@ -8,8 +8,6 @@ import {
   FilterX,
   Layers3,
   Tag,
-  TrendingUp,
-  Wallet,
 } from "lucide-react";
 import { type Site } from "@/api/endpoints/site";
 import { Badge } from "@/components/ui/badge";
@@ -61,10 +59,7 @@ function filterTone(status: CheckinFilterStatus, active: boolean) {
   }
 }
 
-function formatCurrency(value: number) {
-  const safe = Number.isFinite(value) ? value : 0;
-  return `$${safe.toFixed(2)}`;
-}
+
 
 function OverviewMetric({
   icon,
@@ -114,8 +109,6 @@ export function CheckinPanel({
 }: {
   sites: Site[] | undefined;
   inventory: {
-    totalBalance: number;
-    totalBalanceUsed: number;
     enabledAccounts: number;
     totalAccounts: number;
   };
@@ -174,17 +167,7 @@ export function CheckinPanel({
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <OverviewMetric
-            icon={<Wallet className="size-4" />}
-            label="当前余额"
-            value={formatCurrency(inventory.totalBalance)}
-          />
-          <OverviewMetric
-            icon={<TrendingUp className="size-4" />}
-            label="累计消耗"
-            value={formatCurrency(inventory.totalBalanceUsed)}
-          />
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <OverviewMetric
             icon={<Layers3 className="size-4" />}
             label="启用账号"

@@ -117,7 +117,7 @@ type Channel struct {
 	WSMode          ChannelWSMode         `json:"ws_mode" gorm:"type:varchar(16);not null;default:'inherit'"`
 	ParamOverride   *string               `json:"param_override"`
 	ChannelProxy    *string               `json:"-" gorm:"column:channel_proxy"`
-	Stats           *StatsChannel         `json:"stats,omitempty" gorm:"foreignKey:ChannelID"`
+	Stats           *StatsChannel         `json:"stats,omitempty" gorm:"-"`
 	MatchRegex      *string               `json:"match_regex"`
 	RoundRobin      bool                  `json:"round_robin" gorm:"default:false"`
 	Managed         bool                  `json:"managed" gorm:"-"`
@@ -161,14 +161,13 @@ type CustomHeader struct {
 }
 
 type ChannelKey struct {
-	ID               int     `json:"id" gorm:"primaryKey"`
-	ChannelID        int     `json:"channel_id"`
-	Enabled          bool    `json:"enabled" gorm:"default:true"`
-	ChannelKey       string  `json:"channel_key"`
-	StatusCode       int     `json:"status_code"`
-	LastUseTimeStamp int64   `json:"last_use_time_stamp"`
-	TotalCost        float64 `json:"total_cost"`
-	Remark           string  `json:"remark"`
+	ID               int    `json:"id" gorm:"primaryKey"`
+	ChannelID        int    `json:"channel_id"`
+	Enabled          bool   `json:"enabled" gorm:"default:true"`
+	ChannelKey       string `json:"channel_key"`
+	StatusCode       int    `json:"status_code"`
+	LastUseTimeStamp int64  `json:"last_use_time_stamp"`
+	Remark           string `json:"remark"`
 }
 
 type ChannelKeySelectOptions struct {
@@ -284,7 +283,7 @@ func (c *Channel) GetChannelKey(opts ...ChannelKeySelectOptions) ChannelKey {
 
 	// 收集合格 key（启用、非空、未被排除）
 	best := ChannelKey{}
-	bestCost := 0.0
+	var oldestUse int64
 	bestSet := false
 	var validKeys []ChannelKey
 
@@ -296,9 +295,9 @@ func (c *Channel) GetChannelKey(opts ...ChannelKeySelectOptions) ChannelKey {
 			continue
 		}
 		validKeys = append(validKeys, k)
-		if !bestSet || k.TotalCost < bestCost {
+		if !bestSet || k.LastUseTimeStamp < oldestUse {
 			best = k
-			bestCost = k.TotalCost
+			oldestUse = k.LastUseTimeStamp
 			bestSet = true
 		}
 	}

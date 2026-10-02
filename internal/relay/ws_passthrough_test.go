@@ -18,7 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func TestForwardViaWSPassthroughNormalizesPayloadAndRecordsMetrics(t *testing.T) {
+func TestForwardViaWSUsesAxonHubWithLegacyPassthroughSetting(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := setupRelayTestDB(t)
 	if err := op.SettingSetString(model.SettingKeyResponsesWSEnabled, "true"); err != nil {
@@ -105,24 +105,25 @@ func TestForwardViaWSPassthroughNormalizesPayloadAndRecordsMetrics(t *testing.T)
 		t.Fatalf("expected upstream model rewrite, got %s", got)
 	}
 
-	var downstreamModels []string
-	for i := 0; i < 3; i++ {
-		_, data, err := clientConn.Read(context.Background())
+	readCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var completed bool
+	for i := 0; i < 32; i++ {
+		_, data, err := clientConn.Read(readCtx)
 		if err != nil {
 			t.Fatalf("client read downstream event %d failed: %v", i, err)
 		}
-		if strings.Contains(string(data), "gpt-4o") {
-			t.Fatalf("expected downstream model replacement, got %s", data)
-		}
-		if strings.Contains(string(data), "client-model") {
-			downstreamModels = append(downstreamModels, "client-model")
+		if strings.Contains(string(data), `"type":"response.completed"`) {
+			completed = true
+			break
 		}
 	}
-	if len(downstreamModels) == 0 {
-		t.Fatalf("expected at least one downstream model replacement")
+	if !completed {
+		t.Fatal("missing AxonHub response.completed")
 	}
-	if req.metrics.WSExecMode == nil || *req.metrics.WSExecMode != model.RelayLogWSExecModePassthrough {
-		t.Fatalf("expected passthrough ws exec mode, got %#v", req.metrics.WSExecMode)
+	ra.collectResponse()
+	if req.metrics.WSExecMode == nil || *req.metrics.WSExecMode != model.RelayLogWSExecModeTransform {
+		t.Fatalf("expected AxonHub transform ws exec mode, got %#v", req.metrics.WSExecMode)
 	}
 	if req.metrics.InternalResponse == nil || req.metrics.InternalResponse.ID != "resp_passthrough" {
 		t.Fatalf("expected internal response id to be captured, got %#v", req.metrics.InternalResponse)

@@ -255,7 +255,6 @@ func buildSiteChannelGroups(ctx context.Context, site model.Site, account model.
 				Remark:           key.Remark,
 				StatusCode:       key.StatusCode,
 				LastUseTimeStamp: key.LastUseTimeStamp,
-				TotalCost:        key.TotalCost,
 			})
 		}
 	}

@@ -67,7 +67,6 @@ type RelayLog struct {
 	OutputTokens         int                 `json:"output_tokens"`                            // 输出 Token
 	Ftut                 int                 `json:"ftut"`                                     // 首字时间(毫秒)
 	UseTime              int                 `json:"use_time"`                                 // 总用时(毫秒)
-	Cost                 float64             `json:"cost"`                                     // 消耗费用
 	RequestContent       string              `json:"request_content"`                          // 请求内容
 	ResponseContent      string              `json:"response_content"`                         // 响应内容
 	Error                string              `json:"error"`                                    // 错误信息

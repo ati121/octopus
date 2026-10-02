@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../client';
-import { formatCount, formatMoney, formatTime } from '@/lib/utils';
+import { formatCount, formatTokens, formatTime } from '@/lib/utils';
 
 /**
  * 统计数据
@@ -10,8 +10,6 @@ export interface StatsMetrics {
     output_token: number;
     cache_read_token: number;
     cache_write_token?: number;
-    input_cost: number;
-    output_cost: number;
     wait_time: number;
     request_success: number;
     request_failed: number;
@@ -23,15 +21,12 @@ export interface StatsMetricsFormatted {
     cache_read_token: ReturnType<typeof formatCount>;
     cache_write_token: ReturnType<typeof formatCount>;
     cache_hit_rate: ReturnType<typeof formatCacheHitRate>;
-    input_cost: ReturnType<typeof formatMoney>;
-    output_cost: ReturnType<typeof formatMoney>;
     wait_time: ReturnType<typeof formatTime>;
     request_success: ReturnType<typeof formatCount>;
     request_failed: ReturnType<typeof formatCount>;
 
     request_count: ReturnType<typeof formatCount>;
     total_token: ReturnType<typeof formatCount>;
-    total_cost: ReturnType<typeof formatMoney>;
 }
 
 export function formatCacheHitRate(inputToken: number, cacheReadToken: number) {
@@ -49,15 +44,12 @@ export function formatStatsMetrics(item: StatsMetrics): StatsMetricsFormatted {
     const cacheReadToken = item.cache_read_token || 0;
     const cacheWriteToken = item.cache_write_token || 0;
     return {
-        input_token: formatCount(inputToken),
-        output_token: formatCount(outputToken),
-        cache_read_token: formatCount(cacheReadToken),
-        cache_write_token: formatCount(cacheWriteToken),
+        input_token: formatTokens(inputToken),
+        output_token: formatTokens(outputToken),
+        cache_read_token: formatTokens(cacheReadToken),
+        cache_write_token: formatTokens(cacheWriteToken),
         cache_hit_rate: formatCacheHitRate(inputToken, cacheReadToken),
-        total_token: formatCount(inputToken + outputToken),
-        input_cost: formatMoney(item.input_cost),
-        output_cost: formatMoney(item.output_cost),
-        total_cost: formatMoney(item.input_cost + item.output_cost),
+        total_token: formatTokens(inputToken + outputToken),
         wait_time: formatTime(item.wait_time),
         request_success: formatCount(item.request_success),
         request_failed: formatCount(item.request_failed),
@@ -67,6 +59,7 @@ export function formatStatsMetrics(item: StatsMetrics): StatsMetricsFormatted {
 
 export interface StatsChannel extends StatsMetrics {
     channel_id: number;
+    name: string;
 }
 
 export interface StatsDaily extends StatsMetrics {
@@ -210,5 +203,18 @@ export function useStatsModel() {
             ...formatStatsMetrics(item),
         })),
         refetchInterval: 30000,
+    });
+}
+
+export function useStatsChannel() {
+    return useQuery({
+        queryKey: ['stats', 'channel'],
+        queryFn: () => apiClient.get<StatsChannel[]>('/api/v1/stats/channel'),
+        select: (data) => data.map((item) => ({
+            channel_id: item.channel_id,
+            name: item.name,
+            ...formatStatsMetrics(item),
+        })),
+        refetchInterval: 10000,
     });
 }

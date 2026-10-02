@@ -26,9 +26,6 @@ func InitCache() error {
 	if err := apiKeyRefreshCache(ctx); err != nil {
 		return fmt.Errorf("api key refresh cache error: %v", err)
 	}
-	if err := llmRefreshCache(ctx); err != nil {
-		return fmt.Errorf("llm refresh cache error: %v", err)
-	}
 	if err := statsRefreshCache(ctx); err != nil {
 		return fmt.Errorf("stats refresh cache error: %v", err)
 	}

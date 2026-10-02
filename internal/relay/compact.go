@@ -1,12 +1,9 @@
 package relay
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -16,28 +13,15 @@ import (
 	"github.com/bestruirui/octopus/internal/outlierwindow"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/server/resp"
+	"github.com/bestruirui/octopus/internal/transformer/axon"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
-	openaiOutbound "github.com/bestruirui/octopus/internal/transformer/outbound/openai"
 	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
+	"github.com/looplj/axonhub/llm/httpclient"
+	axonResponses "github.com/looplj/axonhub/llm/transformer/openai/responses"
 )
-
-type responsesCompactRequest struct {
-	Model              string          `json:"model"`
-	Input              json.RawMessage `json:"input,omitempty"`
-	PreviousResponseID *string         `json:"previous_response_id,omitempty"`
-}
-
-type responsesCompactResponse struct {
-	ID        string                         `json:"id"`
-	Object    string                         `json:"object"`
-	CreatedAt int64                          `json:"created_at"`
-	Output    []openaiOutbound.ResponsesItem `json:"output"`
-	Usage     *openaiOutbound.ResponsesUsage `json:"usage,omitempty"`
-	Error     *transformerModel.ErrorDetail  `json:"error,omitempty"`
-}
 
 // HandleResponsesCompact proxies OpenAI-compatible /responses/compact requests upstream.
 func HandleResponsesCompact(c *gin.Context) {
@@ -51,17 +35,9 @@ func HandleResponsesCompact(c *gin.Context) {
 		return
 	}
 
-	var compactReq responsesCompactRequest
-	if err := json.Unmarshal(body, &compactReq); err != nil {
-		resp.Error(c, http.StatusBadRequest, fmt.Sprintf("failed to decode responses compact request: %v", err))
-		return
-	}
-	if strings.TrimSpace(compactReq.Model) == "" {
-		resp.Error(c, http.StatusBadRequest, "model is required")
-		return
-	}
-	if len(compactReq.Input) == 0 && compactReq.PreviousResponseID == nil {
-		resp.Error(c, http.StatusBadRequest, "either input or previous_response_id is required")
+	compactReq, err := axonResponses.NewCompactInboundTransformer().TransformRequest(c.Request.Context(), &httpclient.Request{Method: "POST", Body: body, ContentType: "application/json", Headers: c.Request.Header.Clone()})
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -179,7 +155,7 @@ func HandleResponsesCompact(c *gin.Context) {
 		op.ChannelKeyUpdate(usedKey)
 
 		if success {
-			op.StatsChannelUpdate(channel.ID, dbmodel.StatsMetrics{RequestSuccess: 1})
+			op.StatsChannelUpdate(channel.ID, dbmodel.StatsMetrics{RequestSuccess: 1}, channel.Name)
 			balancer.RecordSuccess(channel.ID, usedKey.ID, requestModel)
 			balancer.SetSticky(apiKeyID, requestModel, channel.ID, usedKey.ID)
 			outlierwindow.Report(channel.ID, true, statusCode, time.Now())
@@ -187,7 +163,7 @@ func HandleResponsesCompact(c *gin.Context) {
 			return
 		}
 
-		op.StatsChannelUpdate(channel.ID, dbmodel.StatsMetrics{RequestFailed: 1})
+		op.StatsChannelUpdate(channel.ID, dbmodel.StatsMetrics{RequestFailed: 1}, channel.Name)
 		failureKind := circuitFailureKind(group.RetryEnabled, statusCode)
 		balancer.RecordFailure(channel.ID, usedKey.ID, requestModel, failureKind)
 		outlierwindow.Report(channel.ID, false, statusCode, time.Now())
@@ -226,12 +202,12 @@ func supportsResponsesCompact(channelType outbound.OutboundType) bool {
 
 func forwardResponsesCompact(c *gin.Context, metrics *RelayMetrics, iter *balancer.Iterator, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, requestBody []byte) (int, time.Duration, error) {
 	span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name)
-	request, err := buildResponsesCompactRequest(c.Request.Context(), channel, usedKey.ChannelKey, requestBody)
+	request, err := buildResponsesCompactRequest(c.Request.Context(), channel, usedKey.ChannelKey, iter.Item().ModelName, requestBody)
 	if err != nil {
 		span.End(dbmodel.AttemptFailed, 0, err.Error())
 		return 0, 0, fmt.Errorf("failed to create compact request: %w", err)
 	}
-	metrics.SetTransportRequestPayload(requestBody, metrics.RequestModel)
+	metrics.SetTransportRequestPayload(requestBody, iter.Item().ModelName)
 	copyProxyHeaders(c.Request.Header, channel, request.Header)
 
 	response, err := sendCompactRequest(channel, request)
@@ -262,37 +238,47 @@ func forwardResponsesCompact(c *gin.Context, metrics *RelayMetrics, iter *balanc
 		return response.StatusCode, 0, fmt.Errorf("failed to read compact response body: %w", readErr)
 	}
 
-	copyProxyResponseHeaders(c.Writer.Header(), response.Header)
-	contentType := response.Header.Get("Content-Type")
-	if strings.TrimSpace(contentType) == "" {
-		contentType = "application/json"
+	out, err := axonResponses.NewOutboundTransformer(channel.GetBaseUrl(), usedKey.ChannelKey)
+	if err != nil {
+		span.End(dbmodel.AttemptFailed, response.StatusCode, err.Error())
+		return response.StatusCode, 0, err
 	}
-	c.Data(response.StatusCode, contentType, body)
-
-	var compactResp responsesCompactResponse
-	if err := json.Unmarshal(body, &compactResp); err == nil {
-		metrics.SetInternalResponse(compactResponseToInternalResponse(&compactResp), metrics.RequestModel)
+	native, err := out.TransformResponse(c.Request.Context(), &httpclient.Response{StatusCode: response.StatusCode, Headers: response.Header, Body: body, Request: &httpclient.Request{RequestType: "compact"}})
+	if err != nil {
+		span.End(dbmodel.AttemptFailed, response.StatusCode, err.Error())
+		return response.StatusCode, 0, err
+	}
+	wire, err := axonResponses.NewCompactInboundTransformer().TransformResponse(c.Request.Context(), native)
+	if err != nil {
+		span.End(dbmodel.AttemptFailed, response.StatusCode, err.Error())
+		return response.StatusCode, 0, err
+	}
+	copyProxyResponseHeaders(c.Writer.Header(), response.Header)
+	c.Data(wire.StatusCode, "application/json", wire.Body)
+	if view, err := axon.ProjectResponse(native); err == nil {
+		metrics.SetInternalResponse(view, iter.Item().ModelName)
 	}
 
 	span.End(dbmodel.AttemptSuccess, response.StatusCode, "")
 	return response.StatusCode, 0, nil
 }
 
-func buildResponsesCompactRequest(ctx context.Context, channel *dbmodel.Channel, key string, requestBody []byte) (*http.Request, error) {
-	parsedURL, err := url.Parse(strings.TrimSuffix(channel.GetBaseUrl(), "/"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse base url: %w", err)
-	}
-	parsedURL.Path = parsedURL.Path + "/responses/compact"
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, parsedURL.String(), bytes.NewReader(requestBody))
+func buildResponsesCompactRequest(ctx context.Context, channel *dbmodel.Channel, key, actualModel string, requestBody []byte) (*http.Request, error) {
+	in := axonResponses.NewCompactInboundTransformer()
+	native, err := in.TransformRequest(ctx, &httpclient.Request{Method: "POST", Body: requestBody, ContentType: "application/json", Headers: make(http.Header)})
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+key)
-	return req, nil
+	native.Model = actualModel
+	out, err := axonResponses.NewOutboundTransformer(channel.GetBaseUrl(), key)
+	if err != nil {
+		return nil, err
+	}
+	wire, err := out.TransformRequest(ctx, native)
+	if err != nil {
+		return nil, err
+	}
+	return axon.HTTPRequest(ctx, wire)
 }
 
 func copyProxyHeaders(src http.Header, channel *dbmodel.Channel, dst http.Header) {
@@ -335,38 +321,4 @@ func sendCompactRequest(channel *dbmodel.Channel, req *http.Request) (*http.Resp
 		return nil, err
 	}
 	return httpClient.Do(req)
-}
-
-func compactResponseToInternalResponse(resp *responsesCompactResponse) *transformerModel.InternalLLMResponse {
-	if resp == nil {
-		return nil
-	}
-	return &transformerModel.InternalLLMResponse{
-		ID:      resp.ID,
-		Object:  resp.Object,
-		Created: resp.CreatedAt,
-		Usage:   convertCompactUsage(resp.Usage),
-	}
-}
-
-func convertCompactUsage(usage *openaiOutbound.ResponsesUsage) *transformerModel.Usage {
-	if usage == nil {
-		return nil
-	}
-	result := &transformerModel.Usage{
-		PromptTokens:     usage.InputTokens,
-		CompletionTokens: usage.OutputTokens,
-		TotalTokens:      usage.TotalTokens,
-	}
-	if usage.InputTokenDetails.CachedTokens > 0 {
-		result.PromptTokensDetails = &transformerModel.PromptTokensDetails{
-			CachedTokens: usage.InputTokenDetails.CachedTokens,
-		}
-	}
-	if usage.OutputTokenDetails.ReasoningTokens > 0 {
-		result.CompletionTokensDetails = &transformerModel.CompletionTokensDetails{
-			ReasoningTokens: usage.OutputTokenDetails.ReasoningTokens,
-		}
-	}
-	return result
 }

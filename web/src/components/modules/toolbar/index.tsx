@@ -2,10 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import {
-    ArrowDownWideNarrow,
     ArrowDownZA,
     ArrowUpAZ,
-    ArrowUpNarrowWide,
     Clock3,
     KeyRound,
     LayoutGrid,
@@ -32,7 +30,6 @@ import { useNavStore, type NavItem } from '@/components/modules/navbar';
 import { CreateDialogContent as ChannelCreateContent } from '@/components/modules/channel/Create';
 import { CreateDialogContent as GroupCreateContent } from '@/components/modules/group/Create';
 import { GroupAutoGroupDialogContent } from '@/components/modules/group/AutoGroupDialog';
-import { CreateDialogContent as ModelCreateContent } from '@/components/modules/model/Create';
 import { useSiteUIStore } from '@/components/modules/site/ui-store';
 import { useLogUIStore } from '@/components/modules/log/ui-store';
 import { LogFilterPopover } from '@/components/modules/log/FilterPopover';
@@ -67,8 +64,6 @@ const COMBINED_SORT_OPTIONS: readonly CombinedSortOption[] = [
 const SITE_SORT_OPTIONS: readonly CombinedSortOption[] = [
     { value: 'name-asc', field: 'name', order: 'asc', labelKey: 'popover.nameAsc' },
     { value: 'name-desc', field: 'name', order: 'desc', labelKey: 'popover.nameDesc' },
-    { value: 'balance-desc', field: 'balance', order: 'desc', labelKey: 'popover.balanceDesc' },
-    { value: 'balance-asc', field: 'balance', order: 'asc', labelKey: 'popover.balanceAsc' },
 ] as const;
 
 function isToolbarPage(item: NavItem): item is ToolbarPage {
@@ -83,8 +78,6 @@ function CreateDialogContent({ activeItem }: { activeItem: ToolbarPage }) {
             return <ChannelCreateContent />;
         case 'group':
             return <GroupCreateContent />;
-        case 'model':
-            return <ModelCreateContent />;
         case 'log':
             return null;
     }
@@ -133,7 +126,7 @@ export function Toolbar() {
     const searchExpanded = expandedSearchItem === toolbarItem;
 
     const isLogToolbar = toolbarItem === 'log';
-    const showLayoutOptions = toolbarItem === 'channel' || toolbarItem === 'model';
+    const showLayoutOptions = toolbarItem === 'channel';
     const showSiteSortOptions = toolbarItem === 'site';
     const showCombinedSortOptions = toolbarItem === 'channel' || toolbarItem === 'group';
     const showSortOptions = !isLogToolbar;
@@ -203,17 +196,6 @@ export function Toolbar() {
                     priority: 'desktop',
                 }
             );
-        }
-
-        // 模型页面按钮
-        if (toolbarItem === 'model') {
-            result.push({
-                id: 'create-model',
-                icon: <Plus className="size-4" />,
-                label: '新增模型',
-                onClick: () => setCreateDialogOpen(true),
-                priority: 'desktop',
-            });
         }
 
         // 日志页面按钮
@@ -392,13 +374,7 @@ export function Toolbar() {
                                                                 : 'border-border bg-muted/20 text-foreground hover:bg-muted/30'
                                                         )}
                                                     >
-                                                        {option.field === 'balance' ? (
-                                                            option.order === 'desc' ? (
-                                                                <ArrowDownWideNarrow className="size-3.5" />
-                                                            ) : (
-                                                                <ArrowUpNarrowWide className="size-3.5" />
-                                                            )
-                                                        ) : option.order === 'desc' ? (
+                                                        {option.order === 'desc' ? (
                                                             <ArrowDownZA className="size-3.5" />
                                                         ) : (
                                                             <ArrowUpAZ className="size-3.5" />

@@ -125,7 +125,6 @@ export type SiteProjectedKey = {
     remark: string;
     status_code: number;
     last_use_time_stamp: number;
-    total_cost: number;
 };
 
 export type SiteChannelAccount = {
@@ -326,7 +325,6 @@ function normalizeSiteChannelAccount(account: SiteChannelAccountServer): SiteCha
                 remark: typeof key.remark === 'string' ? key.remark : '',
                 status_code: typeof key.status_code === 'number' ? key.status_code : 0,
                 last_use_time_stamp: typeof key.last_use_time_stamp === 'number' ? key.last_use_time_stamp : 0,
-                total_cost: typeof key.total_cost === 'number' ? key.total_cost : 0,
             })),
             models: (group.models ?? []).map(normalizeSiteModel),
         })),

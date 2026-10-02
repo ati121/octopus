@@ -513,7 +513,7 @@ func TestProjectAccountPreservesManagedKeyUsageForUnchangedTokens(t *testing.T) 
 	}
 
 	firstKey := channel.Keys[0]
-	firstKey.TotalCost = 12.34
+	firstKey.LastUseTimeStamp = 1717000000
 	firstKey.StatusCode = 200
 	if err := op.ChannelKeyUpdate(firstKey); err != nil {
 		t.Fatalf("ChannelKeyUpdate failed: %v", err)
@@ -547,23 +547,8 @@ func TestProjectAccountPreservesManagedKeyUsageForUnchangedTokens(t *testing.T) 
 	if preserved.ID != firstKey.ID {
 		t.Fatalf("expected unchanged token to keep key id %d, got %d", firstKey.ID, preserved.ID)
 	}
-	if preserved.TotalCost != firstKey.TotalCost {
-		t.Fatalf("expected unchanged token to preserve total cost %.2f, got %.2f", firstKey.TotalCost, preserved.TotalCost)
-	}
-}
-
-func TestProjectAccountSyncsProjectedModelPrices(t *testing.T) {
-	ctx := setupProjectTestDB(t)
-	_, account := createProjectionFixture(t, ctx)
-
-	if _, err := ProjectAccount(ctx, account.ID); err != nil {
-		t.Fatalf("ProjectAccount returned error: %v", err)
-	}
-
-	if got, err := op.LLMGet("gpt-4o-mini"); err != nil {
-		t.Fatalf("expected gpt-4o-mini price to be inserted: %v", err)
-	} else if got.Input <= 0 || got.Output <= 0 {
-		t.Fatalf("unexpected projected price for gpt-4o-mini: %+v", got)
+	if preserved.LastUseTimeStamp != firstKey.LastUseTimeStamp {
+		t.Fatalf("expected unchanged token to preserve last use time, got %+v", preserved)
 	}
 }
 
@@ -592,7 +577,7 @@ func TestDeleteSiteAccountRemovesManagedChannelChain(t *testing.T) {
 	}, ctx); err != nil {
 		t.Fatalf("GroupItemAdd failed: %v", err)
 	}
-	if err := op.StatsChannelUpdate(channelIDs[0], model.StatsMetrics{InputCost: 1, OutputCost: 2, RequestSuccess: 1}); err != nil {
+	if err := op.StatsChannelUpdate(channelIDs[0], model.StatsMetrics{InputToken: 10000, OutputToken: 20000, RequestSuccess: 1}); err != nil {
 		t.Fatalf("StatsChannelUpdate failed: %v", err)
 	}
 	if err := op.StatsSaveDB(ctx); err != nil {
@@ -639,15 +624,15 @@ func TestDeleteSiteAccountRemovesManagedChannelChain(t *testing.T) {
 			t.Fatalf("expected managed channel %d to be deleted", channelID)
 		}
 		stats := op.StatsChannelGet(channelID)
-		if stats.ChannelID != channelID || stats.InputCost != 0 || stats.OutputCost != 0 || stats.RequestSuccess != 0 {
-			t.Fatalf("expected in-memory stats for channel %d to be cleared, got %+v", channelID, stats)
+		if channelID == channelIDs[0] && (stats.InputToken != 10000 || stats.OutputToken != 20000 || stats.RequestSuccess != 1 || stats.Name == "") {
+			t.Fatalf("expected historical stats for channel %d to remain, got %+v", channelID, stats)
 		}
 		var statsCount int64
 		if err := dbpkg.GetDB().WithContext(ctx).Model(&model.StatsChannel{}).Where("channel_id = ?", channelID).Count(&statsCount).Error; err != nil {
 			t.Fatalf("count stats failed: %v", err)
 		}
-		if statsCount != 0 {
-			t.Fatalf("expected persisted stats for channel %d to be deleted, got %d", channelID, statsCount)
+		if channelID == channelIDs[0] && statsCount != 1 {
+			t.Fatalf("expected persisted stats for channel %d to remain, got %d", channelID, statsCount)
 		}
 	}
 
@@ -714,7 +699,7 @@ func TestDeleteSiteRemovesManagedChannelChainForAllAccounts(t *testing.T) {
 		t.Fatalf("GroupItemAdd failed: %v", err)
 	}
 	for _, channelID := range channelIDs {
-		if err := op.StatsChannelUpdate(channelID, model.StatsMetrics{InputCost: 1, OutputCost: 2, RequestSuccess: 1}); err != nil {
+		if err := op.StatsChannelUpdate(channelID, model.StatsMetrics{InputToken: 10000, OutputToken: 20000, RequestSuccess: 1}); err != nil {
 			t.Fatalf("StatsChannelUpdate failed: %v", err)
 		}
 	}
@@ -775,8 +760,8 @@ func TestDeleteSiteRemovesManagedChannelChainForAllAccounts(t *testing.T) {
 		if err := dbpkg.GetDB().WithContext(ctx).Model(&model.StatsChannel{}).Where("channel_id = ?", channelID).Count(&statsCount).Error; err != nil {
 			t.Fatalf("count channel stats failed: %v", err)
 		}
-		if statsCount != 0 {
-			t.Fatalf("expected persisted stats for channel %d to be deleted, got %d", channelID, statsCount)
+		if statsCount != 1 {
+			t.Fatalf("expected persisted stats for channel %d to remain, got %d", channelID, statsCount)
 		}
 	}
 
@@ -1315,7 +1300,7 @@ func assertProjectedChannel(t *testing.T, channelsByGroup map[string]model.Chann
 		t.Fatalf("expected projected channel for group key %q, got %#v", groupKey, channelsByGroup)
 	}
 	if channel.Type != expectedType {
-		t.Fatalf("expected channel %q type %q, got %q", groupKey, expectedType, channel.Type)
+		t.Fatalf("expected channel %q type %d, got %d", groupKey, expectedType, channel.Type)
 	}
 	if channel.Model != expectedModel {
 		t.Fatalf("expected channel %q model %q, got %q", groupKey, expectedModel, channel.Model)

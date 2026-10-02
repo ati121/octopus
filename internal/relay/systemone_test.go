@@ -3,9 +3,9 @@ package relay
 import (
 	"encoding/json"
 	"io"
-	"math"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -83,16 +83,20 @@ func TestHandlerRelaysSystemOneRequest(t *testing.T) {
 		t.Fatalf("ChannelCreate failed: %v", err)
 	}
 	createSystemOneTestGroup(t, "relay-systemone-group", channel.ID, "jev-latest")
-	if err := op.LLMCreate(model.LLMInfo{Name: "jev-1.13.0", LLMPrice: model.LLMPrice{Input: 0.042}}, ctx); err != nil {
-		t.Fatalf("LLMCreate failed: %v", err)
-	}
 
 	recorder := serveSystemOneTestRequest("relay-systemone-group")
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected system one request to succeed, got status %d body %s", recorder.Code, recorder.Body.String())
 	}
-	if recorder.Body.String() != systemOneTestResponse {
+	var actual, expected any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &actual); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(systemOneTestResponse), &expected); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("expected upstream answers to be returned unchanged, got %s", recorder.Body.String())
 	}
 
@@ -139,9 +143,6 @@ func TestHandlerRelaysSystemOneRequest(t *testing.T) {
 	}
 	if relayLog.InputTokens != 392 || relayLog.OutputTokens != 65 {
 		t.Fatalf("unexpected token usage: input=%d output=%d", relayLog.InputTokens, relayLog.OutputTokens)
-	}
-	if want := 392 * 0.042 * 1e-6; math.Abs(relayLog.Cost-want) > 1e-12 {
-		t.Fatalf("expected input-only cost %.12f, got %.12f", want, relayLog.Cost)
 	}
 }
 

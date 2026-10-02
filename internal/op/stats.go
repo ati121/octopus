@@ -2,6 +2,7 @@ package op
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -332,10 +333,17 @@ func StatsTotalUpdate(metrics model.StatsMetrics) error {
 	return nil
 }
 
-func StatsChannelUpdate(channelID int, metrics model.StatsMetrics) error {
+func StatsChannelUpdate(channelID int, metrics model.StatsMetrics, names ...string) error {
+	channel, _ := channelCache.Get(channelID)
+	if channel.Name == "" && len(names) > 0 {
+		channel.Name = names[0]
+	}
 	statsChannelCache.Update(channelID, func(channelCache model.StatsChannel, ok bool) model.StatsChannel {
 		if !ok {
-			channelCache = model.StatsChannel{ChannelID: channelID}
+			channelCache = model.StatsChannel{ChannelID: channelID, HistoryID: rand.Text()}
+		}
+		if channel.Name != "" {
+			channelCache.Name = channel.Name
 		}
 		channelCache.StatsMetrics.Add(metrics)
 		return channelCache
@@ -440,12 +448,19 @@ func StatsAPIKeyUpdate(apiKeyID int, metrics model.StatsMetrics) error {
 	return nil
 }
 
-func StatsChannelDel(id int) error {
-	statsChannelCache.Del(id)
-	statsChannelCacheNeedUpdateLock.Lock()
-	delete(statsChannelCacheNeedUpdate, id)
-	statsChannelCacheNeedUpdateLock.Unlock()
-	return db.GetDB().Where("channel_id = ?", id).Delete(&model.StatsChannel{}).Error
+// StatsChannelList 与渠道配置生命周期独立，删除渠道不清理历史。
+func StatsChannelList() []model.StatsChannel {
+	rows := make([]model.StatsChannel, 0, statsChannelCache.Len())
+	for _, row := range statsChannelCache.GetAll() {
+		if row.RequestSuccess == 0 && row.RequestFailed == 0 && row.InputToken == 0 && row.OutputToken == 0 {
+			continue
+		}
+		if row.Name == "" {
+			row.Name = fmt.Sprintf("#%d", row.ChannelID)
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 func StatsAPIKeyDel(id int) error {
@@ -471,14 +486,7 @@ func StatsTodayGet() model.StatsDaily {
 func StatsChannelGet(id int) model.StatsChannel {
 	stats, ok := statsChannelCache.Get(id)
 	if !ok {
-		tmp := model.StatsChannel{
-			ChannelID: id,
-		}
-		statsChannelCache.Set(id, tmp)
-		statsChannelCacheNeedUpdateLock.Lock()
-		statsChannelCacheNeedUpdate[id] = struct{}{}
-		statsChannelCacheNeedUpdateLock.Unlock()
-		return tmp
+		return model.StatsChannel{ChannelID: id}
 	}
 	return stats
 }
@@ -648,7 +656,23 @@ func statsRefreshCache(ctx context.Context) error {
 	statsChannelCacheNeedUpdate = make(map[int]struct{})
 	statsChannelCacheNeedUpdateLock.Unlock()
 	for _, v := range loadedChannels {
+		changed := false
+		if v.Name == "" {
+			if channel, ok := channelCache.Get(v.ChannelID); ok {
+				v.Name = channel.Name
+				changed = true
+			}
+		}
+		if v.HistoryID == "" {
+			v.HistoryID = rand.Text()
+			changed = true
+		}
 		statsChannelCache.Set(v.ChannelID, v)
+		if changed {
+			statsChannelCacheNeedUpdateLock.Lock()
+			statsChannelCacheNeedUpdate[v.ChannelID] = struct{}{}
+			statsChannelCacheNeedUpdateLock.Unlock()
+		}
 	}
 
 	var loadedAPIKeys []model.StatsAPIKey

@@ -3,7 +3,6 @@ package relay
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,15 +17,14 @@ import (
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/relay/stream"
 	"github.com/bestruirui/octopus/internal/server/resp"
-	"github.com/bestruirui/octopus/internal/transformer/hook"
+	"github.com/bestruirui/octopus/internal/transformer/axon"
 	"github.com/bestruirui/octopus/internal/transformer/inbound"
 	"github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
-	openaiOutbound "github.com/bestruirui/octopus/internal/transformer/outbound/openai"
 	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
-	"github.com/tmaxmax/go-sse"
+	"github.com/looplj/axonhub/llm"
 )
 
 type streamHeartbeatWriter interface {
@@ -136,8 +134,6 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 		metrics.SetWSMode(dbmodel.RelayLogWSModeReplay)
 		metrics.SetWSRecovery(dbmodel.RelayLogWSRecoveryReplay)
 	}
-	responsesPassthroughRequired := internalRequest.HasOpenAIResponsesPassthrough()
-	responsesPassthroughCapableFound := false
 
 	// 请求级上下文
 	req := &relayRequest{
@@ -153,296 +149,252 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 		heartbeat:       hb,
 	}
 
-	// === 网关侧 web search 重放循环 ===
-	// 每轮重放重建迭代器（保留 sticky 偏好），最多 webSearchMaxRounds 轮。
-	maxSearchRounds := webSearchMaxRounds()
-outer:
-	for searchRound := 0; ; searchRound++ {
-		iter := balancer.NewIteratorWithPreference(group, apiKeyID, requestModel, preferredSticky)
-		if iter.Len() == 0 {
-			resp.ErrorWithCode(c, http.StatusServiceUnavailable, CodeRelayNoAvailableChannel, "no available channel")
-			metrics.SaveWithChannelStats(c.Request.Context(), false, errRelayNoAvailableChannel, iter.Attempts(), false)
-			return
-		}
-		req.iter = iter
-
-		var lastErr error
-		var lastResult attemptResult
-
-		// 同通道重试次数：启用时使用配置值，否则 1 次（不重试）
-		maxSameChannelRetries := 1
-		if group.RetryEnabled {
-			maxSameChannelRetries = group.MaxRetries
-			if maxSameChannelRetries <= 0 {
-				maxSameChannelRetries = 3
-			}
-		}
-
-		for iter.Next() {
-			select {
-			case <-c.Request.Context().Done():
-				log.Debugf("request context canceled, stopping retry")
-				metrics.SaveWithChannelStats(c.Request.Context(), false, context.Canceled, iter.Attempts(), false)
-				return
-			default:
-			}
-
-			item := iter.Item()
-
-			// 获取通道（Type 已按候选模型解析）
-			channel, err := op.ChannelGetForModel(item.ChannelID, item.ModelName, c.Request.Context())
-			if err != nil {
-				log.Warnf("failed to get channel %d: %v", item.ChannelID, err)
-				iter.Skip(item.ChannelID, 0, fmt.Sprintf("channel_%d", item.ChannelID), fmt.Sprintf("channel not found: %v", err))
-				lastErr = err
-				continue
-			}
-			if !channel.Enabled {
-				iter.Skip(channel.ID, 0, channel.Name, "channel disabled")
-				continue
-			}
-			if responsesPassthroughRequired {
-				if channel.Type == outbound.OutboundTypeOpenAIResponse {
-					responsesPassthroughCapableFound = true
-				} else {
-					iter.Skip(channel.ID, 0, channel.Name, "openai responses passthrough required")
-					continue
-				}
-			}
-
-			// 出站适配器
-			outAdapter := outbound.Get(channel.Type)
-			if outAdapter == nil {
-				iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("unsupported channel type: %d", channel.Type))
-				continue
-			}
-
-			// 类型兼容性检查
-			if reason := channelTypeIncompatibilityReason(internalRequest, channel.Type); reason != "" {
-				iter.Skip(channel.ID, 0, channel.Name, reason)
-				continue
-			}
-
-			// 设置实际模型
-			internalRequest.Model = item.ModelName
-
-			log.Debugf("request model %s, mode: %d, forwarding to channel: %s model: %s (attempt %d/%d, sticky=%t)",
-				requestModel, group.Mode, channel.Name, item.ModelName,
-				iter.Index()+1, iter.Len(), iter.IsSticky())
-
-			selectOpts := dbmodel.ChannelKeySelectOptions{
-				ExcludeKeyIDs:  make(map[int]struct{}),
-				PreferredKeyID: iter.StickyKeyID(),
-			}
-			var usedKey dbmodel.ChannelKey
-			for {
-				usedKey = channel.GetChannelKey(selectOpts)
-				if usedKey.ChannelKey == "" {
-					break
-				}
-				if !iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
-					break
-				}
-				selectOpts.ExcludeKeyIDs[usedKey.ID] = struct{}{}
-				usedKey = dbmodel.ChannelKey{}
-			}
-			if usedKey.ChannelKey == "" {
-				if len(selectOpts.ExcludeKeyIDs) == 0 {
-					iter.Skip(channel.ID, 0, channel.Name, "no available key")
-				}
-				continue
-			}
-
-			// 同通道重试循环
-			var result attemptResult
-			for retryNum := 0; retryNum < maxSameChannelRetries; retryNum++ {
-				// 重试前等待退避
-				if retryNum > 0 {
-					delay := computeBackoff(retryNum, result.RetryAfter)
-					log.Infof("same-channel retry %d/%d for %s, waiting %v",
-						retryNum, maxSameChannelRetries, channel.Name, delay)
-					select {
-					case <-c.Request.Context().Done():
-						log.Debugf("request context canceled during retry backoff")
-						metrics.SaveWithChannelStats(c.Request.Context(), false, context.Canceled, iter.Attempts(), false)
-						return
-					case <-time.After(delay):
-					}
-
-					// 重建 outAdapter 以重置流式状态（toolIndex, toolCalls 等）
-					outAdapter = outbound.Get(channel.Type)
-				}
-
-				attemptInAdapter := inbound.Get(inboundType)
-				if attemptInAdapter == nil {
-					result = attemptResult{Err: fmt.Errorf("unsupported inbound type: %d", inboundType)}
-					break
-				}
-				if _, adapterErr := attemptInAdapter.TransformRequest(c.Request.Context(), rawBody); adapterErr != nil {
-					result = attemptResult{Err: fmt.Errorf("failed to reset inbound adapter: %w", adapterErr)}
-					break
-				}
-				req.inAdapter = attemptInAdapter
-				req.streamPayloadWritten.Store(false)
-				req.responseCollected.Store(false)
-				metrics.ResetAttemptResponse()
-
-				// 构造尝试级上下文
-				ra := &relayAttempt{
-					relayRequest:         req,
-					outAdapter:           outAdapter,
-					channel:              channel,
-					usedKey:              usedKey,
-					firstTokenTimeOutSec: group.FirstTokenTimeOut,
-				}
-
-				result = ra.attempt()
-				if result.Success || result.Written || result.Canceled || result.ResetConversation || result.FirstTokenTimeout || !isRetryableStatus(result.StatusCode) {
-					break
-				}
-			}
-
-			// 同通道重试耗尽后记录熔断器失败
-			if !result.Success && !result.Written && !result.Canceled && !result.ResetConversation {
-				failureKind := circuitFailureKind(group.RetryEnabled, result.StatusCode)
-				balancer.RecordFailure(channel.ID, usedKey.ID, internalRequest.Model, failureKind)
-				outlierwindow.Report(channel.ID, false, result.StatusCode, time.Now())
-				if failureKind == balancer.FailureHard {
-					maybeLearnManagedRoute(c.Request.Context(), channel.ID, internalRequest.Model, inboundType, result.Err)
-				}
-			}
-
-			if result.Success {
-				outlierwindow.Report(channel.ID, true, result.StatusCode, time.Now())
-
-				// === 网关侧 web search：执行搜索并重放 ===
-				if result.WebSearchReplay {
-					if searchRound >= maxSearchRounds {
-						log.Warnf("web search replay limit exceeded after %d rounds (model=%s)", searchRound, requestModel)
-						metrics.SaveWithChannelStats(c.Request.Context(), false, fmt.Errorf("web search replay limit exceeded"), iter.Attempts(), false)
-						hb.FlushOrError(c, http.StatusBadGateway, "web search replay limit exceeded")
-						return
-					}
-					messages, searchErr := executeWebSearchReplay(c.Request.Context(), req.pendingWebSearchCalls)
-					if searchErr != nil {
-						log.Warnf("web search execution failed: %v", searchErr)
-						metrics.SaveWithChannelStats(c.Request.Context(), false, searchErr, iter.Attempts(), false)
-						hb.FlushOrError(c, http.StatusBadGateway, "web search execution failed")
-						return
-					}
-					req.internalRequest.Messages = append(req.internalRequest.Messages, messages...)
-					req.pendingWebSearchCalls = nil
-					// 重置 attempt 级状态，进入下一轮重放
-					req.streamPayloadWritten.Store(false)
-					req.responseCollected.Store(false)
-					metrics.ResetAttemptResponse()
-					continue outer
-				}
-
-				// === HTTP Replay 状态保存 ===
-				// 成功后，如果是 OpenAI Responses HTTP 请求，保存 replay 状态供后续续接
-				// 注意：exact replay 请求成功后也需要保存新状态，否则只能续接一轮
-				// 优先使用 metrics.InternalResponse（streaming 安全），避免二次 GetInternalResponse 消耗聚合器
-				if inboundType == inbound.InboundTypeOpenAIResponse &&
-					req.internalRequest.RawAPIFormat == model.APIFormatOpenAIResponse {
-					internalResponse := metrics.InternalResponse
-					if internalResponse == nil {
-						var err error
-						internalResponse, err = req.inAdapter.GetInternalResponse(c.Request.Context())
-						if err != nil {
-							log.Debugf("failed to get internal response for replay state save: %v", err)
-						}
-					}
-					if internalResponse != nil {
-						// 如果是 exact replay 请求，基于已有状态继续累积
-						var newState *wsConversationState
-						if req.internalRequest.IsOpenAIExactReplayRequest() && responsesReplayState != nil {
-							newState = cloneWSConversationState(responsesReplayState)
-							if newState != nil {
-								newState.ChannelID = channel.ID
-								newState.ChannelKeyID = usedKey.ID
-							}
-						}
-						if newState == nil {
-							newState = &wsConversationState{
-								RequestModel: requestModel,
-								ChannelID:    channel.ID,
-								ChannelKeyID: usedKey.ID,
-							}
-						}
-						newState.ApplySuccessfulTurn(req.internalRequest, internalResponse)
-						if newState.LastResponseID != "" {
-							ttl := wsConversationStateTTL(group.SessionKeepTime)
-							storeResponsesReplayState(apiKeyID, group.ID, requestModel, newState, ttl)
-							log.Debugf("saved HTTP replay state (apikey=%d, group=%d, model=%s, response_id=%s, channel=%d, key=%d, ttl=%v, is_replay=%t)",
-								apiKeyID, group.ID, requestModel, newState.LastResponseID, channel.ID, usedKey.ID, ttl, req.internalRequest.IsOpenAIExactReplayRequest())
-						}
-					}
-				}
-
-				metrics.SaveWithChannelStats(c.Request.Context(), true, nil, iter.Attempts(), false)
-				return
-			}
-			if result.Canceled {
-				if metricsSuggestCompletedStream(metrics) {
-					log.Debugf("client cancel after completed stream metrics, treating as success")
-					metrics.SaveWithChannelStats(c.Request.Context(), true, nil, iter.Attempts(), false)
-				} else {
-					metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
-				}
-				return
-			}
-			if result.ResetConversation {
-				metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
-				if publicErr, ok := classifyWSPublicError(result.Err, result.StatusCode); ok {
-					hb.FlushOrError(c, publicErr.Status, publicErr.Message)
-				} else {
-					hb.FlushOrError(c, result.StatusCode, result.Err.Error())
-				}
-				return
-			}
-			if result.Written {
-				if metricsSuggestCompletedStream(metrics) {
-					log.Debugf("stream written then error but metrics complete, treating as success")
-					metrics.SaveWithChannelStats(c.Request.Context(), true, nil, iter.Attempts(), false)
-				} else {
-					metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
-				}
-				return
-			}
-			lastErr = result.Err
-			lastResult = result
-		}
-
-		// 所有候选通道均失败
-		if responsesPassthroughRequired && !responsesPassthroughCapableFound {
-			err := fmt.Errorf("openai responses native tools require an openai responses channel")
-			metrics.SaveWithChannelStats(c.Request.Context(), false, err, iter.Attempts(), false)
-			hb.FlushOrError(c, http.StatusBadRequest, "当前请求包含 OpenAI Responses 原生工具，仅支持 OpenAI Responses 通道直通")
-			return
-		}
-		metrics.SaveWithChannelStats(c.Request.Context(), false, lastErr, iter.Attempts(), false)
-		if isStream && len(lastResult.DeferredPayload) > 0 {
-			_, _ = c.Writer.Write(lastResult.DeferredPayload)
-			c.Writer.Flush()
-			return
-		}
-
-		// 透传 429/503 状态码和 Retry-After 头，让客户端 SDK 的重试机制接管
-		if isPassthroughStatus(lastResult.StatusCode) {
-			if lastResult.RetryAfter > 0 {
-				c.Header("Retry-After", fmt.Sprintf("%d", int(lastResult.RetryAfter.Seconds())))
-			}
-			hb.FlushOrError(c, lastResult.StatusCode, publicRelayErrorMessage(lastResult.Err))
-			return
-		}
-		if lastResult.StatusCode > 0 {
-			hb.FlushOrError(c, lastResult.StatusCode, publicRelayErrorMessage(lastResult.Err))
-			return
-		}
-		hb.FlushOrError(c, http.StatusBadGateway, "channel failed")
+	iter := balancer.NewIteratorWithPreference(group, apiKeyID, requestModel, preferredSticky)
+	if iter.Len() == 0 {
+		resp.ErrorWithCode(c, http.StatusServiceUnavailable, CodeRelayNoAvailableChannel, "no available channel")
+		metrics.SaveWithChannelStats(c.Request.Context(), false, errRelayNoAvailableChannel, iter.Attempts(), false)
 		return
 	}
+	req.iter = iter
+
+	var lastErr error
+	var lastResult attemptResult
+
+	// 同通道重试次数：启用时使用配置值，否则 1 次（不重试）
+	maxSameChannelRetries := 1
+	if group.RetryEnabled {
+		maxSameChannelRetries = group.MaxRetries
+		if maxSameChannelRetries <= 0 {
+			maxSameChannelRetries = 3
+		}
+	}
+
+	for iter.Next() {
+		select {
+		case <-c.Request.Context().Done():
+			log.Debugf("request context canceled, stopping retry")
+			metrics.SaveWithChannelStats(c.Request.Context(), false, context.Canceled, iter.Attempts(), false)
+			return
+		default:
+		}
+
+		item := iter.Item()
+
+		// 获取通道（Type 已按候选模型解析）
+		channel, err := op.ChannelGetForModel(item.ChannelID, item.ModelName, c.Request.Context())
+		if err != nil {
+			log.Warnf("failed to get channel %d: %v", item.ChannelID, err)
+			iter.Skip(item.ChannelID, 0, fmt.Sprintf("channel_%d", item.ChannelID), fmt.Sprintf("channel not found: %v", err))
+			lastErr = err
+			continue
+		}
+		if !channel.Enabled {
+			iter.Skip(channel.ID, 0, channel.Name, "channel disabled")
+			continue
+		}
+
+		// 出站适配器
+		outAdapter := outbound.Get(channel.Type)
+		if outAdapter == nil {
+			iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("unsupported channel type: %d", channel.Type))
+			continue
+		}
+
+		// 类型兼容性检查
+		if reason := channelTypeIncompatibilityReason(internalRequest, channel.Type); reason != "" {
+			iter.Skip(channel.ID, 0, channel.Name, reason)
+			continue
+		}
+
+		// 设置实际模型
+		internalRequest.Model = item.ModelName
+
+		log.Debugf("request model %s, mode: %d, forwarding to channel: %s model: %s (attempt %d/%d, sticky=%t)",
+			requestModel, group.Mode, channel.Name, item.ModelName,
+			iter.Index()+1, iter.Len(), iter.IsSticky())
+
+		selectOpts := dbmodel.ChannelKeySelectOptions{
+			ExcludeKeyIDs:  make(map[int]struct{}),
+			PreferredKeyID: iter.StickyKeyID(),
+		}
+		var usedKey dbmodel.ChannelKey
+		for {
+			usedKey = channel.GetChannelKey(selectOpts)
+			if usedKey.ChannelKey == "" {
+				break
+			}
+			if !iter.SkipCircuitBreak(channel.ID, usedKey.ID, channel.Name) {
+				break
+			}
+			selectOpts.ExcludeKeyIDs[usedKey.ID] = struct{}{}
+			usedKey = dbmodel.ChannelKey{}
+		}
+		if usedKey.ChannelKey == "" {
+			if len(selectOpts.ExcludeKeyIDs) == 0 {
+				iter.Skip(channel.ID, 0, channel.Name, "no available key")
+			}
+			continue
+		}
+
+		// 同通道重试循环
+		var result attemptResult
+		for retryNum := 0; retryNum < maxSameChannelRetries; retryNum++ {
+			// 重试前等待退避
+			if retryNum > 0 {
+				delay := computeBackoff(retryNum, result.RetryAfter)
+				log.Infof("same-channel retry %d/%d for %s, waiting %v",
+					retryNum, maxSameChannelRetries, channel.Name, delay)
+				select {
+				case <-c.Request.Context().Done():
+					log.Debugf("request context canceled during retry backoff")
+					metrics.SaveWithChannelStats(c.Request.Context(), false, context.Canceled, iter.Attempts(), false)
+					return
+				case <-time.After(delay):
+				}
+
+				// 重建 outAdapter 以重置流式状态（toolIndex, toolCalls 等）
+				outAdapter = outbound.Get(channel.Type)
+			}
+
+			attemptInAdapter := inbound.Get(inboundType)
+			if attemptInAdapter == nil {
+				result = attemptResult{Err: fmt.Errorf("unsupported inbound type: %d", inboundType)}
+				break
+			}
+			if _, adapterErr := attemptInAdapter.TransformRequest(c.Request.Context(), rawBody); adapterErr != nil {
+				result = attemptResult{Err: fmt.Errorf("failed to reset inbound adapter: %w", adapterErr)}
+				break
+			}
+			req.inAdapter = attemptInAdapter
+			req.streamPayloadWritten.Store(false)
+			req.responseCollected.Store(false)
+			metrics.ResetAttemptResponse()
+
+			// 构造尝试级上下文
+			ra := &relayAttempt{
+				relayRequest:         req,
+				outAdapter:           outAdapter,
+				channel:              channel,
+				usedKey:              usedKey,
+				firstTokenTimeOutSec: group.FirstTokenTimeOut,
+			}
+
+			result = ra.attempt()
+			if result.Success || result.Written || result.Canceled || result.ResetConversation || result.FirstTokenTimeout || !isRetryableStatus(result.StatusCode) {
+				break
+			}
+		}
+
+		// 同通道重试耗尽后记录熔断器失败
+		if !result.Success && !result.Written && !result.Canceled && !result.ResetConversation {
+			failureKind := circuitFailureKind(group.RetryEnabled, result.StatusCode)
+			balancer.RecordFailure(channel.ID, usedKey.ID, internalRequest.Model, failureKind)
+			outlierwindow.Report(channel.ID, false, result.StatusCode, time.Now())
+			if failureKind == balancer.FailureHard {
+				maybeLearnManagedRoute(c.Request.Context(), channel.ID, internalRequest.Model, inboundType, result.Err)
+			}
+		}
+
+		if result.Success {
+			outlierwindow.Report(channel.ID, true, result.StatusCode, time.Now())
+
+			// === HTTP Replay 状态保存 ===
+			// 成功后，如果是 OpenAI Responses HTTP 请求，保存 replay 状态供后续续接
+			// 注意：exact replay 请求成功后也需要保存新状态，否则只能续接一轮
+			// 优先使用 metrics.InternalResponse（streaming 安全），避免二次 GetInternalResponse 消耗聚合器
+			if inboundType == inbound.InboundTypeOpenAIResponse &&
+				req.internalRequest.RawAPIFormat == model.APIFormatOpenAIResponse {
+				internalResponse := metrics.InternalResponse
+				if internalResponse == nil {
+					var err error
+					internalResponse, err = req.inAdapter.GetInternalResponse(c.Request.Context())
+					if err != nil {
+						log.Debugf("failed to get internal response for replay state save: %v", err)
+					}
+				}
+				if internalResponse != nil {
+					// 如果是 exact replay 请求，基于已有状态继续累积
+					var newState *wsConversationState
+					if req.internalRequest.IsOpenAIExactReplayRequest() && responsesReplayState != nil {
+						newState = cloneWSConversationState(responsesReplayState)
+						if newState != nil {
+							newState.ChannelID = channel.ID
+							newState.ChannelKeyID = usedKey.ID
+						}
+					}
+					if newState == nil {
+						newState = &wsConversationState{
+							RequestModel: requestModel,
+							ChannelID:    channel.ID,
+							ChannelKeyID: usedKey.ID,
+						}
+					}
+					newState.ApplySuccessfulTurn(req.internalRequest, internalResponse)
+					if newState.LastResponseID != "" {
+						ttl := wsConversationStateTTL(group.SessionKeepTime)
+						storeResponsesReplayState(apiKeyID, group.ID, requestModel, newState, ttl)
+						log.Debugf("saved HTTP replay state (apikey=%d, group=%d, model=%s, response_id=%s, channel=%d, key=%d, ttl=%v, is_replay=%t)",
+							apiKeyID, group.ID, requestModel, newState.LastResponseID, channel.ID, usedKey.ID, ttl, req.internalRequest.IsOpenAIExactReplayRequest())
+					}
+				}
+			}
+
+			metrics.SaveWithChannelStats(c.Request.Context(), true, nil, iter.Attempts(), false)
+			return
+		}
+		if result.Canceled {
+			if metricsSuggestCompletedStream(metrics) {
+				log.Debugf("client cancel after completed stream metrics, treating as success")
+				metrics.SaveWithChannelStats(c.Request.Context(), true, nil, iter.Attempts(), false)
+			} else {
+				metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
+			}
+			return
+		}
+		if result.ResetConversation {
+			metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
+			if publicErr, ok := classifyWSPublicError(result.Err, result.StatusCode); ok {
+				hb.FlushOrError(c, publicErr.Status, publicErr.Message)
+			} else {
+				hb.FlushOrError(c, result.StatusCode, result.Err.Error())
+			}
+			return
+		}
+		if result.Written {
+			if metricsSuggestCompletedStream(metrics) {
+				log.Debugf("stream written then error but metrics complete, treating as success")
+				metrics.SaveWithChannelStats(c.Request.Context(), true, nil, iter.Attempts(), false)
+			} else {
+				metrics.SaveWithChannelStats(c.Request.Context(), false, result.Err, iter.Attempts(), false)
+			}
+			return
+		}
+		lastErr = result.Err
+		lastResult = result
+	}
+
+	// 所有候选通道均失败
+	metrics.SaveWithChannelStats(c.Request.Context(), false, lastErr, iter.Attempts(), false)
+	if isStream && len(lastResult.DeferredPayload) > 0 {
+		_, _ = c.Writer.Write(lastResult.DeferredPayload)
+		c.Writer.Flush()
+		return
+	}
+
+	// 透传 429/503 状态码和 Retry-After 头，让客户端 SDK 的重试机制接管
+	if isPassthroughStatus(lastResult.StatusCode) {
+		if lastResult.RetryAfter > 0 {
+			c.Header("Retry-After", fmt.Sprintf("%d", int(lastResult.RetryAfter.Seconds())))
+		}
+		hb.FlushOrError(c, lastResult.StatusCode, publicRelayErrorMessage(lastResult.Err))
+		return
+	}
+	if lastResult.StatusCode > 0 {
+		hb.FlushOrError(c, lastResult.StatusCode, publicRelayErrorMessage(lastResult.Err))
+		return
+	}
+	hb.FlushOrError(c, http.StatusBadGateway, "channel failed")
+	return
 }
 
 func circuitFailureKind(retryEnabled bool, statusCode int) balancer.FailureKind {
@@ -463,19 +415,10 @@ func (ra *relayAttempt) attempt() attemptResult {
 		if errors.As(fwdErr, &responseErr) && responseErr.StatusCode > 0 {
 			statusCode = responseErr.StatusCode
 		}
-	}
-
-	// === 网关侧 web search：拦截成功，需要执行搜索后重放 ===
-	if errors.Is(fwdErr, errWebSearchReplayNeeded) {
-		ra.usedKey.StatusCode = statusCode
-		ra.usedKey.LastUseTimeStamp = time.Now().Unix()
-		op.ChannelKeyUpdate(ra.usedKey)
-		span.End(dbmodel.AttemptSuccess, statusCode, "web_search_replay")
-		op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
-			WaitTime:       span.Duration().Milliseconds(),
-			RequestSuccess: 1,
-		})
-		return attemptResult{Success: true, WebSearchReplay: true}
+		var nativeErr *llm.ResponseError
+		if errors.As(fwdErr, &nativeErr) && nativeErr.StatusCode > 0 {
+			statusCode = nativeErr.StatusCode
+		}
 	}
 
 	// 更新 channel key 状态
@@ -483,7 +426,6 @@ func (ra *relayAttempt) attempt() attemptResult {
 	ra.usedKey.LastUseTimeStamp = time.Now().Unix()
 
 	if fwdErr == nil {
-		// Passthrough handlers collect response at stream end via PassthroughConfig.CollectMetrics.
 		// A streaming provider error arrives inside an HTTP 200 SSE response, so inspect
 		// the aggregated response before classifying the attempt as successful.
 		ra.collectResponse()
@@ -497,7 +439,6 @@ func (ra *relayAttempt) attempt() attemptResult {
 			log.Warnf("upstream stream error from channel %s: %v", ra.channel.Name, responseErr)
 		} else {
 			// ====== 成功 ======
-			ra.usedKey.TotalCost += ra.metrics.Stats.InputCost + ra.metrics.Stats.OutputCost
 			op.ChannelKeyUpdate(ra.usedKey)
 
 			span.End(dbmodel.AttemptSuccess, statusCode, "")
@@ -506,7 +447,7 @@ func (ra *relayAttempt) attempt() attemptResult {
 			op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
 				WaitTime:       span.Duration().Milliseconds(),
 				RequestSuccess: 1,
-			})
+			}, ra.channel.Name)
 
 			// 熔断器：记录成功
 			balancer.RecordSuccess(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
@@ -524,7 +465,7 @@ func (ra *relayAttempt) attempt() attemptResult {
 		op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
 			WaitTime:      span.Duration().Milliseconds(),
 			RequestFailed: 1,
-		})
+		}, ra.channel.Name)
 		return attemptResult{
 			Success:           false,
 			Written:           ra.streamPayloadWritten.Load(),
@@ -546,13 +487,12 @@ func (ra *relayAttempt) attempt() attemptResult {
 				statusCode = http.StatusOK
 			}
 			ra.usedKey.StatusCode = statusCode
-			ra.usedKey.TotalCost += ra.metrics.Stats.InputCost + ra.metrics.Stats.OutputCost
 			op.ChannelKeyUpdate(ra.usedKey)
 			span.End(dbmodel.AttemptSuccess, statusCode, "")
 			op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
 				WaitTime:       span.Duration().Milliseconds(),
 				RequestSuccess: 1,
-			})
+			}, ra.channel.Name)
 			balancer.RecordSuccess(ra.channel.ID, ra.usedKey.ID, ra.internalRequest.Model)
 			balancer.SetSticky(ra.apiKeyID, ra.requestModel, ra.channel.ID, ra.usedKey.ID)
 			log.Debugf("client canceled after completed stream, treating as success")
@@ -586,7 +526,7 @@ func (ra *relayAttempt) attempt() attemptResult {
 	op.StatsChannelUpdate(ra.channel.ID, dbmodel.StatsMetrics{
 		WaitTime:      span.Duration().Milliseconds(),
 		RequestFailed: 1,
-	})
+	}, ra.channel.Name)
 
 	// 注意：熔断器记录已移至 Handler() 的同通道重试循环外，
 	// 避免重试期间过早触发熔断
@@ -608,7 +548,7 @@ func (ra *relayAttempt) attempt() attemptResult {
 }
 
 // parseRequest 解析并验证入站请求
-// 返回值中的 rawBody 为客户端原始请求字节，供同格式直通路径重用。
+// rawBody 用于日志与会话恢复；协议转换统一由 AxonHub 负责。
 func parseRequest(inboundType inbound.InboundType, c *gin.Context) ([]byte, *model.InternalLLMRequest, model.Inbound, error) {
 	body, err := iolimit.ReadRequestBody(c.Writer, c.Request, iolimit.RequestBodyMaxBytes())
 	if err != nil {
@@ -621,7 +561,12 @@ func parseRequest(inboundType inbound.InboundType, c *gin.Context) ([]byte, *mod
 	}
 
 	inAdapter := inbound.Get(inboundType)
-	internalRequest, err := inAdapter.TransformRequest(c.Request.Context(), body)
+	var internalRequest *model.InternalLLMRequest
+	if native, ok := inAdapter.(*axon.Inbound); ok {
+		internalRequest, err = native.TransformHTTPRequest(c.Request.Context(), c.Request, body)
+	} else {
+		internalRequest, err = inAdapter.TransformRequest(c.Request.Context(), body)
+	}
 	if err != nil {
 		// Malformed or unsupported client payloads are client errors. Returning
 		// 500 makes SDKs retry a request that cannot succeed.
@@ -649,7 +594,6 @@ func (ra *relayAttempt) forward() (int, error) {
 		ra.internalRequest.RawAPIFormat == model.APIFormatOpenAIResponse {
 
 		shouldTryWS := false
-		// Passthrough is now handled by forwardViaHTTP via PassthroughCapable interface
 		if ra.internalRequest.IsOpenAIExactReplayRequest() {
 			shouldTryWS = false
 		} else if ra.c == nil {
@@ -681,9 +625,6 @@ func (ra *relayAttempt) forward() (int, error) {
 // forwardViaWS attempts to forward via upstream WebSocket.
 // Returns statusCode=-1 if WS is not available (caller should fall through to HTTP).
 func (ra *relayAttempt) forwardViaWS(ctx context.Context) (int, error) {
-	if ra.c == nil && effectiveResponsesWSMode(ra.channel) == responsesWSModePassthrough && !ra.internalRequest.IsOpenAIExactReplayRequest() {
-		return ra.forwardViaWSPassthrough(ctx)
-	}
 	continuation := requiresUpstreamWSContinuation(ra.internalRequest)
 	preferredConnID := ""
 	if continuation {
@@ -699,12 +640,8 @@ func (ra *relayAttempt) forwardViaWS(ctx context.Context) (int, error) {
 	log.Debugf("upstream WS selected (channel=%s, key=%d, continuation=%t, previous_response_id=%s)",
 		ra.channel.Name, ra.usedKey.ID, continuation, currentPreviousResponseID(ra.internalRequest))
 
-	// 在 IR 交给出站转换器之前，应用注册的请求 hook（与 HTTP 路径保持一致）。
-	hook.ApplyRequest(ctx, outbound.APIFormatOf(ra.channel.Type), ra.internalRequest)
-
 	// Build the Responses API request body
-	responsesReq := openaiOutbound.ConvertToResponsesRequest(ra.internalRequest)
-	reqBody, err := json.Marshal(responsesReq)
+	reqBody, err := axon.ResponsesPayload(ctx, ra.internalRequest)
 	if err != nil {
 		wsUpstreamPool.Put(pc)
 		return -1, nil // fall through to HTTP
@@ -822,7 +759,7 @@ func (ra *relayAttempt) retryViaFreshUpstreamWS(ctx context.Context, reqBody []b
 
 func isContinuationTransportFailure(err error) bool {
 	// Check for empty stream error (both old message and new error type)
-	if errors.Is(err, stream.ErrEmptyUpstreamStream) {
+	if errors.Is(err, stream.ErrEmptyUpstreamStream) || errors.Is(err, llm.ErrStreamIncomplete) {
 		return true
 	}
 	message := relayErrorMessage(err)
@@ -844,11 +781,6 @@ func (ra *relayAttempt) handleWSStreamResponseV2(ctx context.Context, reader *ws
 	// Hand off early heartbeat
 	ra.heartbeat.Hand()
 
-	// Build transform function
-	transform := func(ctx context.Context, data []byte) ([]byte, error) {
-		return ra.transformStreamData(ctx, string(data))
-	}
-
 	// Determine first token timeout
 	var firstTokenTimeout time.Duration
 	if ra.firstTokenTimeOutSec > 0 && ra.firstTokenBudget == nil {
@@ -858,9 +790,12 @@ func (ra *relayAttempt) handleWSStreamResponseV2(ctx context.Context, reader *ws
 	// Create StreamProcessor
 	deferredWriter := newDeferredStreamWriter(ra.getStreamWriter())
 	var writer StreamWriter = deferredWriter
+	source, err := ra.transformSource(ctx, stream.NewWSSource(reader))
+	if err != nil {
+		return err
+	}
 	processor := stream.NewStreamProcessor(stream.StreamConfig{
-		Source:            stream.NewWSSource(reader),
-		Transform:         transform,
+		Source:            source,
 		Writer:            writer,
 		Context:           ctx,
 		FirstTokenTimeout: firstTokenTimeout,
@@ -873,7 +808,10 @@ func (ra *relayAttempt) handleWSStreamResponseV2(ctx context.Context, reader *ws
 	})
 
 	// Run processor
-	err := processor.Run()
+	err = processor.Run()
+	if err != nil {
+		err = errors.Join(err, source.TransportError())
+	}
 	ra.deferredStreamPayload = deferredWriter.RejectedPayload()
 
 	// Track payload written for metrics collection
@@ -898,126 +836,11 @@ func (ra *relayAttempt) handleWSStreamResponseV2(ctx context.Context, reader *ws
 
 // forwardViaHTTP forwards the request using traditional HTTP.
 func (ra *relayAttempt) forwardViaHTTP(ctx context.Context) (int, error) {
-	// Check for passthrough capability using interface
-	if pt, ok := ra.outAdapter.(model.PassthroughCapable); ok &&
-		len(ra.rawBody) > 0 &&
-		pt.CanPassthrough(ra.internalRequest.RawAPIFormat) {
-		// Additional checks for OpenAI Responses edge cases
-		if ra.internalRequest.RawAPIFormat == model.APIFormatOpenAIResponse {
-			if ra.c == nil || ra.internalRequest.IsOpenAIExactReplayRequest() || requiresUpstreamWSContinuation(ra.internalRequest) {
-				// Fall through to standard path
-			} else {
-				return ra.forwardViaHTTPPassthrough(ctx, pt)
-			}
-		} else {
-			return ra.forwardViaHTTPPassthrough(ctx, pt)
-		}
-	}
-
 	return ra.forwardViaHTTPStandard(ctx)
 }
 
-// forwardViaHTTPPassthrough handles unified passthrough for any PassthroughCapable transformer.
-func (ra *relayAttempt) forwardViaHTTPPassthrough(ctx context.Context, pt model.PassthroughCapable) (int, error) {
-	// Build request via TransformRequestRaw
-	outboundRequest, err := pt.TransformRequestRaw(
-		ctx,
-		ra.rawBody,
-		ra.internalRequest.Model,
-		ra.channel.GetBaseUrl(),
-		ra.usedKey.ChannelKey,
-		ra.internalRequest.Query,
-	)
-	if err != nil {
-		log.Warnf("failed to create passthrough request: %v", err)
-		return 0, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	// Apply param overrides
-	if err := ra.applyParamOverride(outboundRequest); err != nil {
-		return 0, err
-	}
-
-	// Copy headers
-	ra.copyHeaders(outboundRequest)
-	if ra.channel.Type == outbound.OutboundTypeOpenAIResponse {
-		outboundRequest.Header.Set("Content-Type", "application/json")
-	}
-
-	// Send request
-	response, err := ra.sendRequest(outboundRequest)
-	if err != nil {
-		return 0, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer response.Body.Close()
-
-	// Check status
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		ra.retryAfter = parseRetryAfter(response.Header.Get("Retry-After"))
-		body, truncated, readErr := iolimit.ReadAtMost(response.Body, iolimit.DefaultErrorBodyMaxBytes)
-		if readErr != nil {
-			return response.StatusCode, fmt.Errorf("failed to read upstream error body: %w", readErr)
-		}
-		if truncated {
-			body = append(body, []byte("\n[upstream error body truncated]")...)
-		}
-		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
-		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, string(body))
-		return statusCode, newUpstreamHTTPError(response.StatusCode, body)
-	}
-
-	// Get passthrough config
-	cfg := pt.PassthroughConfig()
-
-	// Branch: streaming vs non-streaming
-	if ra.internalRequest.Stream != nil && *ra.internalRequest.Stream {
-		if err := ra.handleStreamResponsePassthroughV2(ctx, response, cfg); err != nil {
-			return 0, err
-		}
-		return response.StatusCode, nil
-	}
-	return response.StatusCode, ra.handleResponsePassthrough(ctx, response, cfg)
-}
-
-// handleResponsePassthrough handles non-streaming passthrough responses.
-func (ra *relayAttempt) handleResponsePassthrough(ctx context.Context, response *http.Response, cfg model.PassthroughConfig) error {
-	body, err := iolimit.ReadAll(response.Body, iolimit.UpstreamResponseMaxBytes())
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	contentType := response.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "application/json"
-	}
-	ra.c.Data(http.StatusOK, contentType, body)
-
-	// Sidecar metrics parse
-	sidecarResp := &http.Response{
-		StatusCode: response.StatusCode,
-		Header:     response.Header.Clone(),
-		Body:       io.NopCloser(bytes.NewReader(body)),
-	}
-	if internalResponse, err := ra.outAdapter.TransformResponse(ctx, sidecarResp); err == nil && internalResponse != nil {
-		ra.inAdapter.TransformResponse(ctx, internalResponse)
-		if cfg.CollectMetrics {
-			ra.collectResponse()
-		}
-	}
-
-	return nil
-}
-
-// forwardViaHTTPStandard 是 forwardViaHTTP 的原路径（直通判定失败时的兜底）。
-// 留作显式出口，避免 passthrough 失败时的递归。
+// forwardViaHTTPStandard 使用 AxonHub 处理所有入站和出站协议。
 func (ra *relayAttempt) forwardViaHTTPStandard(ctx context.Context) (int, error) {
-	restoreItemReferenceMode := ra.applyResponsesItemReferenceCompatibility()
-	defer restoreItemReferenceMode()
-
-	// 在 IR 交给出站转换器之前，应用注册的请求 hook（按模型/目标格式做 quirk 修补）。
-	// 默认无 hook 注册时为 no-op，行为与之前一致。
-	hook.ApplyRequest(ctx, outbound.APIFormatOf(ra.channel.Type), ra.internalRequest)
-
 	outboundRequest, err := ra.outAdapter.TransformRequest(
 		ctx,
 		ra.internalRequest,
@@ -1056,12 +879,6 @@ func (ra *relayAttempt) forwardViaHTTPStandard(ctx context.Context) (int, error)
 			body = append(body, []byte("\n[upstream error body truncated]")...)
 		}
 		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
-		if ra.shouldRetryWithoutResponsesItemReference(response.StatusCode, body) {
-			markResponsesItemReferenceUnsupported(ra.channel.ID)
-			log.Infof("channel %s rejected Responses item_reference; retrying without the field", ra.channel.Name)
-			_ = response.Body.Close()
-			return ra.forwardViaHTTPStandard(ctx)
-		}
 		log.Warnf("upstream error from channel %s: status=%d, body=%s", ra.channel.Name, response.StatusCode, string(body))
 		return statusCode, newUpstreamHTTPError(response.StatusCode, body)
 	}
@@ -1250,41 +1067,6 @@ func (ra *relayAttempt) handleStreamResponseV2(ctx context.Context, response *ht
 	// Hand off early heartbeat
 	ra.heartbeat.Hand()
 
-	// === 网关侧 web search 执行（缓冲模式） ===
-	// 只有请求声明了 provider-native web_search 工具且网关开关开启时，
-	// 整段流先缓冲不落客户端：流结束后用独立 outbound 适配器逐事件累积
-	// StreamEvent 再聚合检查，若响应含 web_search 工具调用则返回哨兵错误
-	// 触发重放（网关执行搜索后回填 tool result 重新请求上游），否则把缓冲
-	// 内容原样写出。普通 `type:function` 工具（即使名字叫 web_search）
-	// 保持低延迟透传，交由客户端自己的工具执行脚手架处理。
-	webSearchEnabledForRequest := webSearchEnabled()
-	hasGatewaySearchTool := hasGatewayManagedWebSearchTool(ra.internalRequest)
-	bufferMode := webSearchEnabledForRequest && hasGatewaySearchTool
-	log.Debugf("web search: bufferMode=%t enabled=%t gatewayTool=%t declaredSearchName=%t tools=%d model=%s",
-		bufferMode, webSearchEnabledForRequest, hasGatewaySearchTool,
-		hasWebSearchTool(ra.internalRequest), len(ra.internalRequest.Tools), ra.internalRequest.Model)
-	var webBuf *webSearchBufferWriter
-	var webDecoder model.Outbound
-	var webEvents []model.StreamEvent
-	if bufferMode {
-		webDecoder = outbound.Get(ra.channel.Type)
-		if webDecoder == nil {
-			webDecoder = ra.outAdapter
-		}
-	}
-
-	// Build transform function
-	transform := func(ctx context.Context, data []byte) ([]byte, error) {
-		if bufferMode && webDecoder != nil {
-			if eventAdapter, ok := webDecoder.(model.OutboundStreamEventTransformer); ok {
-				if evts, err := eventAdapter.TransformStreamEvent(ctx, data); err == nil {
-					webEvents = append(webEvents, evts...)
-				}
-			}
-		}
-		return ra.transformStreamData(ctx, string(data))
-	}
-
 	// Determine first token timeout
 	var firstTokenTimeout time.Duration
 	if ra.firstTokenTimeOutSec > 0 && ra.firstTokenBudget == nil {
@@ -1293,16 +1075,14 @@ func (ra *relayAttempt) handleStreamResponseV2(ctx context.Context, response *ht
 
 	// Create StreamProcessor
 	deferredWriter := newDeferredStreamWriter(ra.getStreamWriter())
-	var writer StreamWriter = deferredWriter
-	if bufferMode {
-		webBuf = &webSearchBufferWriter{real: deferredWriter}
-		writer = webBuf
-	}
 
+	source, err := ra.transformSource(ctx, stream.NewSSESource(response.Body, maxSSEEventSize))
+	if err != nil {
+		return err
+	}
 	config := stream.StreamConfig{
-		Source:            stream.NewSSESource(response.Body, maxSSEEventSize),
-		Transform:         transform,
-		Writer:            writer,
+		Source:            source,
+		Writer:            deferredWriter,
 		Context:           ctx,
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
@@ -1312,46 +1092,10 @@ func (ra *relayAttempt) handleStreamResponseV2(ctx context.Context, response *ht
 			ra.stopFirstTokenTimer()
 		},
 	}
-	if bufferMode {
-		config.OnFinish = func(finishCtx context.Context, _ []byte) error {
-			if webBuf == nil {
-				return nil
-			}
-			if len(webEvents) == 0 {
-				log.Warnf("web search decoder produced no events (channel=%s), falling back to passthrough", ra.channel.Name)
-				return webBuf.FlushToReal()
-			}
-			// InternalResponseFromStreamEvents 遇到 Done 事件会立即返回空响应，
-			// 丢弃之前累积的内容；这里先滤掉流末尾的 [DONE] 标记再聚合。
-			aggEvents := filterStreamEventsForAggregation(webEvents)
-			if len(aggEvents) == 0 {
-				log.Warnf("web search decoder produced only done events (channel=%s), falling back to passthrough", ra.channel.Name)
-				return webBuf.FlushToReal()
-			}
-			resp := model.InternalResponseFromStreamEvents(aggEvents)
-			if resp == nil {
-				log.Warnf("web search decoder aggregated nil response (channel=%s, events=%d), falling back to passthrough", ra.channel.Name, len(webEvents))
-				return webBuf.FlushToReal()
-			}
-			actualModel := strings.TrimSpace(resp.Model)
-			if actualModel == "" && ra.internalRequest != nil {
-				actualModel = strings.TrimSpace(ra.internalRequest.Model)
-			}
-			ra.metrics.SetInternalResponse(resp, actualModel)
-			if calls := findWebSearchCalls(resp); len(calls) > 0 {
-				ra.pendingWebSearchCalls = calls
-				log.Debugf("web search intercepted (channel=%s, calls=%d)", ra.channel.Name, len(calls))
-				return errWebSearchReplayNeeded
-			}
-			log.Warnf("web search: no search calls in stream (channel=%s, events=%d, choices=%d, usage=%v, err=%v, sample=%s)",
-				ra.channel.Name, len(webEvents), len(resp.Choices), resp.Usage != nil, resp.Error, firstStreamEventSummary(webEvents, 8))
-			return webBuf.FlushToReal()
-		}
-	}
 	processor := stream.NewStreamProcessor(config)
 
 	// Run processor
-	err := processor.Run()
+	err = processor.Run()
 	ra.deferredStreamPayload = deferredWriter.RejectedPayload()
 
 	// Track payload written for metrics collection
@@ -1383,236 +1127,7 @@ func inboundStreamTerminalEvents(inAdapter model.Inbound) map[string]struct{} {
 	return provider.StreamTerminalEvents()
 }
 
-// handleStreamResponsePassthroughV2 uses StreamProcessor for unified passthrough handling.
-// Works with any PassthroughCapable transformer (Anthropic, OpenAI Responses, etc.).
-func (ra *relayAttempt) handleStreamResponsePassthroughV2(ctx context.Context, response *http.Response, cfg model.PassthroughConfig) error {
-	defer ra.closeFirstTokenBudget()
-
-	// Content-Type validation
-	if ct := response.Header.Get("Content-Type"); ct != "" && !strings.Contains(strings.ToLower(ct), "text/event-stream") {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 16*1024))
-		return fmt.Errorf("upstream returned non-SSE content-type %q for stream request: %s", ct, string(body))
-	}
-
-	// Hand off early heartbeat
-	ra.heartbeat.Hand()
-
-	// Determine first token timeout
-	var firstTokenTimeout time.Duration
-	if ra.firstTokenTimeOutSec > 0 && ra.firstTokenBudget == nil {
-		firstTokenTimeout = time.Duration(ra.firstTokenTimeOutSec) * time.Second
-	}
-
-	// 默认纯字节透传（Transform: nil，事件不解析不改写）。当出站适配器实现
-	// PassthroughEventInterceptor（Responses 缺失 done 事件的兜底）时，改用
-	// 事件级读取，并在转发前补发合成事件；未实现接口的适配器（Anthropic 等）
-	// 保持原始字节透传不变。
-	source := stream.StreamSource(stream.NewRawSource(response.Body, 32*1024))
-	var transform func(ctx context.Context, data []byte) ([]byte, error)
-	if interceptor, ok := ra.outAdapter.(model.PassthroughEventInterceptor); ok {
-		eventProcessor := interceptor.NewPassthroughInterceptor()
-		source = stream.NewSSEBlockSource(response.Body, maxSSEEventSize)
-		transform = func(ctx context.Context, data []byte) ([]byte, error) {
-			payload := stream.SSEBlockDataPayload(data)
-			if payload == nil {
-				return data, nil // 注释帧 / 无 data 行原样放行
-			}
-			synths, err := eventProcessor.Intercept(payload)
-			if err != nil {
-				return nil, err
-			}
-			if len(synths) == 0 {
-				return data, nil
-			}
-			var out bytes.Buffer
-			for _, synth := range synths {
-				out.WriteString("data: ")
-				out.Write(synth)
-				out.WriteString("\n\n")
-			}
-			out.Write(data)
-			return out.Bytes(), nil
-		}
-	}
-
-	// Create StreamProcessor
-	deferredWriter := newDeferredStreamWriter(ra.getStreamWriter())
-	var writer StreamWriter = deferredWriter
-	processor := stream.NewStreamProcessor(stream.StreamConfig{
-		Source:            source,
-		Transform:         transform, // nil = 纯字节透传
-		Writer:            writer,
-		Context:           ctx,
-		FirstTokenTimeout: firstTokenTimeout,
-		HeartbeatInterval: streamHeartbeatInterval(),
-		BufferRawStream:   true,
-		MaxRawBufferBytes: maxRawStreamBufferSize,
-		TerminalEvents:    cfg.TerminalEvents,
-		OnFirstToken: func() {
-			ra.metrics.SetFirstTokenTime(time.Now())
-			ra.stopFirstTokenTimer()
-		},
-		OnFinish: func(ctx context.Context, rawStream []byte) error {
-			if len(rawStream) == 0 {
-				return stream.ErrEmptyUpstreamStream
-			}
-			// Collect passthrough metrics
-			ra.collectPassthroughMetrics(ctx, rawStream)
-
-			// Collect response if configured
-			if cfg.CollectMetrics {
-				ra.collectResponse()
-			}
-
-			log.Debugf("passthrough stream end")
-			return nil
-		},
-	})
-
-	// Run processor
-	err := processor.Run()
-	ra.deferredStreamPayload = deferredWriter.RejectedPayload()
-
-	// Track payload written for metrics collection
-	if processor.PayloadWritten() {
-		ra.streamPayloadWritten.Store(true)
-	}
-
-	// Handle first token timeout specifically
-	if err != nil && strings.Contains(err.Error(), "first token timeout") {
-		_ = response.Body.Close()
-		return ra.firstTokenTimeoutError()
-	}
-
-	// Check for context cancellation with first token timeout
-	if err != nil {
-		if timeoutErr := ra.firstTokenTimeoutIfNeeded(ctx, err); timeoutErr != nil {
-			return timeoutErr
-		}
-	}
-
-	return err
-}
-
-// collectPassthroughMetrics parses raw SSE stream for metrics aggregation without mutating response.
-func (ra *relayAttempt) collectPassthroughMetrics(ctx context.Context, rawStream []byte) {
-	if len(rawStream) == 0 {
-		return
-	}
-
-	// Try stream event adapter first (preferred)
-	outEventAdapter, outOk := ra.outAdapter.(model.OutboundStreamEventTransformer)
-	inEventAdapter, inOk := ra.inAdapter.(model.InboundStreamEventTransformer)
-	if outOk && inOk {
-		readCfg := &sse.ReadConfig{MaxEventSize: maxSSEEventSize}
-		for ev, err := range sse.Read(bytes.NewReader(rawStream), readCfg) {
-			if err != nil {
-				log.Debugf("passthrough metrics parse skipped: %v", err)
-				return
-			}
-			if events, terr := outEventAdapter.TransformStreamEvent(ctx, []byte(ev.Data)); terr == nil && len(events) > 0 {
-				_, _ = inEventAdapter.TransformStreamEvents(ctx, events)
-			}
-		}
-		return
-	}
-
-	// Fallback to traditional stream transformer
-	readCfg := &sse.ReadConfig{MaxEventSize: maxSSEEventSize}
-	for ev, err := range sse.Read(bytes.NewReader(rawStream), readCfg) {
-		if err != nil {
-			log.Debugf("passthrough metrics parse skipped: %v", err)
-			return
-		}
-		if chunk, terr := ra.outAdapter.TransformStream(ctx, []byte(ev.Data)); terr == nil && chunk != nil {
-			_, _ = ra.inAdapter.TransformStream(ctx, chunk)
-		}
-	}
-}
-
-// ============================================================================
-// relay ↔ transformer 分层契约
-//
-// 下面这组 decode/encode 方法是 relay 与 transformer 之间的唯一转换边界，命名成对：
-//   - decodeOutbound*：上游 provider 响应字节 → 内部通用格式(IR)，由 outAdapter 负责
-//   - encodeInbound* ：内部通用格式(IR) → 入站客户端 wire 格式，由 inAdapter 负责
-//
-// 分层职责划分（维护时请勿打破）：
-//   - transformer 包：承载全部协议语义（字段映射、流式事件拆分、签名/思考块处理等）。
-//     relay 不得内联任何 provider 特定的字段解析逻辑。
-//   - relay 这一层：只做编排——选择走事件通道还是整包通道、错误处理与日志、写回客户端。
-//     它持有 in/out adapter、channel、metrics 等尝试级状态，本身即充当转换管道的载体，
-//     因此无需再抽出独立的 pipeline 对象（参考实现 CLIProxyAPI 因缺少此类状态载体才需要）。
-//   - 请求侧的 IR quirk 修补统一走 hook.ApplyRequest（见 forwardViaHTTPStandard）；
-//     渠道级 JSON 覆盖走 applyParamOverride（作用于最终 http.Request body 字节）。
-// ============================================================================
-
-// transformStreamData 转换流式数据
-func (ra *relayAttempt) transformStreamData(ctx context.Context, data string) ([]byte, error) {
-	events, ok, err := ra.decodeOutboundStreamEvents(ctx, []byte(data))
-	if err != nil {
-		log.Warnf("failed to transform stream events: %v", err)
-		return nil, err
-	}
-	if ok {
-		return ra.encodeInboundStreamEvents(ctx, events)
-	}
-
-	internalStream, err := ra.decodeOutboundStreamResponse(ctx, []byte(data))
-	if err != nil {
-		log.Warnf("failed to transform stream: %v", err)
-		return nil, err
-	}
-	if internalStream == nil {
-		return nil, nil
-	}
-
-	return ra.encodeInboundStreamResponse(ctx, internalStream)
-}
-
-func (ra *relayAttempt) decodeOutboundStreamEvents(ctx context.Context, data []byte) ([]model.StreamEvent, bool, error) {
-	outEventAdapter, ok := ra.outAdapter.(model.OutboundStreamEventTransformer)
-	if !ok {
-		return nil, false, nil
-	}
-	if _, ok := ra.inAdapter.(model.InboundStreamEventTransformer); !ok {
-		return nil, false, nil
-	}
-	events, err := outEventAdapter.TransformStreamEvent(ctx, data)
-	if err != nil {
-		return nil, true, err
-	}
-	return events, true, nil
-}
-
-func (ra *relayAttempt) encodeInboundStreamEvents(ctx context.Context, events []model.StreamEvent) ([]byte, error) {
-	if len(events) == 0 {
-		return nil, nil
-	}
-	inEventAdapter, ok := ra.inAdapter.(model.InboundStreamEventTransformer)
-	if !ok {
-		return nil, nil
-	}
-	inStream, err := inEventAdapter.TransformStreamEvents(ctx, events)
-	if err != nil {
-		log.Warnf("failed to transform inbound stream events: %v", err)
-		return nil, err
-	}
-	return inStream, nil
-}
-
-func (ra *relayAttempt) decodeOutboundStreamResponse(ctx context.Context, data []byte) (*model.InternalLLMResponse, error) {
-	return ra.outAdapter.TransformStream(ctx, data)
-}
-
-func (ra *relayAttempt) encodeInboundStreamResponse(ctx context.Context, internalStream *model.InternalLLMResponse) ([]byte, error) {
-	inStream, err := ra.inAdapter.TransformStream(ctx, internalStream)
-	if err != nil {
-		log.Warnf("failed to transform stream: %v", err)
-		return nil, err
-	}
-	return inStream, nil
-}
+// 协议字段和事件转换由 AxonHub 负责；relay 仅编排路由、传输、重试与观察。
 
 // handleResponse 处理非流式响应
 func (ra *relayAttempt) handleResponse(ctx context.Context, response *http.Response) error {
@@ -1624,20 +1139,6 @@ func (ra *relayAttempt) handleResponse(ctx context.Context, response *http.Respo
 	if isEmptyUpstreamResponse(internalResponse) {
 		log.Warnf("empty upstream response from channel %s", ra.channel.Name)
 		return ErrEmptyUpstreamResponse
-	}
-
-	// === 网关侧 web search 执行（非流式） ===
-	// 响应含 web_search 工具调用时拦截：不写给客户端，由 Handler
-	// 执行搜索并重放请求，最终只把模型的最终回答回给客户端。
-	if webSearchEnabled() && hasGatewayManagedWebSearchTool(ra.internalRequest) && len(findWebSearchCalls(internalResponse)) > 0 {
-		actualModel := strings.TrimSpace(internalResponse.Model)
-		if actualModel == "" && ra.internalRequest != nil {
-			actualModel = strings.TrimSpace(ra.internalRequest.Model)
-		}
-		ra.metrics.SetInternalResponse(internalResponse, actualModel)
-		ra.pendingWebSearchCalls = findWebSearchCalls(internalResponse)
-		log.Debugf("web search intercepted (channel=%s, non-stream)", ra.channel.Name)
-		return errWebSearchReplayNeeded
 	}
 
 	inResponse, err := ra.inAdapter.TransformResponse(ctx, internalResponse)
@@ -1702,166 +1203,4 @@ func (ra *relayAttempt) collectResponse() {
 		actualModel = strings.TrimSpace(ra.internalRequest.Model)
 	}
 	ra.metrics.SetInternalResponse(internalResponse, actualModel)
-}
-
-func (ra *relayAttempt) collectOpenAIResponsesPassthroughMetrics(ctx context.Context, rawStream []byte) {
-	if len(rawStream) == 0 {
-		return
-	}
-	outEventAdapter, outOk := ra.outAdapter.(model.OutboundStreamEventTransformer)
-	inEventAdapter, inOk := ra.inAdapter.(model.InboundStreamEventTransformer)
-	if outOk && inOk {
-		readCfg := &sse.ReadConfig{MaxEventSize: maxSSEEventSize}
-		for ev, err := range sse.Read(bytes.NewReader(rawStream), readCfg) {
-			if err != nil {
-				log.Debugf("openai responses passthrough metrics parse skipped: %v", err)
-				return
-			}
-			if events, terr := outEventAdapter.TransformStreamEvent(ctx, []byte(ev.Data)); terr == nil && len(events) > 0 {
-				_, _ = inEventAdapter.TransformStreamEvents(ctx, events)
-			}
-		}
-		return
-	}
-	readCfg := &sse.ReadConfig{MaxEventSize: maxSSEEventSize}
-	for ev, err := range sse.Read(bytes.NewReader(rawStream), readCfg) {
-		if err != nil {
-			log.Debugf("openai responses passthrough metrics parse skipped: %v", err)
-			return
-		}
-		if internalStream, terr := ra.outAdapter.TransformStream(ctx, []byte(ev.Data)); terr == nil && internalStream != nil {
-			_, _ = ra.inAdapter.TransformStream(ctx, internalStream)
-		}
-	}
-}
-
-// responsesPassthroughTerminalEvents / anthropicPassthroughTerminalEvents 定义各协议
-// SSE 流的终态事件类型；缓存流中出现终态事件即视为上游响应已完整送达。
-var (
-	responsesPassthroughTerminalEvents = map[string]struct{}{
-		"response.completed":  {},
-		"response.failed":     {},
-		"response.incomplete": {},
-		"error":               {},
-	}
-	anthropicPassthroughTerminalEvents = map[string]struct{}{
-		"message_stop": {},
-		"error":        {},
-	}
-)
-
-// streamReachedTerminalEvent 报告缓存的原始 SSE 流是否已包含协议终态事件。
-// 客户端 SDK 收到终态事件后会立即断连而不等上游 EOF，断连取消会沿出站请求
-// 传播打断上游读取；此时读取被取消不代表流未完成。
-func streamReachedTerminalEvent(rawStream []byte, terminalTypes map[string]struct{}) bool {
-	if len(rawStream) == 0 {
-		return false
-	}
-	readCfg := &sse.ReadConfig{MaxEventSize: maxSSEEventSize}
-	for ev, err := range sse.Read(bytes.NewReader(rawStream), readCfg) {
-		if err != nil {
-			break
-		}
-		typ := strings.TrimSpace(ev.Type)
-		if typ == "" {
-			var head struct {
-				Type string `json:"type"`
-			}
-			if json.Unmarshal([]byte(ev.Data), &head) == nil {
-				typ = head.Type
-			}
-		}
-		if _, ok := terminalTypes[typ]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-// forwardViaHTTPStandard 是 forwardViaHTTP 的原路径（直通判定失败时的兜底）。
-// 留作显式出口，避免 passthrough 失败时的递归。
-
-func (ra *relayAttempt) collectAnthropicPassthroughMetrics(ctx context.Context, rawStream []byte) {
-	if len(rawStream) == 0 {
-		return
-	}
-	outEventAdapter, outOk := ra.outAdapter.(model.OutboundStreamEventTransformer)
-	inEventAdapter, inOk := ra.inAdapter.(model.InboundStreamEventTransformer)
-	if outOk && inOk {
-		readCfg := &sse.ReadConfig{MaxEventSize: maxSSEEventSize}
-		for ev, err := range sse.Read(bytes.NewReader(rawStream), readCfg) {
-			if err != nil {
-				log.Debugf("anthropic passthrough metrics parse skipped: %v", err)
-				return
-			}
-			if events, terr := outEventAdapter.TransformStreamEvent(ctx, []byte(ev.Data)); terr == nil && len(events) > 0 {
-				_, _ = inEventAdapter.TransformStreamEvents(ctx, events)
-			}
-		}
-		return
-	}
-	readCfg := &sse.ReadConfig{MaxEventSize: maxSSEEventSize}
-	for ev, err := range sse.Read(bytes.NewReader(rawStream), readCfg) {
-		if err != nil {
-			log.Debugf("anthropic passthrough metrics parse skipped: %v", err)
-			return
-		}
-		if internalStream, terr := ra.outAdapter.TransformStream(ctx, []byte(ev.Data)); terr == nil && internalStream != nil {
-			_, _ = ra.inAdapter.TransformStream(ctx, internalStream)
-		}
-	}
-}
-
-// executeWebSearchReplay 对拦截到的 web_search 调用逐一执行搜索，
-// 构造 assistant（回放 tool_calls）+ tool（搜索结果）消息用于重放。
-// 单个搜索失败不阻断整体：错误信息写入 tool result，模型可基于已有上下文继续。
-func executeWebSearchReplay(ctx context.Context, calls []model.ToolCall) ([]model.Message, error) {
-	if len(calls) == 0 {
-		return nil, fmt.Errorf("no web search calls to execute")
-	}
-
-	assistantMsg := model.Message{
-		Role:      "assistant",
-		ToolCalls: calls,
-	}
-	messages := make([]model.Message, 0, len(calls)+1)
-	messages = append(messages, assistantMsg)
-
-	for _, call := range calls {
-		if call.ID == "" {
-			continue
-		}
-		query := readWebSearchQuery(call)
-		var text string
-		isError := false
-		if query == "" {
-			text = "Web search failed: empty query (the tool call carried no search query)."
-			isError = true
-			log.Warnf("web search call %s has empty query (args=%q)", call.ID, call.Function.Arguments)
-		} else {
-			results, searchErr := SearchWeb(ctx, query)
-			if searchErr != nil {
-				log.Warnf("web search failed for query %q: %v", query, searchErr)
-				text = fmt.Sprintf("Web search failed for query %q: %v", query, searchErr)
-				isError = true
-			} else {
-				log.Debugf("web search ok query=%q results=%d", query, len(results))
-				text = formatSearchResults(query, results)
-			}
-		}
-		toolName := call.Function.Name
-		toolMsg := model.Message{
-			Role:            "tool",
-			ToolCallID:      &call.ID,
-			Name:            &toolName,
-			Content:         model.MessageContent{Content: &text},
-			ToolCallIsError: boolPtr(isError),
-		}
-		messages = append(messages, toolMsg)
-	}
-	log.Debugf("web search replay prepared: %d calls -> %d messages", len(calls), len(messages))
-	if len(messages) == 1 {
-		return nil, fmt.Errorf("web search calls missing tool_call_id")
-	}
-	return messages, nil
 }

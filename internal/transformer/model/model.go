@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+
+	"github.com/looplj/axonhub/llm"
 )
 
 type APIFormat string
@@ -47,6 +49,9 @@ const (
 // Request is the unified llm request model for AxonHub, to keep compatibility with major app and framework.
 // It choose to base on the OpenAI chat completion request, but add some extra fields to support more features.
 type InternalLLMRequest struct {
+	// Native is the authoritative protocol request. The remaining fields are
+	// Octopus routing, session and log projections, never a conversion intermediary.
+	Native *llm.Request `json:"-"`
 	// Stable cross-provider IR fields.
 	// These carry the normalized request semantics shared by multiple providers.
 	// New provider-specific features should not be added here unless they are
@@ -414,6 +419,12 @@ type InternalLLMRequest struct {
 }
 
 func (r *InternalLLMRequest) Validate() error {
+	if r.Native != nil {
+		if strings.TrimSpace(r.Model) == "" {
+			return errors.New("model is required")
+		}
+		return nil // Protocol validation belongs to the AxonHub inbound transformer.
+	}
 	if r.Model == "" {
 		return errors.New("model is required")
 	}
@@ -1460,7 +1471,8 @@ func (r ResponseFormat) MarshalJSON() ([]byte, error) {
 // And other llm provider should convert the response to this format.
 // NOTE: the OpenAI stream and non-stream response reuse same struct.
 type InternalLLMResponse struct {
-	ID string `json:"id"`
+	Native *llm.Response `json:"-"`
+	ID     string        `json:"id"`
 
 	// RawResponsesOutputItems preserves exact OpenAI Responses output items when available.
 	// It is an internal helper field for exact replay reconstruction and is not part of API output.
@@ -1795,6 +1807,9 @@ func (u *Usage) BillableCacheWriteInput() int64 {
 	if u == nil {
 		return 0
 	}
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.WriteCachedTokens > 0 {
+		return u.PromptTokensDetails.WriteCachedTokens
+	}
 	return u.CacheCreationInputTokens
 }
 
@@ -1813,7 +1828,7 @@ func (u *Usage) BillableNonCachedInput() int64 {
 		return u.PromptTokens
 	}
 	cached := u.BillableCacheReadInput()
-	n := u.PromptTokens - cached
+	n := u.PromptTokens - cached - u.BillableCacheWriteInput()
 	if n < 0 {
 		return 0
 	}
@@ -1846,8 +1861,11 @@ type CompletionTokensDetails struct {
 
 // PromptTokensDetails Breakdown of tokens used in the prompt.
 type PromptTokensDetails struct {
-	AudioTokens  int64 `json:"audio_tokens"`
-	CachedTokens int64 `json:"cached_tokens"`
+	AudioTokens            int64 `json:"audio_tokens"`
+	CachedTokens           int64 `json:"cached_tokens"`
+	WriteCachedTokens      int64 `json:"write_cached_tokens,omitempty"`
+	WriteCached5MinTokens  int64 `json:"write_cached_5min_tokens,omitempty"`
+	WriteCached1HourTokens int64 `json:"write_cached_1hour_tokens,omitempty"`
 	// TextTokens / ImageTokens / VideoTokens / DocumentTokens are populated
 	// when upstream providers (Gemini today) report per-modality input breakdowns.
 	TextTokens     int64 `json:"text_tokens,omitempty"`

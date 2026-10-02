@@ -1,9 +1,9 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type NavItem = 'home' | 'site' | 'channel' | 'group' | 'model' | 'log' | 'setting'
+export type NavItem = 'home' | 'site' | 'channel' | 'group' | 'log' | 'setting'
 
-const NAV_ORDER: NavItem[] = ['home', 'site', 'channel', 'group', 'model', 'log', 'setting']
+const NAV_ORDER: NavItem[] = ['home', 'site', 'channel', 'group', 'log', 'setting']
 
 interface NavState {
     activeItem: NavItem
@@ -33,6 +33,10 @@ export const useNavStore = create<NavState>()(
         }),
         {
             name: 'nav-storage',
+            merge: (persisted, current) => {
+                const saved = persisted as Partial<NavState> | undefined;
+                return { ...current, activeItem: saved?.activeItem && NAV_ORDER.includes(saved.activeItem) ? saved.activeItem : 'home' };
+            },
         }
     )
 )

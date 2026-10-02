@@ -15,7 +15,6 @@ export interface Setting {
 export const SettingKey = {
     ProxyURL: 'proxy_url',
     StatsSaveInterval: 'stats_save_interval',
-    ModelInfoUpdateInterval: 'model_info_update_interval',
     SyncLLMInterval: 'sync_llm_interval',
     SiteSyncInterval: 'site_sync_interval',
     SiteCheckinInterval: 'site_checkin_interval',
@@ -49,8 +48,6 @@ export const SettingKey = {
     WebDAVBackupInterval: 'webdav_backup_interval',
     WebDAVRetentionCount: 'webdav_retention_count',
     WebDAVIncludeStats: 'webdav_include_stats',
-    WebSearchEnabled: 'web_search_enabled',
-    WebSearchMaxRounds: 'web_search_max_rounds',
     UpstreamGlobalHeaders: 'upstream_global_headers',
     UpstreamModelHeaderRules: 'upstream_model_header_rules',
     UpstreamGlobalParamOverride: 'upstream_global_param_override',
@@ -328,4 +325,3 @@ export function useRestoreWebDAVBackup() {
         },
     });
 }
-

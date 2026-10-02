@@ -135,8 +135,6 @@ type SiteSummary = {
   keyCount: number;
   modelCount: number;
   groupCount: number;
-  balance: number;
-  todayIncome: number;
   failedAccountCount: number;
   disabledAccountCount: number;
   enabledAccountCount: number;
@@ -228,12 +226,7 @@ function getSiteErrorMessage(
   return translateSiteMessage(locale, getErrorMessage(error), t);
 }
 
-function formatBalance(value: number) {
-  if (value === 0) return "0";
-  if (value >= 1000000) return `${(value / 1000000).toFixed(2)}M`;
-  if (value >= 1000) return `${(value / 1000).toFixed(2)}K`;
-  return value.toFixed(2);
-}
+
 
 function normalizeSearchTerm(value: string) {
   return value.trim().toLowerCase();
@@ -313,8 +306,6 @@ function buildSiteSummary(site: SiteRecord): SiteSummary {
   let keyCount = 0;
   let modelCount = 0;
   let groupCount = 0;
-  let balance = 0;
-  let todayIncome = 0;
   let failedAccountCount = 0;
   let disabledAccountCount = 0;
   let enabledAccountCount = 0;
@@ -323,9 +314,6 @@ function buildSiteSummary(site: SiteRecord): SiteSummary {
     keyCount += account.tokens.length;
     modelCount += account.models.length;
     groupCount += account.user_groups.length;
-    balance += account.balance;
-    todayIncome +=
-      typeof account.today_income === "number" ? account.today_income : 0;
 
     if (account.enabled) enabledAccountCount += 1;
     else disabledAccountCount += 1;
@@ -341,8 +329,6 @@ function buildSiteSummary(site: SiteRecord): SiteSummary {
       keyCount,
       modelCount,
       groupCount,
-      balance,
-      todayIncome,
       failedAccountCount,
       disabledAccountCount,
       enabledAccountCount,
@@ -357,8 +343,6 @@ function buildSiteSummary(site: SiteRecord): SiteSummary {
       keyCount,
       modelCount,
       groupCount,
-      balance,
-      todayIncome,
       failedAccountCount,
       disabledAccountCount,
       enabledAccountCount,
@@ -373,8 +357,6 @@ function buildSiteSummary(site: SiteRecord): SiteSummary {
       keyCount,
       modelCount,
       groupCount,
-      balance,
-      todayIncome,
       failedAccountCount,
       disabledAccountCount,
       enabledAccountCount,
@@ -389,8 +371,6 @@ function buildSiteSummary(site: SiteRecord): SiteSummary {
       keyCount,
       modelCount,
       groupCount,
-      balance,
-      todayIncome,
       failedAccountCount,
       disabledAccountCount,
       enabledAccountCount,
@@ -412,8 +392,6 @@ function buildSiteSummary(site: SiteRecord): SiteSummary {
     keyCount,
     modelCount,
     groupCount,
-    balance,
-    todayIncome,
     failedAccountCount,
     disabledAccountCount,
     enabledAccountCount,
@@ -744,8 +722,6 @@ export function Site() {
   );
 
   const inventory = useMemo(() => {
-    let totalBalance = 0;
-    let totalBalanceUsed = 0;
     let enabledAccounts = 0;
     let totalAccounts = 0;
 
@@ -755,15 +731,10 @@ export function Site() {
         if (site.enabled && account.enabled) {
           enabledAccounts += 1;
         }
-        totalBalance += typeof account.balance === "number" ? account.balance : 0;
-        totalBalanceUsed +=
-          typeof account.balance_used === "number" ? account.balance_used : 0;
       }
     }
 
     return {
-      totalBalance,
-      totalBalanceUsed,
       enabledAccounts,
       totalAccounts,
     };
@@ -879,12 +850,7 @@ export function Site() {
         return a.site.is_pinned ? -1 : 1;
       }
 
-      let diff = 0;
-      if (siteSortField === "balance") {
-        diff = a.summary.balance - b.summary.balance;
-      } else {
-        diff = a.site.name.localeCompare(b.site.name);
-      }
+      const diff = a.site.name.localeCompare(b.site.name);
 
       if (diff !== 0) {
         return siteSortOrder === "asc" ? diff : -diff;
@@ -1020,8 +986,7 @@ export function Site() {
     setCheckinAccountIds((current) => new Set(current).add(account.id));
     try {
       const result = await checkinSiteAccount.mutateAsync(account.id);
-      const suffix = result.reward ? `，奖励：${result.reward}` : "";
-      const message = `${statusLabel(result.status)}：${result.message}${suffix}`;
+      const message = result.status === "failed" ? `${statusLabel(result.status)}：${result.message}` : statusLabel(result.status);
       if (result.status === "failed") {
         toast.error(message);
       } else {
@@ -1433,11 +1398,6 @@ export function Site() {
                   <CompactMetric label="账号" value={summary.accountCount} />
                   <CompactMetric label="Key" value={summary.keyCount} />
                   <CompactMetric label="模型" value={summary.modelCount} />
-                  <CompactMetric label="余额" value={formatBalance(summary.balance)} />
-                  <CompactMetric
-                    label="今日收入"
-                    value={formatBalance(summary.todayIncome)}
-                  />
                 </div>
 
                 {site.tags.length > 0 ? (
@@ -1691,14 +1651,6 @@ export function Site() {
                                       <CompactMetric
                                         label="模型"
                                         value={account.models.length}
-                                      />
-                                      <CompactMetric
-                                        label="余额"
-                                        value={formatBalance(account.balance)}
-                                      />
-                                      <CompactMetric
-                                        label="今日收入"
-                                        value={formatBalance(account.today_income)}
                                       />
                                     </div>
 

@@ -3,9 +3,9 @@ import { persist } from 'zustand/middleware';
 
 export type ToolbarLayout = 'grid' | 'list';
 export type ToolbarSortOrder = 'asc' | 'desc';
-export type ToolbarSortField = 'default' | 'name' | 'created' | 'balance';
+export type ToolbarSortField = 'default' | 'name' | 'created';
 export type ToolbarSortablePage = 'site' | 'channel' | 'group';
-export const TOOLBAR_PAGES = ['site', 'channel', 'group', 'model', 'log'] as const;
+export const TOOLBAR_PAGES = ['site', 'channel', 'group', 'log'] as const;
 export type ToolbarPage = (typeof TOOLBAR_PAGES)[number];
 export type LogDateRange = { start?: number; end?: number };
 export type LogKeywordMode = 'default' | 'prefix' | 'exact' | 'contains';
@@ -58,7 +58,7 @@ export const useToolbarViewOptionsStore = create<ToolbarViewOptionsState>()(
             getSortField: (item) => {
                 const field = get().sortFields[item];
                 if (item === 'site') {
-                    return field === 'balance' || field === 'name' ? field : 'default';
+                    return field === 'name' ? field : 'default';
                 }
                 return field === 'created' ? 'created' : 'name';
             },

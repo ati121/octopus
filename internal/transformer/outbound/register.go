@@ -1,14 +1,8 @@
 package outbound
 
 import (
+	"github.com/bestruirui/octopus/internal/transformer/axon"
 	"github.com/bestruirui/octopus/internal/transformer/model"
-	outAnthropic "github.com/bestruirui/octopus/internal/transformer/outbound/anthropic"
-	"github.com/bestruirui/octopus/internal/transformer/outbound/codex"
-	"github.com/bestruirui/octopus/internal/transformer/outbound/gemini"
-	"github.com/bestruirui/octopus/internal/transformer/outbound/openai"
-	"github.com/bestruirui/octopus/internal/transformer/outbound/rerank"
-	"github.com/bestruirui/octopus/internal/transformer/outbound/systemone"
-	"github.com/bestruirui/octopus/internal/transformer/outbound/volcengine"
 )
 
 type OutboundType int
@@ -63,8 +57,8 @@ var outboundAPIFormats = map[OutboundType]model.APIFormat{
 	OutboundTypeOpenAIEmbedding: model.APIFormatOpenAIEmbedding,
 	OutboundTypeAnthropic:       model.APIFormatAnthropicMessage,
 	OutboundTypeGemini:          model.APIFormatGeminiContents,
-	// Volcengine 走 OpenAI Responses 线路（内部内嵌 openai.ResponseOutbound）。
-	OutboundTypeVolcengine: model.APIFormatOpenAIResponse,
+	// 豆包协议由 AxonHub 维护，使用 Chat Completions。
+	OutboundTypeVolcengine: model.APIFormatOpenAIChatCompletion,
 	// Codex 走 OpenAI Responses 线路（内部内嵌 openai.ResponseOutbound，仅额外注入特征头）。
 	OutboundTypeCodex:     model.APIFormatOpenAIResponse,
 	OutboundTypeRerank:    model.APIFormatRerank,
@@ -104,15 +98,15 @@ func IsValidChannelType(channelType OutboundType) bool {
 }
 
 var outboundFactories = map[OutboundType]func() model.Outbound{
-	OutboundTypeOpenAIChat:      func() model.Outbound { return &openai.ChatOutbound{} },
-	OutboundTypeOpenAIResponse:  func() model.Outbound { return &openai.ResponseOutbound{} },
-	OutboundTypeOpenAIEmbedding: func() model.Outbound { return &openai.EmbeddingOutbound{} },
-	OutboundTypeAnthropic:       func() model.Outbound { return &outAnthropic.MessageOutbound{} },
-	OutboundTypeGemini:          func() model.Outbound { return &gemini.MessagesOutbound{} },
-	OutboundTypeVolcengine:      func() model.Outbound { return &volcengine.ResponseOutbound{} },
-	OutboundTypeCodex:           func() model.Outbound { return &codex.ResponseOutbound{} },
-	OutboundTypeRerank:          func() model.Outbound { return &rerank.Outbound{} },
-	OutboundTypeSystemOne:       func() model.Outbound { return &systemone.Outbound{} },
+	OutboundTypeOpenAIChat:      func() model.Outbound { return axon.NewOutbound(0) },
+	OutboundTypeOpenAIResponse:  func() model.Outbound { return axon.NewOutbound(1) },
+	OutboundTypeOpenAIEmbedding: func() model.Outbound { return axon.NewOutbound(5) },
+	OutboundTypeAnthropic:       func() model.Outbound { return axon.NewOutbound(2) },
+	OutboundTypeGemini:          func() model.Outbound { return axon.NewOutbound(3) },
+	OutboundTypeVolcengine:      func() model.Outbound { return axon.NewOutbound(4) },
+	OutboundTypeCodex:           func() model.Outbound { return axon.NewOutbound(6) },
+	OutboundTypeRerank:          func() model.Outbound { return axon.NewOutbound(7) },
+	OutboundTypeSystemOne:       func() model.Outbound { return axon.NewOutbound(8) },
 }
 
 func Get(outboundType OutboundType) model.Outbound {

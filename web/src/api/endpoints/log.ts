@@ -70,7 +70,6 @@ export interface RelayLog {
     output_tokens: number;       // 输出Token
     ftut: number;                // 首字时间(毫秒)
     use_time: number;            // 总用时(毫秒)
-    cost: number;                // 消耗费用
     request_content: string;     // 请求内容
     response_content: string;    // 响应内容
     error: string;               // 错误信息

@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/bestruirui/octopus/internal/transformer/axon"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
-	openaiOutbound "github.com/bestruirui/octopus/internal/transformer/outbound/openai"
 )
 
 const (
@@ -446,7 +446,7 @@ func buildReplayRawInputItems(
 	if len(transcript) == 0 {
 		return append(json.RawMessage(nil), currentItems...), true
 	}
-	transcriptItems, err := openaiOutbound.MarshalResponsesInputItems(transcript)
+	transcriptItems, err := axon.MarshalResponsesInputItems(transcript)
 	if err != nil {
 		return nil, false
 	}
@@ -459,7 +459,7 @@ func buildRequestInputItems(currentRawInputItems json.RawMessage, currentMessage
 	if len(currentRawInputItems) > 0 {
 		return append(json.RawMessage(nil), currentRawInputItems...), true
 	}
-	currentItems, err := openaiOutbound.MarshalResponsesInputItems(currentMessages)
+	currentItems, err := axon.MarshalResponsesInputItems(currentMessages)
 	if err != nil || len(currentItems) == 0 {
 		return nil, false
 	}

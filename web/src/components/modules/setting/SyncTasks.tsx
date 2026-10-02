@@ -1,12 +1,11 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import { CalendarCheck2, CalendarSync, DollarSign, Globe2, RefreshCw, type LucideIcon } from 'lucide-react';
+import { CalendarCheck2, CalendarSync, Globe2, RefreshCw, type LucideIcon } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { SettingKey } from '@/api/endpoints/setting';
 import { useLastSyncTime, useSyncChannel } from '@/api/endpoints/channel';
-import { useLastUpdateTime, useUpdateModelPrice } from '@/api/endpoints/model';
 import { useCheckinAllSites, useSiteLastCheckinTime, useSiteLastSyncTime, useSyncAllSites } from '@/api/endpoints/site';
 import { toast } from '@/components/common/Toast';
 import { useSettingStore } from '@/stores/setting';
@@ -78,8 +77,6 @@ export function SettingSyncTasks() {
 
     const syncChannel = useSyncChannel();
     const { data: lastSyncTime } = useLastSyncTime();
-    const updatePrice = useUpdateModelPrice();
-    const { data: lastUpdateTime } = useLastUpdateTime();
     const syncAllSites = useSyncAllSites();
     const checkinAllSites = useCheckinAllSites();
     const { data: lastSiteSyncTime } = useSiteLastSyncTime();
@@ -107,21 +104,6 @@ export function SettingSyncTasks() {
                 onRun={() => syncChannel.mutate(undefined, {
                     onSuccess: () => toast.success(t('syncTasks.llmSync.success')),
                     onError: () => toast.error(t('syncTasks.llmSync.failed')),
-                })}
-            />
-
-            {/* 模型价格更新 */}
-            <TaskRow
-                icon={DollarSign}
-                label={t('syncTasks.llmPrice.label')}
-                settingKey={SettingKey.ModelInfoUpdateInterval}
-                last={formatTime(lastUpdateTime)}
-                running={updatePrice.isPending}
-                runLabel={t('syncTasks.llmPrice.button')}
-                pendingLabel={t('syncTasks.llmPrice.pending')}
-                onRun={() => updatePrice.mutate(undefined, {
-                    onSuccess: () => toast.success(t('syncTasks.llmPrice.success')),
-                    onError: () => toast.error(t('syncTasks.llmPrice.failed')),
                 })}
             />
 

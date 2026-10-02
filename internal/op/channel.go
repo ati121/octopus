@@ -193,7 +193,6 @@ func ChannelKeySaveDB(ctx context.Context) error {
 		DoUpdates: clause.AssignmentColumns([]string{
 			"status_code",
 			"last_use_time_stamp",
-			"total_cost",
 		}),
 	}).CreateInBatches(&rows, 100).Error; err != nil {
 		channelKeyCacheNeedUpdateLock.Lock()
@@ -663,12 +662,6 @@ func channelDel(id int, ctx context.Context, bypassManagedCheck bool) error {
 		return fmt.Errorf("failed to delete channel keys: %w", err)
 	}
 
-	// 删除统计数据
-	if err := tx.Where("channel_id = ?", id).Delete(&model.StatsChannel{}).Error; err != nil {
-		tx.Rollback()
-		return fmt.Errorf("failed to delete channel stats: %w", err)
-	}
-
 	// 删除渠道
 	if err := tx.Delete(&model.Channel{}, id).Error; err != nil {
 		tx.Rollback()
@@ -686,7 +679,6 @@ func channelDel(id int, ctx context.Context, bypassManagedCheck bool) error {
 			channelKeyCache.Del(k.ID)
 		}
 	}
-	StatsChannelDel(id)
 	recentChannelHealth.Delete(id)
 	resetBalancerStateForChannel(id)
 

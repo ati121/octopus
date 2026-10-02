@@ -347,9 +347,6 @@ func TestRunGroupHealthFailoverDoesNotMutateRuntimeStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChannelGet second failed: %v", err)
 	}
-	if reloadedFirst.Keys[0].TotalCost != 0 || reloadedSecond.Keys[0].TotalCost != 0 {
-		t.Fatalf("expected key total cost unchanged")
-	}
 	if reloadedFirst.Keys[0].StatusCode != 0 || reloadedSecond.Keys[0].StatusCode != 0 {
 		t.Fatalf("expected key status code unchanged")
 	}

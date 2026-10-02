@@ -107,9 +107,6 @@ export type SiteAccount = {
   last_checkin_status: string;
   last_sync_message: string;
   last_checkin_message: string;
-  balance: number;
-  balance_used: number;
-  today_income: number;
   tokens: SiteToken[];
   user_groups: SiteUserGroup[];
   models: SiteModel[];
@@ -188,7 +185,6 @@ export type SiteCheckinResult = {
   site_id: number;
   status: string;
   message: string;
-  reward?: string;
 };
 
 export type AllAPIHubImportResult = {
@@ -276,11 +272,6 @@ function normalizeSiteServerList(data: SiteServer[]): Site[] {
         account.checkin_random_window_minutes >= 0
           ? account.checkin_random_window_minutes
           : 120,
-      balance: typeof account.balance === "number" ? account.balance : 0,
-      balance_used:
-        typeof account.balance_used === "number" ? account.balance_used : 0,
-      today_income:
-        typeof account.today_income === "number" ? account.today_income : 0,
       tokens: account.tokens ?? [],
       user_groups: account.user_groups ?? [],
       models: account.models ?? [],
@@ -404,9 +395,6 @@ export function useCreateSiteAccount() {
         | "last_checkin_status"
         | "last_sync_message"
         | "last_checkin_message"
-        | "balance"
-        | "balance_used"
-        | "today_income"
       >,
     ) => apiClient.post<SiteAccount>("/api/v1/site/account/create", data),
     onSuccess: () => invalidateSiteQueries(queryClient),
