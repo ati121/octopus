@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Copy } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { toast } from '@/components/common/Toast';
@@ -11,7 +11,38 @@ type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string
 const ITEMS_PER_PAGE = 25;
 const TEXT_PER_PAGE = 8000;
 const TEXT_PREVIEW_LENGTH = 100;
+const CONTENT_PARSE_DELAY = 320;
 const actionClass = 'rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 disabled:opacity-40';
+
+type ParsedContent = {
+    source: string;
+    isJson: boolean;
+    value: JsonValue;
+    preview: string;
+};
+
+type IdleWindow = Window & {
+    requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+    cancelIdleCallback?: (handle: number) => void;
+};
+
+// Let the morphing dialog finish its first frames before parsing a large payload.
+function scheduleContentParse(work: () => void) {
+    const idleWindow = window as IdleWindow;
+    let idleId: number | null = null;
+    const delayId = window.setTimeout(() => {
+        if (idleWindow.requestIdleCallback) {
+            idleId = idleWindow.requestIdleCallback(work, { timeout: 600 });
+        } else {
+            work();
+        }
+    }, CONTENT_PARSE_DELAY);
+
+    return () => {
+        window.clearTimeout(delayId);
+        if (idleId !== null) idleWindow.cancelIdleCallback?.(idleId);
+    };
+}
 
 async function copyText(text: string) {
     try {
@@ -148,17 +179,32 @@ const JsonNode = memo(function JsonNode({ value, name, depth = 0 }: { value: Jso
 export const LogContent = memo(function LogContent({ content, kind, fallbackText, isLoading }: { content: string | undefined; kind: LogContentKind; fallbackText: string; isLoading?: boolean }) {
     const t = useTranslations('log.content');
     const [detailsOpen, setDetailsOpen] = useState(false);
-    const parsed = useMemo(() => {
-        if (!content) return null;
-        try {
-            return { value: JSON.parse(content) as JsonValue };
-        } catch {
-            return null;
-        }
-    }, [content]);
-    const preview = useMemo(() => parsed ? getLogContentPreview(parsed.value, kind) : content ?? '', [parsed, kind, content]);
+    const [parsed, setParsed] = useState<ParsedContent | null | undefined>(undefined);
+
+    useEffect(() => {
+        if (!content) return;
+
+        let cancelled = false;
+        const cancel = scheduleContentParse(() => {
+            if (cancelled) return;
+            try {
+                const value = JSON.parse(content) as JsonValue;
+                setParsed({ source: content, isJson: true, value, preview: getLogContentPreview(value, kind) });
+            } catch {
+                setParsed({ source: content, isJson: false, value: null, preview: '' });
+            }
+        });
+
+        return () => {
+            cancelled = true;
+            cancel();
+        };
+    }, [content, kind]);
 
     if (!content) return <div className="p-4 text-xs text-muted-foreground">{isLoading ? t('loading') : fallbackText}</div>;
+    if (!parsed || parsed.source !== content) return <div className="p-4 text-xs text-muted-foreground">{t('loading')}</div>;
+
+    const preview = parsed.isJson ? parsed.preview : content;
 
     return (
         <div className="min-w-0 p-4 [contain:layout_paint]">
@@ -169,7 +215,7 @@ export const LogContent = memo(function LogContent({ content, kind, fallbackText
                 </button>
                 <CopyValue value={content} raw />
             </div>
-            {detailsOpen && (parsed ? <JsonNode value={parsed.value} /> : <TextValue text={content} plain />)}
+            {detailsOpen && (parsed.isJson ? <JsonNode value={parsed.value} /> : <TextValue text={content} plain />)}
             <div className="group/line mb-2 mt-3 flex items-center justify-between gap-2 border-t border-border pt-3 font-sans text-xs text-muted-foreground">
                 <span>{t(kind === 'request' ? 'latestInput' : 'latestOutput')}</span>
                 {preview && <CopyValue value={preview} raw />}
