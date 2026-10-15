@@ -72,7 +72,7 @@ test('分页接缝保留完整 Unicode 与全部文本，包含末页', () => {
     assert.match(pages.at(-1), /END$/);
 });
 
-test('首字固定首响耗时，首响后总耗时立即刷新', () => {
+test('首响前先显示前段，首响后再刷新总耗时', () => {
     assert.equal(durationPairText(0, 0, 1000, 0), '1.00s / --');
     assert.equal(durationPairText(1000, 4000, 1000, 0), '1.00s / 1.00s');
     assert.equal(durationPairText(1000, 4000, 4000, 0), '1.00s / 4.00s');

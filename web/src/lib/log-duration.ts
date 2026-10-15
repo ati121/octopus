@@ -13,14 +13,14 @@ export function formatDurationPair(firstTokenMs: number | null, useTimeMs: numbe
 }
 
 // 日志页按 Magpie 口径把首响固定显示为「首字」；缺少首响的旧日志回退到 ftut。
-// 首响到达后总耗时立即跟随实时计时，避免响应处理中长时间显示未开始。
+// 首响尚未到达时先显示前段实时计时，首响到达后再开始显示后段总耗时。
 export function durationPairText(firstResponseMs: number, ftutMs: number, liveMs: number | null, useTimeMs: number): string {
     const firstTokenMs = firstResponseMs > 0 ? firstResponseMs : ftutMs > 0 ? ftutMs : null;
-    if (liveMs == null) {
-        return formatDurationPair(firstTokenMs, useTimeMs);
+    if (liveMs != null) {
+        if (firstTokenMs == null) {
+            return formatDurationPair(liveMs, null);
+        }
+        return formatDurationPair(firstTokenMs, Math.max(firstTokenMs, liveMs));
     }
-    if (firstTokenMs == null) {
-        return formatDurationPair(liveMs, null);
-    }
-    return formatDurationPair(firstTokenMs, Math.max(firstTokenMs, liveMs));
+    return formatDurationPair(firstTokenMs, useTimeMs);
 }
