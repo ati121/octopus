@@ -54,23 +54,42 @@ function formatDuration(ms: number): string {
 }
 
 // useLiveProcessingMs 在请求进行中每 500ms 刷新一次；进入处理中后异步立即校准一次，避免首帧显示停住。
-// 基准取「服务端记录的起始时间」与「本地首次观察到该请求的时刻」中较晚者：
-// 浏览器与服务器时钟存在偏差时，新请求不会一出现就显示偏差值（从 0 开始跳动）。
+// 直接以服务端记录的起始时间为基准，避免日志卡片稍晚挂载时首段计时少算约 1 秒。
+// 首响到达后把服务端首响耗时作为新的显示锚点，并按本地时间继续递增，避免
+// 首响数值大于本地已观察到的 elapsed 时被 Math.max 卡住 1-2 秒不动。
 function useLiveProcessingMs(log: RelayLog): number | null {
-    const [seenAt] = useState(() => Date.now());
     const [now, setNow] = useState(() => Date.now());
+    const [responseAnchor, setResponseAnchor] = useState<{ elapsedMs: number; observedAt: number } | null>(null);
     const processing = log.processing;
+    const firstElapsedMs = log.first_response_time > 0
+        ? log.first_response_time
+        : log.ftut > 0
+            ? log.ftut
+            : null;
     useEffect(() => {
         if (!processing) return;
-        const immediate = window.setTimeout(() => setNow(Date.now()), 0);
-        const timer = window.setInterval(() => setNow(Date.now()), 500);
+        const update = () => {
+            const timestamp = Date.now();
+            setNow(timestamp);
+            setResponseAnchor((current) => {
+                if (firstElapsedMs == null) return null;
+                return current?.elapsedMs === firstElapsedMs
+                    ? current
+                    : { elapsedMs: firstElapsedMs, observedAt: timestamp };
+            });
+        };
+        const immediate = window.setTimeout(update, 0);
+        const timer = window.setInterval(update, 500);
         return () => {
             window.clearTimeout(immediate);
             window.clearInterval(timer);
         };
-    }, [processing]);
+    }, [firstElapsedMs, processing]);
     if (!processing) return null;
-    return Math.max(0, now - Math.max(log.time * 1000, seenAt));
+    if (responseAnchor) {
+        return responseAnchor.elapsedMs + Math.max(0, now - responseAnchor.observedAt);
+    }
+    return Math.max(0, now - log.time * 1000);
 }
 
 function sanitizeErrorMessage(raw: string | undefined | null): string {
