@@ -715,6 +715,7 @@
         "card": {
             "error": "错误",
             "errorInfo": "错误信息",
+            "firstResponse": "首响",
             "firstToken": "首字",
             "totalTime": "总耗时",
             "duration": "耗时",

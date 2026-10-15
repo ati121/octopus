@@ -67,8 +67,9 @@ type StreamConfig struct {
 	HeartbeatInterval time.Duration // 0 to disable
 
 	// Callbacks
-	OnFirstToken func()                                            // Called when first payload written
-	OnFinish     func(ctx context.Context, rawStream []byte) error // Called on stream end
+	OnFirstResponse func()                                            // Called when first non-heartbeat protocol event arrives
+	OnFirstToken    func()                                            // Called when first meaningful payload is written
+	OnFinish        func(ctx context.Context, rawStream []byte) error // Called on stream end
 
 	// Passthrough-specific
 	BufferRawStream   bool                // Enable raw stream buffering for metrics
@@ -84,6 +85,7 @@ type StreamProcessor struct {
 	rawBuffer       bytes.Buffer
 	payloadWritten  bool
 	firstToken      bool
+	firstResponse   bool
 	terminalReached bool
 }
 
@@ -93,8 +95,9 @@ func NewStreamProcessor(config StreamConfig) *StreamProcessor {
 		config.MaxRawBufferBytes = defaultRawStreamBufferLimit
 	}
 	return &StreamProcessor{
-		config:     config,
-		firstToken: true,
+		config:        config,
+		firstToken:    true,
+		firstResponse: true,
 	}
 }
 
@@ -208,6 +211,13 @@ func (p *StreamProcessor) Run() (runErr error) {
 				continue
 			}
 
+			if p.firstResponse && isFirstResponsePayload(r.data) {
+				p.firstResponse = false
+				if p.config.OnFirstResponse != nil {
+					p.config.OnFirstResponse()
+				}
+			}
+
 			// Buffer raw data if enabled
 			if p.config.BufferRawStream {
 				if len(r.data) > p.config.MaxRawBufferBytes-p.rawBuffer.Len() {
@@ -240,6 +250,18 @@ func (p *StreamProcessor) Run() (runErr error) {
 			}
 		}
 	}
+}
+
+// isFirstResponsePayload excludes transport keep-alives and the terminal marker.
+func isFirstResponsePayload(data []byte) bool {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.HasPrefix(trimmed, []byte(":")) {
+		return false
+	}
+	if bytes.Equal(trimmed, []byte("[DONE]")) || bytes.Equal(trimmed, []byte("data: [DONE]")) {
+		return false
+	}
+	return true
 }
 
 // processEvent transforms and writes a single event.

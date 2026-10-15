@@ -60,21 +60,29 @@ function formatDurationCompact(ms: number): string {
     return `${Math.round(s)}s`;
 }
 
-// formatDurationPair 渲染「首字 / 总耗时」；null 表示该位尚无值，显示占位符。
-function formatDurationPair(ftutMs: number | null, useTimeMs: number | null): string {
-    const first = ftutMs != null ? formatDurationCompact(ftutMs) : '--';
+// formatDurationTriple 渲染「首响 / 首字 / 总耗时」；null 表示该位尚无值。
+function formatDurationTriple(firstResponseMs: number | null, firstTokenMs: number | null, useTimeMs: number | null): string {
+    const firstResponse = firstResponseMs != null ? formatDurationCompact(firstResponseMs) : '--';
+    const firstToken = firstTokenMs != null ? formatDurationCompact(firstTokenMs) : '--';
     const total = useTimeMs != null ? formatDurationCompact(useTimeMs) : '--';
-    return `${first} / ${total}`;
+    return `${firstResponse} / ${firstToken} / ${total}`;
 }
 
-// durationPairText 计算「首字 / 总耗时」展示值：
-// 等待首字期间流逝时间计入首字段并每秒跳动；首字到达后定格为真实值，总耗时开始跳动；
-// 结束后显示最终统计，未产生首字（如失败、非流式）时首字段回退占位符。
-function durationPairText(ftutMs: number, liveMs: number | null, useTimeMs: number): string {
+// durationTripleText 计算运行中「首响 / 首字 / 总耗时」展示值：
+// 首响和首字到达后分别定格，总耗时在请求结束前持续跳动。
+function durationTripleText(firstResponseMs: number, ftutMs: number, liveMs: number | null, useTimeMs: number): string {
     if (liveMs == null) {
-        return formatDurationPair(ftutMs > 0 ? ftutMs : null, useTimeMs);
+        return formatDurationTriple(
+            firstResponseMs > 0 ? firstResponseMs : null,
+            ftutMs > 0 ? ftutMs : null,
+            useTimeMs,
+        );
     }
-    return ftutMs > 0 ? formatDurationPair(ftutMs, liveMs) : formatDurationPair(liveMs, null);
+    return formatDurationTriple(
+        firstResponseMs > 0 ? firstResponseMs : null,
+        ftutMs > 0 ? ftutMs : null,
+        liveMs,
+    );
 }
 
 // useLiveProcessingMs 在请求进行中每秒刷新时钟并返回已流逝毫秒数；结束后返回 null。
@@ -712,9 +720,9 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                     <Zap className={cn('size-3.5 shrink-0 text-amber-500', log.processing && 'animate-pulse')} />
                                     <span
                                         className="whitespace-nowrap"
-                                        title={`${t('duration')}: ${t('firstToken')} / ${t('totalTime')}`}
+                                        title={`${t('duration')}: ${t('firstResponse')} / ${t('firstToken')} / ${t('totalTime')}`}
                                     >
-                                        {durationPairText(log.ftut, liveElapsedMs, log.use_time)}
+                                        {durationTripleText(log.first_response_time, log.ftut, liveElapsedMs, log.use_time)}
                                     </span>
                                 </div>
                                 <div className="flex min-w-0 items-center gap-1.5">
@@ -1025,7 +1033,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                             <div className="flex items-center gap-1.5">
                                 <Zap className={cn('size-3.5 text-amber-500', displayLog.processing && 'animate-pulse')} />
                                 <span>
-                                    {t('duration')}: {durationPairText(displayLog.ftut, dialogLiveElapsedMs, displayLog.use_time)}
+                                    {t('duration')}: {durationTripleText(displayLog.first_response_time, displayLog.ftut, dialogLiveElapsedMs, displayLog.use_time)}
                                 </span>
                             </div>
                         </div>

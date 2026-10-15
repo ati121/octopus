@@ -201,6 +201,29 @@ func TestStreamProcessor_FirstTokenCallback(t *testing.T) {
 	}
 }
 
+func TestStreamProcessor_FirstResponseCallbackSkipsHeartbeatAndDone(t *testing.T) {
+	source := newMockStreamSource([][]byte{
+		[]byte(":\n\n"),
+		[]byte("data: [DONE]\n\n"),
+		[]byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\n"),
+	})
+	writer := newMockStreamWriter()
+	called := 0
+	processor := NewStreamProcessor(StreamConfig{
+		Source:          source,
+		Writer:          writer,
+		Context:         context.Background(),
+		OnFirstResponse: func() { called++ },
+	})
+
+	if err := processor.Run(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("expected one first response callback, got %d", called)
+	}
+}
+
 func TestStreamProcessor_EmptyStream(t *testing.T) {
 	source := newMockStreamSource([][]byte{})
 	writer := newMockStreamWriter()

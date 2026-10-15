@@ -68,6 +68,7 @@ export interface RelayLog {
     cache_read_tokens?: number | null; // 从缓存读取的 Token
     cache_write_tokens?: number | null; // 写入缓存的 Token
     output_tokens: number;       // 输出Token
+    first_response_time: number; // 首响时间(毫秒)
     ftut: number;                // 首字时间(毫秒)
     use_time: number;            // 总用时(毫秒)
     request_content: string;     // 请求内容

@@ -25,8 +25,9 @@ type RelayMetrics struct {
 	// 只有 SaveWithChannelStats 会把它摘掉，因此需要这个标记给兜底清理判重。
 	logSaved bool
 
-	// 首 Token 时间
-	FirstTokenTime time.Time
+	// 首响和首字时间。首响记录第一个协议事件，首字记录第一个有效输出。
+	FirstResponseTime time.Time
+	FirstTokenTime    time.Time
 
 	// 请求和响应内容
 	RawRequest       []byte
@@ -70,29 +71,42 @@ func NewRelayMetrics(apiKeyID int, requestModel string, rawBody []byte, req *tra
 
 func (m *RelayMetrics) SetFirstTokenTime(t time.Time) {
 	m.FirstTokenTime = t
-	m.publishFirstTokenProgress()
+	m.publishProgress()
 }
 
-// publishFirstTokenProgress 在首字到达时向实时日志推送中间进度，
-// 让前端在请求结束前即可显示真实首字耗时并持续跳动总耗时。
-func (m *RelayMetrics) publishFirstTokenProgress() {
-	if m.LogID == 0 || m.FirstTokenTime.IsZero() {
+func (m *RelayMetrics) SetFirstResponseTime(t time.Time) {
+	if m.FirstResponseTime.IsZero() {
+		m.FirstResponseTime = t
+		m.publishProgress()
+	}
+}
+
+// publishProgress 在首响或首字到达时向实时日志推送中间进度。
+func (m *RelayMetrics) publishProgress() {
+	if m.LogID == 0 || (m.FirstResponseTime.IsZero() && m.FirstTokenTime.IsZero()) {
 		return
 	}
 	actualModel := m.ActualModel
 	if actualModel == "" {
 		actualModel = m.RequestModel
 	}
-	op.RelayLogProgress(model.RelayLog{
+	progress := model.RelayLog{
 		ID:               m.LogID,
 		Time:             m.StartTime.Unix(),
 		RequestModelName: m.RequestModel,
 		ActualModelName:  actualModel,
-		Ftut:             int(m.FirstTokenTime.Sub(m.StartTime).Milliseconds()),
-	})
+	}
+	if !m.FirstResponseTime.IsZero() {
+		progress.FirstResponseTime = int(m.FirstResponseTime.Sub(m.StartTime).Milliseconds())
+	}
+	if !m.FirstTokenTime.IsZero() {
+		progress.Ftut = int(m.FirstTokenTime.Sub(m.StartTime).Milliseconds())
+	}
+	op.RelayLogProgress(progress)
 }
 
 func (m *RelayMetrics) ResetAttemptResponse() {
+	m.FirstResponseTime = time.Time{}
 	m.FirstTokenTime = time.Time{}
 	m.InternalResponse = nil
 	m.ActualModel = ""
@@ -365,7 +379,10 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 		relayLog.RequestAPIKeyName = apiKey.Name
 	}
 
-	// 首字时间
+	// 首响和首字时间
+	if !m.FirstResponseTime.IsZero() {
+		relayLog.FirstResponseTime = int(m.FirstResponseTime.Sub(m.StartTime).Milliseconds())
+	}
 	if !m.FirstTokenTime.IsZero() {
 		relayLog.Ftut = int(m.FirstTokenTime.Sub(m.StartTime).Milliseconds())
 	}

@@ -801,6 +801,9 @@ func (ra *relayAttempt) handleWSStreamResponseV2(ctx context.Context, reader *ws
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
 		TerminalEvents:    inboundStreamTerminalEvents(ra.inAdapter),
+		OnFirstResponse: func() {
+			ra.metrics.SetFirstResponseTime(time.Now())
+		},
 		OnFirstToken: func() {
 			ra.metrics.SetFirstTokenTime(time.Now())
 			ra.stopFirstTokenTimer()
@@ -1087,6 +1090,9 @@ func (ra *relayAttempt) handleStreamResponseV2(ctx context.Context, response *ht
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
 		TerminalEvents:    inboundStreamTerminalEvents(ra.inAdapter),
+		OnFirstResponse: func() {
+			ra.metrics.SetFirstResponseTime(time.Now())
+		},
 		OnFirstToken: func() {
 			ra.metrics.SetFirstTokenTime(time.Now())
 			ra.stopFirstTokenTimer()
