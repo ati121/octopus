@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getLogContentPreview, textBoundary } from '../src/components/modules/log/content-preview.ts';
+import { durationPairText } from '../src/lib/log-duration.ts';
 
 test('最近的用户输入不被系统提示、工具结果或更早的对话替代', () => {
     assert.equal(getLogContentPreview({ messages: [
@@ -69,4 +70,15 @@ test('分页接缝保留完整 Unicode 与全部文本，包含末页', () => {
     assert.equal(pages.join(''), original);
     for (const page of pages) assert.equal(page.isWellFormed(), true);
     assert.match(pages.at(-1), /END$/);
+});
+
+test('首字固定首响耗时，首响后总耗时立即刷新', () => {
+    assert.equal(durationPairText(0, 0, 1000, 0), '1.00s / --');
+    assert.equal(durationPairText(1000, 4000, 1000, 0), '1.00s / 1.00s');
+    assert.equal(durationPairText(1000, 4000, 4000, 0), '1.00s / 4.00s');
+});
+
+test('结束后使用首响回退值和服务端总耗时', () => {
+    assert.equal(durationPairText(3606, 7304, null, 8829), '3.61s / 8.83s');
+    assert.equal(durationPairText(0, 7304, null, 8829), '7.30s / 8.83s');
 });

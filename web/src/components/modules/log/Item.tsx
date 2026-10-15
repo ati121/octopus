@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Clock, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, CircleOff, Link } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { motion, AnimatePresence } from 'motion/react';
+import { durationPairText } from '@/lib/log-duration';
 import { LogContent } from './LogContent';
 import { getLogDetail, type RelayLog, type RelayLogWSMode, type RelayLogWSExecMode, type RelayLogWSRecovery, type ChannelAttempt, type AttemptStatus, type LogSiteActionTarget as ApiLogSiteActionTarget, type LogSiteActionTargets as ApiLogSiteActionTargets } from '@/api/endpoints/log';
 import { getModelIcon } from '@/lib/model-icons';
@@ -52,35 +53,7 @@ function formatDuration(ms: number): string {
     return `${(ms / 1000).toFixed(2)}s`;
 }
 
-function formatDurationCompact(ms: number): string {
-    if (ms < 1000) return `${ms}ms`;
-    const s = ms / 1000;
-    if (s < 10) return `${s.toFixed(2)}s`;
-    if (s < 100) return `${s.toFixed(1)}s`;
-    return `${Math.round(s)}s`;
-}
-
-// formatDurationPair 渲染「首字 / 总耗时」；首字优先采用首响时间以对齐 Magpie。
-function formatDurationPair(firstTokenMs: number | null, useTimeMs: number | null): string {
-    const firstToken = firstTokenMs != null ? formatDurationCompact(firstTokenMs) : '--';
-    const total = useTimeMs != null ? formatDurationCompact(useTimeMs) : '--';
-    return `${firstToken} / ${total}`;
-}
-
-// durationPairText 计算运行中「首字 / 总耗时」展示值：首响只定格首字栏，真正首字到达后才启动总耗时。
-function durationPairText(firstResponseMs: number, ftutMs: number, liveMs: number | null, useTimeMs: number): string {
-    const firstTokenMs = firstResponseMs > 0 ? firstResponseMs : ftutMs > 0 ? ftutMs : null;
-    if (liveMs == null) {
-        return formatDurationPair(firstTokenMs, useTimeMs);
-    }
-    if (ftutMs <= 0) {
-        return formatDurationPair(firstTokenMs ?? liveMs, null);
-    }
-    const visibleFirstTokenMs = firstTokenMs ?? liveMs;
-    return formatDurationPair(visibleFirstTokenMs, Math.max(visibleFirstTokenMs, liveMs));
-}
-
-// useLiveProcessingMs 在请求进行中每秒刷新时钟并返回已流逝毫秒数；结束后返回 null。
+// useLiveProcessingMs 在请求进行中每秒刷新一次；进入处理中后异步立即校准一次，避免首帧显示停住。
 // 基准取「服务端记录的起始时间」与「本地首次观察到该请求的时刻」中较晚者：
 // 浏览器与服务器时钟存在偏差时，新请求不会一出现就显示偏差值（从 0 开始跳动）。
 function useLiveProcessingMs(log: RelayLog): number | null {
@@ -89,8 +62,12 @@ function useLiveProcessingMs(log: RelayLog): number | null {
     const processing = log.processing;
     useEffect(() => {
         if (!processing) return;
+        const immediate = window.setTimeout(() => setNow(Date.now()), 0);
         const timer = window.setInterval(() => setNow(Date.now()), 1000);
-        return () => window.clearInterval(timer);
+        return () => {
+            window.clearTimeout(immediate);
+            window.clearInterval(timer);
+        };
     }, [processing]);
     if (!processing) return null;
     return Math.max(0, now - Math.max(log.time * 1000, seenAt));
