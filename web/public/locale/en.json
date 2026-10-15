@@ -715,7 +715,6 @@
         "card": {
             "error": "Error",
             "errorInfo": "Error Info",
-            "firstResponse": "TTFB",
             "firstToken": "TTFT",
             "totalTime": "Total",
             "duration": "Latency",
