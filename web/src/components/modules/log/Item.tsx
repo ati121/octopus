@@ -67,13 +67,16 @@ function formatDurationPair(firstTokenMs: number | null, useTimeMs: number | nul
     return `${firstToken} / ${total}`;
 }
 
-// durationPairText 计算运行中「首字 / 总耗时」展示值；首响即作为首字口径。
+// durationPairText 计算运行中「首字 / 总耗时」展示值：首响前只推进首字，首响后总耗时接着首字值推进。
 function durationPairText(firstResponseMs: number, ftutMs: number, liveMs: number | null, useTimeMs: number): string {
     const firstTokenMs = firstResponseMs > 0 ? firstResponseMs : ftutMs > 0 ? ftutMs : null;
     if (liveMs == null) {
         return formatDurationPair(firstTokenMs, useTimeMs);
     }
-    return formatDurationPair(firstTokenMs ?? liveMs, liveMs);
+    if (firstTokenMs == null) {
+        return formatDurationPair(liveMs, null);
+    }
+    return formatDurationPair(firstTokenMs, Math.max(firstTokenMs, liveMs));
 }
 
 // useLiveProcessingMs 在请求进行中每秒刷新时钟并返回已流逝毫秒数；结束后返回 null。
