@@ -3,6 +3,7 @@ package stream
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -67,7 +68,7 @@ type StreamConfig struct {
 	HeartbeatInterval time.Duration // 0 to disable
 
 	// Callbacks
-	OnFirstResponse func()                                            // Called when first non-heartbeat protocol event arrives
+	OnFirstResponse func()                                            // Called when first text, reasoning, or tool content arrives
 	OnFirstToken    func()                                            // Called when first meaningful payload is written
 	OnFinish        func(ctx context.Context, rawStream []byte) error // Called on stream end
 
@@ -252,7 +253,9 @@ func (p *StreamProcessor) Run() (runErr error) {
 	}
 }
 
-// isFirstResponsePayload excludes transport keep-alives and the terminal marker.
+// isFirstResponsePayload follows Magpie's TTFT semantics: the first response is
+// the first event carrying content (text, reasoning, or a tool call), not an
+// envelope such as response.created or an empty role/text chunk.
 func isFirstResponsePayload(data []byte) bool {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 || bytes.HasPrefix(trimmed, []byte(":")) {
@@ -261,7 +264,118 @@ func isFirstResponsePayload(data []byte) bool {
 	if bytes.Equal(trimmed, []byte("[DONE]")) || bytes.Equal(trimmed, []byte("data: [DONE]")) {
 		return false
 	}
-	return true
+
+	eventType, payload := firstResponseEvent(trimmed)
+	if len(payload) == 0 {
+		return false
+	}
+	var envelope map[string]any
+	if json.Unmarshal(payload, &envelope) != nil {
+		return false
+	}
+	if eventType == "" {
+		if value, ok := envelope["type"].(string); ok {
+			eventType = strings.TrimSpace(value)
+		}
+	}
+
+	filled := func(value any) bool {
+		switch typed := value.(type) {
+		case nil:
+			return false
+		case string:
+			return typed != ""
+		case []any:
+			return len(typed) > 0
+		case map[string]any:
+			return len(typed) > 0
+		default:
+			return true
+		}
+	}
+	fieldFilled := func(object map[string]any, key string) bool {
+		if object == nil {
+			return false
+		}
+		return filled(object[key])
+	}
+
+	switch eventType {
+	case "response.output_text.delta", "response.refusal.delta",
+		"response.reasoning_summary_text.delta", "response.reasoning_text.delta",
+		"response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
+		return fieldFilled(envelope, "delta")
+	case "response.output_item.added":
+		item, _ := envelope["item"].(map[string]any)
+		kind, _ := item["type"].(string)
+		return kind == "function_call" || kind == "custom_tool_call"
+	case "content_block_start":
+		block, _ := envelope["content_block"].(map[string]any)
+		kind, _ := block["type"].(string)
+		return kind == "tool_use" || kind == "server_tool_use"
+	case "content_block_delta":
+		delta, _ := envelope["delta"].(map[string]any)
+		return fieldFilled(delta, "text") || fieldFilled(delta, "thinking") || fieldFilled(delta, "partial_json")
+	}
+
+	if choices, ok := envelope["choices"].([]any); ok {
+		for _, raw := range choices {
+			choice, _ := raw.(map[string]any)
+			if choice == nil {
+				continue
+			}
+			delta, _ := choice["delta"].(map[string]any)
+			message, _ := choice["message"].(map[string]any)
+			for _, content := range []map[string]any{delta, message} {
+				if fieldFilled(content, "content") || fieldFilled(content, "refusal") ||
+					fieldFilled(content, "reasoning") || fieldFilled(content, "reasoning_content") ||
+					fieldFilled(content, "tool_calls") || fieldFilled(content, "function_call") {
+					return true
+				}
+			}
+		}
+	}
+	if candidates, ok := envelope["candidates"].([]any); ok {
+		for _, raw := range candidates {
+			candidate, _ := raw.(map[string]any)
+			content, _ := candidate["content"].(map[string]any)
+			parts, _ := content["parts"].([]any)
+			for _, rawPart := range parts {
+				part, _ := rawPart.(map[string]any)
+				if text, _ := part["text"].(string); text != "" {
+					return true
+				}
+				if fieldFilled(part, "functionCall") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func firstResponseEvent(data []byte) (string, []byte) {
+	var eventType string
+	var payload []byte
+	framed := false
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSuffix(line, []byte("\r"))
+		switch {
+		case bytes.HasPrefix(line, []byte("event:")):
+			framed = true
+			eventType = strings.TrimSpace(string(line[len("event:"):]))
+		case bytes.HasPrefix(line, []byte("data:")):
+			framed = true
+			part := bytes.TrimSpace(line[len("data:"):])
+			if len(part) > 0 {
+				payload = append(payload, part...)
+			}
+		}
+	}
+	if !framed {
+		payload = bytes.TrimSpace(data)
+	}
+	return eventType, payload
 }
 
 // processEvent transforms and writes a single event.

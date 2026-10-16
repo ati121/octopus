@@ -3,11 +3,35 @@ package relay
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
 )
+
+func TestRelayMetricsTimingSnapshotsKeepPreciseStart(t *testing.T) {
+	ctx := setupRelayTestDB(t)
+	m := NewRelayMetrics(0, "timing-model", nil, nil)
+	m.StartTime = time.Now().Add(-2500 * time.Millisecond)
+	m.StartLog()
+	defer m.FinalizeIfUnsaved(ctx, nil)
+	assertSnapshot := func(wantFirst int) {
+		t.Helper()
+		entry, err := op.RelayLogGet(ctx, m.LogID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if entry.StartTimeMs != m.StartTime.UnixMilli() || entry.ElapsedMs < 2500 || entry.FirstResponseTime != wantFirst {
+			t.Fatalf("unexpected timing snapshot: %+v", entry)
+		}
+	}
+	assertSnapshot(0)
+	m.SetFirstResponseTime(m.StartTime.Add(2 * time.Second))
+	assertSnapshot(2000)
+	m.SetFirstTokenTime(m.StartTime.Add(2100 * time.Millisecond))
+	assertSnapshot(2000)
+}
 
 // StartLog 把记录挂进 op 的在途表后，只有终态更新会摘掉它。这里固化两条曾经漏掉
 // 收尾的路径：提前返回（分组无可用渠道）和被 gin.CustomRecovery 吞掉的 panic。

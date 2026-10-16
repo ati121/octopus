@@ -2,6 +2,7 @@ import type { InfiniteData } from '@tanstack/react-query';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient, API_BASE_URL } from '../client';
 import { logger } from '@/lib/logger';
+import { observeLogTiming, type LogTiming } from '@/lib/log-duration';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 /**
@@ -53,9 +54,10 @@ export interface LogSiteActionTargets {
     legacy_error_target?: LogSiteActionTarget | null;
 }
 
-export interface RelayLog {
+export interface RelayLog extends LogTiming {
     id: number;
     time: number;                // 时间戳
+    start_time_ms?: number;      // 请求起始时间(毫秒)，旧日志缺省
     request_model_name: string;  // 请求模型名称
     request_api_key_name?: string; // 请求使用的 API Key 名称
     channel: number;             // 实际使用的渠道ID
@@ -68,8 +70,8 @@ export interface RelayLog {
     cache_read_tokens?: number | null; // 从缓存读取的 Token
     cache_write_tokens?: number | null; // 写入缓存的 Token
     output_tokens: number;       // 输出Token
-    first_response_time: number; // 首响时间(毫秒)
-    ftut: number;                // 首字时间(毫秒)
+    first_response_time: number; // 首内容时间(毫秒，Magpie TTFT)
+    ftut: number;                // 首个有效输出时间(毫秒)
     use_time: number;            // 总用时(毫秒)
     request_content: string;     // 请求内容
     response_content: string;    // 响应内容
@@ -171,7 +173,7 @@ export function useLogPage(params: LogListParams) {
                 `/api/v1/log/list?${search.toString()}`,
             );
             return {
-                logs: result?.logs ?? [],
+                logs: (result?.logs ?? []).map((log) => observeLogTiming(log)),
                 total: result?.total ?? 0,
                 has_more: result?.has_more ?? false,
                 next_cursor: result?.next_cursor ?? null,
@@ -196,7 +198,7 @@ export function useLogPage(params: LogListParams) {
  * clearLogs.mutate();
  */
 export async function getLogDetail(id: number): Promise<RelayLog> {
-    return apiClient.get<RelayLog>(`/api/v1/log/${id}`);
+    return observeLogTiming(await apiClient.get<RelayLog>(`/api/v1/log/${id}`));
 }
 
 export function useLogSiteActionTargets(ids: number[], enabled = true) {
@@ -287,7 +289,7 @@ export function useLogs(options: UseLogsOptions = {}) {
                 `/api/v1/log/list?${params.toString()}`,
             );
             return {
-                logs: result?.logs ?? [],
+                logs: (result?.logs ?? []).map((log) => observeLogTiming(log)),
                 has_more: result?.has_more ?? false,
                 next_cursor: result?.next_cursor ?? null,
                 warning: result?.warning,
@@ -372,7 +374,7 @@ export function useLogs(options: UseLogsOptions = {}) {
 
                 eventSource.onmessage = (event) => {
                     try {
-                        const log: RelayLog = JSON.parse(event.data);
+                        const log = observeLogTiming<RelayLog>(JSON.parse(event.data));
                         queryClient.setQueryData(
                             logsInfiniteQueryKey(pageSize, filters),
                             (old: InfiniteData<CursorPage, LogCursor | null> | undefined) => {

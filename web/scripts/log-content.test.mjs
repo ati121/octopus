@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getLogContentPreview, textBoundary } from '../src/components/modules/log/content-preview.ts';
-import { durationPairText } from '../src/lib/log-duration.ts';
+import { durationPairText, liveLogElapsedMs, observeLogTiming } from '../src/lib/log-duration.ts';
 
 test('最近的用户输入不被系统提示、工具结果或更早的对话替代', () => {
     assert.equal(getLogContentPreview({ messages: [
@@ -81,4 +81,23 @@ test('首响前先显示前段，首响后再刷新总耗时', () => {
 test('结束后使用首响回退值和服务端总耗时', () => {
     assert.equal(durationPairText(3606, 7304, null, 8829), '3.61s / 8.83s');
     assert.equal(durationPairText(0, 7304, null, 8829), '7.30s / 8.83s');
+});
+
+test('主机时钟差不影响首段计时，首响进度到达后总耗时继续推进', () => {
+    const started = observeLogTiming({ time: 100, start_time_ms: 100900, elapsed_ms: 100, processing: true }, 2000, 500000);
+    assert.equal(liveLogElapsedMs(started, 2500), 600);
+    assert.equal(durationPairText(0, 0, liveLogElapsedMs(started, 2500), 0), '600ms / --');
+    const progress = observeLogTiming({ ...started, elapsed_ms: 2100 }, 4000, 502000);
+    assert.equal(durationPairText(2000, 0, liveLogElapsedMs(progress, 4500), 0), '2.00s / 2.60s');
+    assert.equal(durationPairText(2000, 0, liveLogElapsedMs(progress, 5000), 0), '2.00s / 3.10s');
+    assert.equal(liveLogElapsedMs({ ...progress, processing: false }, 5000), null);
+});
+
+test('中途打开的日志从快照耗时继续，旧日志回退毫秒或秒级起点', () => {
+    const reloaded = observeLogTiming({ time: 100, elapsed_ms: 12000, processing: true }, 5000);
+    assert.equal(liveLogElapsedMs(reloaded, 5500), 12500);
+    const legacy = observeLogTiming({ time: 100, processing: true }, 0, 102500);
+    assert.equal(liveLogElapsedMs(legacy, 500), 3000);
+    const precise = observeLogTiming({ time: 100, start_time_ms: 100900, processing: true }, 0, 102500);
+    assert.equal(liveLogElapsedMs(precise, 500), 2100);
 });

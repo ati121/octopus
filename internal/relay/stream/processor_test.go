@@ -201,19 +201,26 @@ func TestStreamProcessor_FirstTokenCallback(t *testing.T) {
 	}
 }
 
-func TestStreamProcessor_FirstResponseCallbackSkipsHeartbeatAndDone(t *testing.T) {
+func TestStreamProcessor_FirstResponseCallbackSkipsHeartbeatDoneAndEmptyEnvelope(t *testing.T) {
 	source := newMockStreamSource([][]byte{
 		[]byte(":\n\n"),
 		[]byte("data: [DONE]\n\n"),
 		[]byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\n"),
+		[]byte("data: {\"id\":\"r1\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n"),
+		[]byte("data: {\"id\":\"r1\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"),
 	})
 	writer := newMockStreamWriter()
 	called := 0
 	processor := NewStreamProcessor(StreamConfig{
-		Source:          source,
-		Writer:          writer,
-		Context:         context.Background(),
-		OnFirstResponse: func() { called++ },
+		Source:  source,
+		Writer:  writer,
+		Context: context.Background(),
+		OnFirstResponse: func() {
+			called++
+			if !strings.Contains(writer.buffer.String(), `"role":"assistant"`) {
+				t.Error("first response fired before content arrived")
+			}
+		},
 	})
 
 	if err := processor.Run(); err != nil {
@@ -221,6 +228,36 @@ func TestStreamProcessor_FirstResponseCallbackSkipsHeartbeatAndDone(t *testing.T
 	}
 	if called != 1 {
 		t.Fatalf("expected one first response callback, got %d", called)
+	}
+}
+
+func TestIsFirstResponsePayloadUsesContentNotProtocolEnvelope(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"responses created", "event: response.created\ndata: {\"type\":\"response.created\"}", false},
+		{"empty text delta", "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"\"}", false},
+		{"reasoning delta", "event: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"think\"}", true},
+		{"function call added", "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\"}}", true},
+		{"anthropic empty block", "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\",\"text\":\"\"}}", false},
+		{"anthropic text delta", "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}", true},
+		{"chat role only", `data: {"choices":[{"delta":{"role":"assistant"}}]}`, false},
+		{"chat tool call", `data: {"choices":[{"delta":{"tool_calls":[{"index":0}]}}]}`, true},
+		{"gemini thought", `data: {"candidates":[{"content":{"parts":[{"text":"think","thought":true}]}}]}`, true},
+		{"text space", `data: {"type":"response.output_text.delta","delta":" "}`, true},
+		{"responses terminal", `data: {"type":"response.completed"}`, false},
+		{"signature only", `data: {"type":"content_block_delta","delta":{"type":"signature_delta","signature":"x"}}`, false},
+		{"anthropic tool", `data: {"type":"content_block_start","content_block":{"type":"tool_use","input":{}}}`, true},
+		{"custom tool", `data: {"type":"response.custom_tool_call_input.delta","delta":"input"}`, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isFirstResponsePayload([]byte(test.data)); got != test.want {
+				t.Fatalf("isFirstResponsePayload() = %t, want %t", got, test.want)
+			}
+		})
 	}
 }
 

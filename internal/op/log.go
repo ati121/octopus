@@ -112,6 +112,7 @@ func RelayLogUnsubscribe(ch chan model.RelayLog) {
 }
 
 func notifySubscribers(relayLog model.RelayLog) {
+	relayLog = relayLogTimingSnapshot(relayLog)
 	relayLogSubscribersLock.RLock()
 	defer relayLogSubscribersLock.RUnlock()
 	for ch := range relayLogSubscribers {
@@ -498,6 +499,7 @@ func relayLogBeforeCursor(entry model.RelayLog, beforeTime, beforeID *int64) boo
 func RelayLogGet(ctx context.Context, id int64) (*model.RelayLog, error) {
 	if item, ok := relayLogFindInFlight(id); ok {
 		fillRelayLogProtocols(&item)
+		item = relayLogTimingSnapshot(item)
 		return &item, nil
 	}
 	if item, ok := relayLogFindRecent(id); ok {
@@ -518,6 +520,7 @@ func relayLogCollectRecent(filter RelayLogListFilter, channelSet map[int]struct{
 		if light {
 			entry = relayLogLightCopy(entry)
 		}
+		entry = relayLogTimingSnapshot(entry)
 		result = append(result, entry)
 	}
 	relayLogRecentLock.RUnlock()
@@ -551,6 +554,13 @@ func relayLogFindRecent(id int64) (model.RelayLog, bool) {
 func relayLogLightCopy(entry model.RelayLog) model.RelayLog {
 	entry.RequestContent = ""
 	entry.ResponseContent = ""
+	return entry
+}
+
+func relayLogTimingSnapshot(entry model.RelayLog) model.RelayLog {
+	if entry.Processing && entry.StartTimeMs > 0 {
+		entry.ElapsedMs = max(0, time.Now().UnixMilli()-entry.StartTimeMs)
+	}
 	return entry
 }
 

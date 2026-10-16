@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Clock, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, CircleOff, Link } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { motion, AnimatePresence } from 'motion/react';
-import { durationPairText } from '@/lib/log-duration';
+import { durationPairText, liveLogElapsedMs } from '@/lib/log-duration';
 import { LogContent } from './LogContent';
 import { getLogDetail, type RelayLog, type RelayLogWSMode, type RelayLogWSExecMode, type RelayLogWSRecovery, type ChannelAttempt, type AttemptStatus, type LogSiteActionTarget as ApiLogSiteActionTarget, type LogSiteActionTargets as ApiLogSiteActionTargets } from '@/api/endpoints/log';
 import { getModelIcon } from '@/lib/model-icons';
@@ -54,29 +54,14 @@ function formatDuration(ms: number): string {
 }
 
 // useLiveProcessingMs 在请求进行中每 500ms 刷新一次；进入处理中后异步立即校准一次，避免首帧显示停住。
-// 直接以服务端记录的起始时间为基准，避免日志卡片稍晚挂载时首段计时少算约 1 秒。
-// 首响到达后把服务端首响耗时作为新的显示锚点，并按本地时间继续递增，避免
-// 首响数值大于本地已观察到的 elapsed 时被 Math.max 卡住 1-2 秒不动。
+// 用服务端已耗时加本地单调时钟推进，避免主机时钟差和首响事件重置计时。
 function useLiveProcessingMs(log: RelayLog): number | null {
-    const [now, setNow] = useState(() => Date.now());
-    const [responseAnchor, setResponseAnchor] = useState<{ elapsedMs: number; observedAt: number } | null>(null);
+    const [now, setNow] = useState(() => performance.now());
     const processing = log.processing;
-    const firstElapsedMs = log.first_response_time > 0
-        ? log.first_response_time
-        : log.ftut > 0
-            ? log.ftut
-            : null;
     useEffect(() => {
         if (!processing) return;
         const update = () => {
-            const timestamp = Date.now();
-            setNow(timestamp);
-            setResponseAnchor((current) => {
-                if (firstElapsedMs == null) return null;
-                return current?.elapsedMs === firstElapsedMs
-                    ? current
-                    : { elapsedMs: firstElapsedMs, observedAt: timestamp };
-            });
+            setNow(performance.now());
         };
         const immediate = window.setTimeout(update, 0);
         const timer = window.setInterval(update, 500);
@@ -84,12 +69,8 @@ function useLiveProcessingMs(log: RelayLog): number | null {
             window.clearTimeout(immediate);
             window.clearInterval(timer);
         };
-    }, [firstElapsedMs, processing]);
-    if (!processing) return null;
-    if (responseAnchor) {
-        return responseAnchor.elapsedMs + Math.max(0, now - responseAnchor.observedAt);
-    }
-    return Math.max(0, now - log.time * 1000);
+    }, [processing]);
+    return liveLogElapsedMs(log, now);
 }
 
 function sanitizeErrorMessage(raw: string | undefined | null): string {
@@ -558,12 +539,16 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
     const diagnosticTitle = hasAttempts ? t('retryDetails') : t('errorInfo');
     const diagnosticIcon = hasAttempts ? RotateCw : AlertCircle;
     const DiagnosticIcon = diagnosticIcon;
-    const displayLog = detailLog ?? log;
+    const displayLog = detailLog ? {
+        ...detailLog,
+        ...log,
+        request_content: detailLog.request_content,
+        response_content: detailLog.response_content,
+    } : log;
     const liveElapsedMs = useLiveProcessingMs(log);
-    const dialogLiveElapsedMs = useLiveProcessingMs(displayLog);
 
     useEffect(() => {
-        if (detailRequestID === 0 || detailLog) return;
+        if (detailRequestID === 0) return;
         let cancelled = false;
         getLogDetail(log.id)
             .then((item) => {
@@ -580,7 +565,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
         return () => {
             cancelled = true;
         };
-    }, [detailLog, detailRequestID, log.id]);
+    }, [detailRequestID, log.id, log.processing]);
 
     const openDisableDialog = (target: LogSiteActionTarget) => {
         if (!target.can_disable_model || target.model_disabled) return;
@@ -1024,7 +1009,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                             <div className="flex items-center gap-1.5">
                                 <Zap className={cn('size-3.5 text-amber-500', displayLog.processing && 'animate-pulse')} />
                                 <span>
-                                    {t('duration')}: {durationPairText(displayLog.first_response_time, displayLog.ftut, dialogLiveElapsedMs, displayLog.use_time)}
+                                    {t('duration')}: {durationPairText(displayLog.first_response_time, displayLog.ftut, liveElapsedMs, displayLog.use_time)}
                                 </span>
                             </div>
                         </div>

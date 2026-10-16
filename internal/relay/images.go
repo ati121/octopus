@@ -253,6 +253,7 @@ func (m *imagesRelayMetrics) StartLog() {
 	}
 	m.LogID = op.RelayLogStart(model.RelayLog{
 		Time:             m.StartTime.Unix(),
+		StartTimeMs:      m.StartTime.UnixMilli(),
 		RequestModelName: m.RequestModel,
 		ActualModelName:  m.RequestModel,
 	})
@@ -269,6 +270,7 @@ func (m *imagesRelayMetrics) SetFirstTokenTime(t time.Time) {
 			op.RelayLogProgress(model.RelayLog{
 				ID:               m.LogID,
 				Time:             m.StartTime.Unix(),
+				StartTimeMs:      m.StartTime.UnixMilli(),
 				RequestModelName: m.RequestModel,
 				ActualModelName:  actualModel,
 				Ftut:             int(m.FirstToken.Sub(m.StartTime).Milliseconds()),
@@ -349,6 +351,7 @@ func (m *imagesRelayMetrics) saveLog(ctx context.Context, success bool, err erro
 	relayLog := model.RelayLog{
 		ID:               m.LogID,
 		Time:             m.StartTime.Unix(),
+		StartTimeMs:      m.StartTime.UnixMilli(),
 		RequestModelName: m.RequestModel,
 		ChannelName:      channelName,
 		Protocol:         finalChannelProtocol(attempts),

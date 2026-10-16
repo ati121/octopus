@@ -53,6 +53,8 @@ const (
 type RelayLog struct {
 	ID                   int64               `json:"id" gorm:"primaryKey;autoIncrement:false"` // Snowflake ID
 	Time                 int64               `json:"time"`                                     // 时间戳（秒）
+	StartTimeMs          int64               `json:"start_time_ms,omitempty" gorm:"-"`         // 请求起始时间（毫秒），仅用于进行中实时计时
+	ElapsedMs            int64               `json:"elapsed_ms" gorm:"-"`                      // 发送进行中快照时的服务端耗时（毫秒）
 	RequestModelName     string              `json:"request_model_name"`                       // 请求模型名称
 	RequestAPIKeyName    string              `json:"request_api_key_name"`                     // 请求使用的 API Key 名称
 	ChannelId            int                 `json:"channel" gorm:"index"`                     // 实际使用的渠道ID
@@ -65,8 +67,8 @@ type RelayLog struct {
 	CacheReadTokens      *int                `json:"cache_read_tokens,omitempty"`              // 从缓存读取的 Token
 	CacheWriteTokens     *int                `json:"cache_write_tokens,omitempty"`             // 写入缓存的 Token
 	OutputTokens         int                 `json:"output_tokens"`                            // 输出 Token
-	FirstResponseTime    int                 `json:"first_response_time"`                      // 首响时间(毫秒)，收到首个非心跳协议事件
-	Ftut                 int                 `json:"ftut"`                                     // 首字时间(毫秒)
+	FirstResponseTime    int                 `json:"first_response_time"`                      // 首内容时间(毫秒)，按 Magpie TTFT 口径
+	Ftut                 int                 `json:"ftut"`                                     // 首个有效输出时间(毫秒)
 	UseTime              int                 `json:"use_time"`                                 // 总用时(毫秒)
 	RequestContent       string              `json:"request_content"`                          // 请求内容
 	ResponseContent      string              `json:"response_content"`                         // 响应内容

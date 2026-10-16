@@ -25,7 +25,7 @@ type RelayMetrics struct {
 	// 只有 SaveWithChannelStats 会把它摘掉，因此需要这个标记给兜底清理判重。
 	logSaved bool
 
-	// 首响和首字时间。首响记录第一个协议事件，首字记录第一个有效输出。
+	// 首响和首字时间。首响按 Magpie TTFT 记录首个有内容事件，首字记录首个有效输出。
 	FirstResponseTime time.Time
 	FirstTokenTime    time.Time
 
@@ -54,6 +54,7 @@ func (m *RelayMetrics) StartLog() {
 	}
 	m.LogID = op.RelayLogStart(model.RelayLog{
 		Time:             m.StartTime.Unix(),
+		StartTimeMs:      m.StartTime.UnixMilli(),
 		RequestModelName: m.RequestModel,
 		ActualModelName:  m.RequestModel,
 	})
@@ -93,6 +94,7 @@ func (m *RelayMetrics) publishProgress() {
 	progress := model.RelayLog{
 		ID:               m.LogID,
 		Time:             m.StartTime.Unix(),
+		StartTimeMs:      m.StartTime.UnixMilli(),
 		RequestModelName: m.RequestModel,
 		ActualModelName:  actualModel,
 	}
@@ -364,6 +366,7 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 	relayLog := model.RelayLog{
 		ID:               m.LogID,
 		Time:             m.StartTime.Unix(),
+		StartTimeMs:      m.StartTime.UnixMilli(),
 		RequestModelName: m.RequestModel,
 		ChannelName:      channelName,
 		Protocol:         finalChannelProtocol(attempts),
