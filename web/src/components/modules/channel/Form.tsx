@@ -171,7 +171,8 @@ export function ChannelForm({
             {
                 onSuccess: (data) => {
                     if (data && data.length > 0) {
-                        const nextAuto = Array.from(new Set([...autoModels, ...data].map((m) => m.trim()).filter(Boolean)));
+                        // 以上游返回为准：上游已下架的模型一并移除，只保留手动添加的自定义模型。
+                        const nextAuto = Array.from(new Set(data.map((m) => m.trim()).filter(Boolean)));
                         updateModels(nextAuto, customModels);
                         toast.success(t('modelRefreshSuccess'));
                     } else {
