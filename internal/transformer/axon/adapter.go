@@ -303,7 +303,22 @@ type Outbound struct {
 	// EndpointPath overrides the protocol default path (for example /systemone
 	// becomes /decisions). Empty keeps the AxonHub default.
 	EndpointPath string
+	// Transport selects the upstream transport. Empty or "http" uses ordinary
+	// HTTP; "websocket" routes Responses requests through AxonHub's WebSocket
+	// executor, which owns pooling and continuation.
+	Transport string
+	// WebSocketProxy carries the channel's proxy settings into the pooled
+	// WebSocket dialer.
+	WebSocketProxy *httpclient.ProxyConfig
 }
+
+const (
+	// TransportHTTP is the default upstream transport.
+	TransportHTTP = "http"
+	// TransportWebSocket routes Responses requests over a pooled upstream
+	// WebSocket handled by AxonHub.
+	TransportWebSocket = "websocket"
+)
 
 func NewOutbound(kind int) *Outbound { return &Outbound{Kind: kind} }
 
@@ -312,6 +327,25 @@ func NewOutbound(kind int) *Outbound { return &Outbound{Kind: kind} }
 // non-empty path also disables its "/v1" normalization.
 func NewOutboundWithEndpointPath(kind int, endpointPath string) *Outbound {
 	return &Outbound{Kind: kind, EndpointPath: strings.TrimSpace(endpointPath)}
+}
+
+// NewWebSocketOutbound builds a Responses outbound that speaks to the upstream
+// over WebSocket instead of HTTP/SSE.
+func NewWebSocketOutbound(endpointPath string, proxy *httpclient.ProxyConfig) *Outbound {
+	return &Outbound{
+		Kind:           1,
+		EndpointPath:   strings.TrimSpace(endpointPath),
+		Transport:      TransportWebSocket,
+		WebSocketProxy: proxy,
+	}
+}
+
+// responsesTransport maps Octopus's transport choice onto AxonHub's constant.
+func (o *Outbound) responsesTransport() string {
+	if o.Transport == TransportWebSocket {
+		return responses.TransportWebSocket
+	}
+	return responses.TransportHTTP
 }
 
 type staticToken string
@@ -331,7 +365,11 @@ func (o *Outbound) configure(base, key string) error {
 		case 0, 5:
 			o.Transformer, err = openai.NewOutboundTransformer(base, key)
 		case 1:
-			o.Transformer, err = responses.NewOutboundTransformer(base, key)
+			o.Transformer, err = responses.NewOutboundTransformerWithConfig(&responses.Config{
+				BaseURL:        base,
+				APIKeyProvider: auth.NewStaticKeyProvider(key),
+				Transport:      o.responsesTransport(),
+			})
 		case 2:
 			o.Transformer, err = anthropic.NewOutboundTransformer(base, key)
 		case 3:
@@ -364,6 +402,7 @@ func (o *Outbound) configure(base, key string) error {
 			BaseURL:        base,
 			APIKeyProvider: auth.NewStaticKeyProvider(key),
 			EndpointPath:   path,
+			Transport:      o.responsesTransport(),
 		})
 	case 2:
 		o.Transformer, err = anthropic.NewOutboundTransformerWithConfig(&anthropic.Config{
@@ -411,6 +450,24 @@ func (o *Outbound) configure(base, key string) error {
 }
 
 func (o *Outbound) TransformRequest(ctx context.Context, view *model.InternalLLMRequest, base, key string) (*http.Request, error) {
+	wire, err := o.WireRequest(ctx, view, base, key)
+	if err != nil {
+		return nil, err
+	}
+	req, err := HTTPRequest(ctx, wire)
+	if err != nil {
+		return nil, err
+	}
+	if o.Kind == 2 {
+		providercompat.SetAnthropicAuthHeader(req.Header, base, key)
+	}
+	return req, nil
+}
+
+// WireRequest builds the AxonHub transport request without converting it into a
+// net/http request. The WebSocket transport consumes this shape directly, so
+// both transports share one request-construction path.
+func (o *Outbound) WireRequest(ctx context.Context, view *model.InternalLLMRequest, base, key string) (*httpclient.Request, error) {
 	if err := o.configure(base, key); err != nil {
 		return nil, err
 	}
@@ -437,14 +494,7 @@ func (o *Outbound) TransformRequest(ctx context.Context, view *model.InternalLLM
 			}
 		}
 	}
-	req, err := HTTPRequest(ctx, o.Request)
-	if err != nil {
-		return nil, err
-	}
-	if o.Kind == 2 {
-		providercompat.SetAnthropicAuthHeader(req.Header, base, key)
-	}
-	return req, nil
+	return o.Request, nil
 }
 
 func HTTPRequest(ctx context.Context, r *httpclient.Request) (*http.Request, error) {

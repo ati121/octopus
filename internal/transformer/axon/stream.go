@@ -60,21 +60,68 @@ func (s *eventStream) Err() error                       { return s.err }
 func (s *eventStream) Close() error                     { return s.source.Close() }
 
 type Pipeline struct {
-	output streams.Stream[*httpclient.StreamEvent]
-	source Source
-	raw    *eventStream
+	output       streams.Stream[*httpclient.StreamEvent]
+	source       Source
+	raw          *eventStream
+	transportErr func() error
+}
+
+// prepareOutbound makes sure the outbound adapter is configured before its
+// transformer is asked to parse a stream.
+func prepareOutbound(out *Outbound) error {
+	if out.Transformer == nil {
+		if err := out.configure("https://unused.invalid/v1", "unused"); err != nil {
+			return err
+		}
+	}
+	if out.Request == nil {
+		out.Request = &httpclient.Request{APIFormat: string(out.Transformer.APIFormat()), RequestType: "chat"}
+		return nil
+	}
+	if out.Request.APIFormat == "" {
+		out.Request.APIFormat = string(out.Transformer.APIFormat())
+	}
+	if out.Request.RequestType == "" {
+		out.Request.RequestType = "chat"
+	}
+	return nil
+}
+
+// NewPipelineFromEvents builds the pipeline over an already-decoded AxonHub
+// event stream. The WebSocket executor yields StreamEvent values whose Data is
+// bare JSON, so re-framing them as SSE only to parse them again would be wrong.
+func NewPipelineFromEvents(ctx context.Context, in *Inbound, out *Outbound, events streams.Stream[*httpclient.StreamEvent], transportErr func() error, limit int) (*Pipeline, error) {
+	if err := prepareOutbound(out); err != nil {
+		return nil, err
+	}
+	raw := &eventStream{ctx: ctx, limit: limit}
+	chunks := make([]*httpclient.StreamEvent, 0, 16)
+	native, err := out.Transformer.TransformStream(ctx, out.Request, streams.Map(events, func(event *httpclient.StreamEvent) *httpclient.StreamEvent {
+		chunks = append(chunks, event)
+		raw.size += len(event.Data)
+		return event
+	}))
+	if err != nil {
+		return nil, err
+	}
+	output, err := in.Transformer.TransformStream(ctx, native)
+	if err != nil {
+		_ = native.Close()
+		return nil, err
+	}
+	in.mu.Lock()
+	in.collect = func(ctx context.Context) (*model.InternalLLMResponse, error) {
+		return out.aggregate(ctx, chunks)
+	}
+	in.mu.Unlock()
+	return &Pipeline{output: output, source: nil, raw: raw, transportErr: transportErr}, nil
 }
 
 // NewPipeline creates one stateful AxonHub iterator for the entire response.
 // Octopus retains its timeout, heartbeat, cancellation and deferred-commit writer.
 func NewPipeline(ctx context.Context, in *Inbound, out *Outbound, source Source, limit int) (*Pipeline, error) {
-	if out.Transformer == nil {
-		if err := out.configure("https://unused.invalid/v1", "unused"); err != nil {
-			return nil, err
-		}
-	}
-	if out.Request == nil {
-		out.Request = &httpclient.Request{APIFormat: string(out.Transformer.APIFormat()), RequestType: "chat"}
+	if err := prepareOutbound(out); err != nil {
+		return nil, err
 	}
 	raw := &eventStream{ctx: ctx, source: source, limit: limit}
 	native, err := out.Transformer.TransformStream(ctx, out.Request, raw)
@@ -97,6 +144,9 @@ func NewPipeline(ctx context.Context, in *Inbound, out *Outbound, source Source,
 	return &Pipeline{output: output, source: source, raw: raw}, nil
 }
 func (p *Pipeline) TransportError() error {
+	if p.transportErr != nil {
+		return p.transportErr()
+	}
 	p.raw.mu.Lock()
 	defer p.raw.mu.Unlock()
 	if errors.Is(p.raw.transportErr, io.EOF) {

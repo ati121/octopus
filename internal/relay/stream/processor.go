@@ -41,11 +41,6 @@ type streamErrorCloser interface {
 	CloseWithError()
 }
 
-// StreamTransform converts raw event data to the client's expected format.
-// Returns nil/empty slice to skip writing (e.g., keep-alive events).
-// For passthrough, set to nil in StreamConfig.
-type StreamTransform func(ctx context.Context, data []byte) ([]byte, error)
-
 // StreamWriter abstracts the HTTP/WebSocket response writer.
 type StreamWriter interface {
 	Write(data []byte) (int, error)
@@ -58,10 +53,9 @@ type StreamWriter interface {
 // StreamConfig configures a StreamProcessor instance.
 type StreamConfig struct {
 	// Core dependencies
-	Source    StreamSource
-	Transform StreamTransform // nil for passthrough
-	Writer    StreamWriter
-	Context   context.Context
+	Source  StreamSource
+	Writer  StreamWriter
+	Context context.Context
 
 	// Timeout & heartbeat
 	FirstTokenTimeout time.Duration // 0 to disable
@@ -227,7 +221,7 @@ func (p *StreamProcessor) Run() (runErr error) {
 				p.rawBuffer.Write(r.data)
 			}
 
-			// Transform and write
+			// Write the event to the client.
 			if err := p.processEvent(r.data); err != nil {
 				return err
 			}
@@ -378,22 +372,10 @@ func firstResponseEvent(data []byte) (string, []byte) {
 	return eventType, payload
 }
 
-// processEvent transforms and writes a single event.
+// processEvent writes a single event. Bytes arriving here are already in the
+// client's wire format: AxonHub's inbound transformer produced them.
 func (p *StreamProcessor) processEvent(data []byte) error {
-	var output []byte
-	var err error
-
-	if p.config.Transform != nil {
-		output, err = p.config.Transform(p.config.Context, data)
-		if err != nil {
-			return fmt.Errorf("transform error: %w", err)
-		}
-		if len(output) == 0 {
-			return nil // Skip empty output
-		}
-	} else {
-		output = data // Passthrough
-	}
+	output := data
 
 	if _, err := p.config.Writer.Write(output); err != nil {
 		return fmt.Errorf("write error: %w", err)

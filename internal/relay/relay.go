@@ -25,6 +25,9 @@ import (
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
+	"github.com/looplj/axonhub/llm/httpclient"
+	"github.com/looplj/axonhub/llm/streams"
+	"github.com/looplj/axonhub/llm/transformer/shared"
 )
 
 type streamHeartbeatWriter interface {
@@ -622,139 +625,158 @@ func (ra *relayAttempt) forward() (int, error) {
 	return ra.forwardViaHTTP(ctx)
 }
 
-// forwardViaWS attempts to forward via upstream WebSocket.
-// Returns statusCode=-1 if WS is not available (caller should fall through to HTTP).
+// forwardViaWS forwards a Responses request over an upstream WebSocket.
+// AxonHub owns the transport: its executor keeps the connection pool, frames
+// response.create, and handles previous_response_id continuation. Octopus only
+// decides whether WS is appropriate, then feeds the resulting event stream
+// through the same pipeline used for HTTP.
+// Returns statusCode=-1 when WS is unavailable and the caller should fall back
+// to HTTP.
 func (ra *relayAttempt) forwardViaWS(ctx context.Context) (int, error) {
 	continuation := requiresUpstreamWSContinuation(ra.internalRequest)
-	preferredConnID := ""
-	if continuation {
-		preferredConnID, _ = getWSResponseConn(currentPreviousResponseID(ra.internalRequest))
-	}
-	pc := TryUpstreamWSWithPreference(ctx, ra.channel, ra.channel.GetBaseUrl(), ra.usedKey.ChannelKey, ra.usedKey.ID, ra.clientRequestHeaders(), preferredConnID)
-	if pc == nil {
-		log.Debugf("upstream WS unavailable for channel %s (key=%d, continuation=%t)", ra.channel.Name, ra.usedKey.ID, continuation)
-		return -1, nil // WS not available
-	}
 
-	log.Debugf("using upstream WebSocket for channel %s (key=%d)", ra.channel.Name, ra.usedKey.ID)
-	log.Debugf("upstream WS selected (channel=%s, key=%d, continuation=%t, previous_response_id=%s)",
-		ra.channel.Name, ra.usedKey.ID, continuation, currentPreviousResponseID(ra.internalRequest))
-
-	// Build the Responses API request body
-	reqBody, err := axon.ResponsesPayload(ctx, ra.internalRequest)
+	wsAdapter := ra.wsOutboundAdapter()
+	wire, err := wsAdapter.WireRequest(ctx, ra.internalRequest, ra.channel.GetBaseUrl(), ra.usedKey.ChannelKey)
 	if err != nil {
-		wsUpstreamPool.Put(pc)
-		return -1, nil // fall through to HTTP
+		log.Debugf("upstream WS request build failed for channel %s: %v", ra.channel.Name, err)
+		return -1, nil
 	}
-	ra.metrics.SetTransportRequestPayload(reqBody, ra.internalRequest.Model)
+	if wire.Headers == nil {
+		wire.Headers = make(http.Header)
+	}
+	ra.copyHeadersToWire(wire)
+	// net/http injects "Go-http-client/1.1" when User-Agent is absent, which
+	// lets upstreams fingerprint the gateway runtime. An explicit empty value
+	// suppresses it; gorilla sends the header verbatim and still handshakes.
+	if wire.Headers.Get("User-Agent") == "" {
+		wire.Headers.Set("User-Agent", "")
+	}
+	if err := ra.applyParamOverrideToWire(wire); err != nil {
+		return -1, nil
+	}
 
-	// Send response.create message
-	if err := wsUpstreamPool.SendResponseCreate(ctx, pc, reqBody); err != nil {
-		log.Warnf("upstream WS send failed for channel %s: %v", ra.channel.Name, err)
-		log.Debugf("upstream WS send failed before stream start (channel=%s, key=%d, continuation=%t, err=%v)",
+	scope := axon.WebSocketScope(ra.channel.ID, ra.usedKey.ID, ra.channel.GetBaseUrl())
+	transport, err := axon.WebSocketTransportFor(scope, wsProxyConfig(ra.channel))
+	if err != nil {
+		log.Debugf("upstream WS transport unavailable for channel %s: %v", ra.channel.Name, err)
+		return -1, nil
+	}
+
+	sessionID := strings.TrimSpace(currentPreviousResponseID(ra.internalRequest))
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(ra.requestModel)
+	}
+	wsCtx := axon.WebSocketSessionContext(ctx, sessionID, scope)
+	attempt := &shared.ResponsesAttempt{}
+	attempt.SetOrigin(shared.ResponsesOrigin{
+		ChannelID: ra.channel.ID,
+		Model:     ra.internalRequest.Model,
+	})
+	wsCtx = shared.WithResponsesAttempt(wsCtx, attempt)
+
+	eventStream, err := transport.DoStream(wsCtx, wire)
+	if err != nil {
+		log.Debugf("upstream WS dial failed for channel %s (key=%d, continuation=%t, err=%v)",
 			ra.channel.Name, ra.usedKey.ID, continuation, err)
-		wsUpstreamPool.RemoveConn(pc)
-		if isUpstreamWSConnectionBroken(err) {
-			log.Debugf("upstream WS send failure eligible for redial (channel=%s, key=%d, continuation=%t)",
-				ra.channel.Name, ra.usedKey.ID, continuation)
-			statusCode, redialErr, recovered := ra.retryViaFreshUpstreamWS(ctx, reqBody)
-			if recovered || redialErr != nil {
-				return statusCode, redialErr
-			}
-			if requiresUpstreamWSContinuation(ra.internalRequest) {
-				balancer.DeleteSticky(ra.apiKeyID, ra.requestModel)
-				return http.StatusConflict, fmt.Errorf("upstream continuation transport unavailable; please restart the conversation")
-			}
-		}
-		wsUpstreamPool.RecordWSFailure(ra.channel.ID)
-		return -1, nil // fall through to HTTP
-	}
-
-	// Read events from WS and process through the transform pipeline
-	ra.metrics.UsedWS = true
-	ra.metrics.SetWSExecMode(dbmodel.RelayLogWSExecModeTransform)
-	if ra.metrics.WSMode == nil {
-		ra.metrics.SetWSMode(defaultWSModeForRequest(ra.internalRequest))
-	}
-	reader := newWSUpstreamReader(pc, ra.channel.ID, ra.usedKey.ID)
-	err = ra.handleWSStreamResponseV2(ctx, reader)
-	if err != nil {
-		reader.CloseWithError()
-		log.Debugf("upstream WS stream failed (channel=%s, key=%d, continuation=%t, written=%t, status=%d, err=%v)",
-			ra.channel.Name, ra.usedKey.ID, continuation, ra.getStreamWriter().Written(), reader.StatusCode(), err)
-		if requiresUpstreamWSContinuation(ra.internalRequest) && !ra.streamPayloadWritten.Load() && shouldReconnectUpstreamWSBeforeReplay(err) {
-			log.Debugf("upstream WS stream failure eligible for reconnect before replay (channel=%s, key=%d, previous_response_id=%s)",
-				ra.channel.Name, ra.usedKey.ID, currentPreviousResponseID(ra.internalRequest))
-			statusCode, redialErr, recovered := ra.retryViaFreshUpstreamWS(ctx, reqBody)
-			if recovered || redialErr != nil {
-				return statusCode, redialErr
-			}
-		}
-		if requiresUpstreamWSContinuation(ra.internalRequest) && isContinuationTransportFailure(err) {
+		if continuation {
 			balancer.DeleteSticky(ra.apiKeyID, ra.requestModel)
 			return http.StatusConflict, fmt.Errorf("upstream continuation transport unavailable; please restart the conversation")
 		}
-		if ra.requestContext().Err() == nil {
-			wsUpstreamPool.RecordWSFailure(ra.channel.ID)
-		}
-		return reader.StatusCode(), err
+		ra.metrics.SetWSRecovery(dbmodel.RelayLogWSRecoveryDowngrade)
+		return -1, nil
 	}
 
-	reader.Close()
-	wsUpstreamPool.RecordWSSuccess(ra.channel.ID)
-	ra.recordSuccessfulWSAffinity(pc)
-	return 200, nil
-}
-
-func (ra *relayAttempt) retryViaFreshUpstreamWS(ctx context.Context, reqBody []byte) (int, error, bool) {
-	log.Debugf("attempting fresh upstream WS redial (channel=%s, key=%d, previous_response_id=%s)",
-		ra.channel.Name, ra.usedKey.ID, currentPreviousResponseID(ra.internalRequest))
-	redialed := TryUpstreamWS(ctx, ra.channel, ra.channel.GetBaseUrl(), ra.usedKey.ChannelKey, ra.usedKey.ID, ra.clientRequestHeaders(), true)
-	if redialed == nil {
-		log.Debugf("fresh upstream WS redial unavailable (channel=%s, key=%d)", ra.channel.Name, ra.usedKey.ID)
-		return 0, nil, false
-	}
-
-	retryErr := wsUpstreamPool.SendResponseCreate(ctx, redialed, reqBody)
-	if retryErr != nil {
-		log.Warnf("upstream WS redial send failed for channel %s: %v", ra.channel.Name, retryErr)
-		log.Debugf("fresh upstream WS redial send failed (channel=%s, key=%d, err=%v)", ra.channel.Name, ra.usedKey.ID, retryErr)
-		wsUpstreamPool.RemoveConn(redialed)
-		wsUpstreamPool.RecordWSFailure(ra.channel.ID)
-		if requiresUpstreamWSContinuation(ra.internalRequest) {
-			balancer.DeleteSticky(ra.apiKeyID, ra.requestModel)
-			return http.StatusConflict, fmt.Errorf("upstream continuation transport unavailable; please restart the conversation"), true
-		}
-		return -1, nil, true
-	}
+	log.Debugf("upstream WS selected (channel=%s, key=%d, continuation=%t, previous_response_id=%s)",
+		ra.channel.Name, ra.usedKey.ID, continuation, currentPreviousResponseID(ra.internalRequest))
 
 	ra.metrics.UsedWS = true
 	ra.metrics.SetWSExecMode(dbmodel.RelayLogWSExecModeTransform)
 	if ra.metrics.WSMode == nil {
 		ra.metrics.SetWSMode(defaultWSModeForRequest(ra.internalRequest))
 	}
-	ra.metrics.SetWSRecovery(dbmodel.RelayLogWSRecoveryReconnect)
-	reader := newWSUpstreamReader(redialed, ra.channel.ID, ra.usedKey.ID)
-	streamErr := ra.handleWSStreamResponseV2(ctx, reader)
-	if streamErr != nil {
-		reader.CloseWithError()
-		log.Debugf("fresh upstream WS redial stream failed (channel=%s, key=%d, status=%d, err=%v)",
-			ra.channel.Name, ra.usedKey.ID, reader.StatusCode(), streamErr)
-		if requiresUpstreamWSContinuation(ra.internalRequest) && isContinuationTransportFailure(streamErr) {
-			balancer.DeleteSticky(ra.apiKeyID, ra.requestModel)
-			return http.StatusConflict, fmt.Errorf("upstream continuation transport unavailable; please restart the conversation"), true
-		}
-		if ra.requestContext().Err() == nil {
-			wsUpstreamPool.RecordWSFailure(ra.channel.ID)
-		}
-		return reader.StatusCode(), streamErr, true
+	if continuation {
+		ra.metrics.SetWSRecovery(dbmodel.RelayLogWSRecoveryReconnect)
 	}
-	log.Debugf("fresh upstream WS redial succeeded (channel=%s, key=%d, previous_response_id=%s)",
-		ra.channel.Name, ra.usedKey.ID, currentPreviousResponseID(ra.internalRequest))
-	reader.Close()
-	wsUpstreamPool.RecordWSSuccess(ra.channel.ID)
-	ra.recordSuccessfulWSAffinity(redialed)
-	return http.StatusOK, nil, true
+
+	err = ra.handleAxonWebSocketStream(ctx, eventStream, wsAdapter)
+	if err != nil {
+		_ = eventStream.Close()
+		log.Debugf("upstream WS stream failed (channel=%s, key=%d, continuation=%t, written=%t, err=%v)",
+			ra.channel.Name, ra.usedKey.ID, continuation, ra.getStreamWriter().Written(), err)
+		if continuation && isContinuationTransportFailure(err) {
+			balancer.DeleteSticky(ra.apiKeyID, ra.requestModel)
+			return http.StatusConflict, fmt.Errorf("upstream continuation transport unavailable; please restart the conversation")
+		}
+		return http.StatusBadGateway, err
+	}
+
+	_ = eventStream.Close()
+	ra.recordSuccessfulWSAffinity(nil)
+	return http.StatusOK, nil
+}
+
+// wsOutboundAdapter returns the Responses outbound configured for the
+// WebSocket transport. It is used both to build the wire request and to parse
+// the event stream, keeping the two halves on one configuration.
+func (ra *relayAttempt) wsOutboundAdapter() *axon.Outbound {
+	return axon.NewWebSocketOutbound(ra.channel.EndpointPath, wsProxyConfig(ra.channel))
+}
+
+// handleAxonWebSocketStream runs the shared pipeline over an AxonHub WebSocket
+// event stream. Timing, heartbeats, deferred commit and cancellation all stay
+// on the Octopus side.
+func (ra *relayAttempt) handleAxonWebSocketStream(ctx context.Context, events streams.Stream[*httpclient.StreamEvent], out *axon.Outbound) error {
+	defer ra.closeFirstTokenBudget()
+	ra.heartbeat.Hand()
+
+	var firstTokenTimeout time.Duration
+	if ra.firstTokenTimeOutSec > 0 && ra.firstTokenBudget == nil {
+		firstTokenTimeout = time.Duration(ra.firstTokenTimeOutSec) * time.Second
+	}
+
+	deferredWriter := newDeferredStreamWriter(ra.getStreamWriter())
+	// The event stream already carries Responses protocol events produced by
+	// AxonHub's WebSocket executor, so the pipeline must parse it with the same
+	// transport configuration that produced it.
+	pipeline, err := ra.transformEvents(ctx, events, out, nil)
+	if err != nil {
+		return err
+	}
+	processor := stream.NewStreamProcessor(stream.StreamConfig{
+		Source:            pipeline,
+		Writer:            deferredWriter,
+		Context:           ctx,
+		FirstTokenTimeout: firstTokenTimeout,
+		HeartbeatInterval: streamHeartbeatInterval(),
+		TerminalEvents:    inboundStreamTerminalEvents(ra.inAdapter),
+		OnFirstResponse: func() {
+			ra.metrics.SetFirstResponseTime(time.Now())
+		},
+		OnFirstToken: func() {
+			ra.metrics.SetFirstTokenTime(time.Now())
+			ra.stopFirstTokenTimer()
+		},
+	})
+
+	runErr := processor.Run()
+	if runErr != nil {
+		log.Warnf("axon ws pipeline run failed: runErr=%v transportErr=%v written=%t", runErr, pipeline.TransportError(), processor.PayloadWritten())
+		runErr = errors.Join(runErr, pipeline.TransportError())
+	}
+	ra.deferredStreamPayload = deferredWriter.RejectedPayload()
+
+	if processor.PayloadWritten() {
+		ra.streamPayloadWritten.Store(true)
+	}
+	if runErr != nil && strings.Contains(runErr.Error(), "first token timeout") {
+		return ra.firstTokenTimeoutError()
+	}
+	if runErr != nil {
+		if timeoutErr := ra.firstTokenTimeoutIfNeeded(ctx, runErr); timeoutErr != nil {
+			return timeoutErr
+		}
+	}
+	return runErr
 }
 
 func isContinuationTransportFailure(err error) bool {
@@ -773,68 +795,6 @@ func (ra *relayAttempt) clientRequestHeaders() http.Header {
 		return nil
 	}
 	return ra.c.Request.Header
-}
-
-func (ra *relayAttempt) handleWSStreamResponseV2(ctx context.Context, reader *wsUpstreamReader) error {
-	defer ra.closeFirstTokenBudget()
-
-	// Hand off early heartbeat
-	ra.heartbeat.Hand()
-
-	// Determine first token timeout
-	var firstTokenTimeout time.Duration
-	if ra.firstTokenTimeOutSec > 0 && ra.firstTokenBudget == nil {
-		firstTokenTimeout = time.Duration(ra.firstTokenTimeOutSec) * time.Second
-	}
-
-	// Create StreamProcessor
-	deferredWriter := newDeferredStreamWriter(ra.getStreamWriter())
-	var writer StreamWriter = deferredWriter
-	source, err := ra.transformSource(ctx, stream.NewWSSource(reader))
-	if err != nil {
-		return err
-	}
-	processor := stream.NewStreamProcessor(stream.StreamConfig{
-		Source:            source,
-		Writer:            writer,
-		Context:           ctx,
-		FirstTokenTimeout: firstTokenTimeout,
-		HeartbeatInterval: streamHeartbeatInterval(),
-		TerminalEvents:    inboundStreamTerminalEvents(ra.inAdapter),
-		OnFirstResponse: func() {
-			ra.metrics.SetFirstResponseTime(time.Now())
-		},
-		OnFirstToken: func() {
-			ra.metrics.SetFirstTokenTime(time.Now())
-			ra.stopFirstTokenTimer()
-		},
-	})
-
-	// Run processor
-	err = processor.Run()
-	if err != nil {
-		err = errors.Join(err, source.TransportError())
-	}
-	ra.deferredStreamPayload = deferredWriter.RejectedPayload()
-
-	// Track payload written for metrics collection
-	if processor.PayloadWritten() {
-		ra.streamPayloadWritten.Store(true)
-	}
-
-	// Handle first token timeout specifically
-	if err != nil && strings.Contains(err.Error(), "first token timeout") {
-		return ra.firstTokenTimeoutError()
-	}
-
-	// Check for context cancellation with first token timeout
-	if err != nil {
-		if timeoutErr := ra.firstTokenTimeoutIfNeeded(ctx, err); timeoutErr != nil {
-			return timeoutErr
-		}
-	}
-
-	return err
 }
 
 // forwardViaHTTP forwards the request using traditional HTTP.
@@ -934,6 +894,117 @@ func (ra *relayAttempt) getStreamWriter() StreamWriter {
 		return ra.streamWriter
 	}
 	return ra.c.Writer
+}
+
+// copyHeadersToWire forwards the client's end-to-end headers onto an AxonHub
+// transport request, applying the same hop-by-hop filtering as the HTTP path.
+func (ra *relayAttempt) copyHeadersToWire(wire *httpclient.Request) {
+	if wire == nil || ra.c == nil || ra.c.Request == nil {
+		return
+	}
+	if wire.Headers == nil {
+		wire.Headers = make(http.Header)
+	}
+	for key, values := range ra.c.Request.Header {
+		lower := strings.ToLower(key)
+		if hopByHopHeaders[lower] || wsHandshakeHeaders[lower] {
+			continue
+		}
+		for _, value := range values {
+			wire.Headers.Set(key, value)
+		}
+	}
+	setUpstreamHeadersOnWire(wire, op.UpstreamGlobalHeaders())
+	setUpstreamHeadersOnWire(wire, op.UpstreamModelHeadersFor(ra.internalRequest.Model))
+	for _, header := range ra.channel.CustomHeader {
+		if strings.TrimSpace(header.HeaderKey) == "" {
+			continue
+		}
+		wire.Headers.Set(header.HeaderKey, header.HeaderValue)
+	}
+}
+
+// wsHandshakeHeaders belong to the WebSocket upgrade itself. Forwarding the
+// client's values would overwrite what the dialer must generate.
+var wsHandshakeHeaders = map[string]bool{
+	"connection":               true,
+	"upgrade":                  true,
+	"sec-websocket-key":        true,
+	"sec-websocket-version":    true,
+	"sec-websocket-extensions": true,
+	"sec-websocket-protocol":   true,
+	"sec-websocket-accept":     true,
+}
+
+func setUpstreamHeadersOnWire(wire *httpclient.Request, headers []dbmodel.CustomHeader) {
+	if wire == nil {
+		return
+	}
+	for _, header := range headers {
+		if strings.TrimSpace(header.HeaderKey) == "" {
+			continue
+		}
+		wire.Headers.Set(header.HeaderKey, header.HeaderValue)
+	}
+}
+
+// applyParamOverrideToWire applies the same override chain to an AxonHub
+// transport request, whose body lives in bytes rather than an io.Reader.
+func (ra *relayAttempt) applyParamOverrideToWire(wire *httpclient.Request) error {
+	if wire == nil || len(wire.Body) == 0 {
+		return nil
+	}
+	overrides := op.UpstreamParamOverrideChain(ra.internalRequest.Model)
+	if ra.channel.ParamOverride != nil {
+		overrides = append(overrides, []byte(*ra.channel.ParamOverride))
+	}
+	if len(overrides) == 0 {
+		return nil
+	}
+	req, err := axon.HTTPRequest(ra.requestContext(), wire)
+	if err != nil {
+		return err
+	}
+	if err := helper.ApplyParamOverrides(req, overrides...); err != nil {
+		return err
+	}
+	body, err := readOutboundRequestBody(req)
+	if err != nil {
+		return err
+	}
+	wire.Body = body
+	ra.metrics.SetTransportRequestPayload(body, ra.internalRequest.Model)
+	return nil
+}
+
+// wsProxyConfig maps the channel's proxy mode onto AxonHub's proxy config so the
+// pooled WebSocket dialer honours the same egress path as HTTP requests.
+func wsProxyConfig(channel *dbmodel.Channel) *httpclient.ProxyConfig {
+	if channel == nil {
+		return &httpclient.ProxyConfig{Type: httpclient.ProxyTypeDisabled}
+	}
+	switch channel.ProxyMode {
+	case dbmodel.ProxyUsageModeDirect, "":
+		return &httpclient.ProxyConfig{Type: httpclient.ProxyTypeDisabled}
+	case dbmodel.ProxyUsageModeSystem:
+		return &httpclient.ProxyConfig{Type: httpclient.ProxyTypeEnvironment}
+	case dbmodel.ProxyUsageModePool:
+		if channel.ProxyConfigID == nil {
+			return &httpclient.ProxyConfig{Type: httpclient.ProxyTypeDisabled}
+		}
+		url, err := op.ProxyURLForConfig(*channel.ProxyConfigID, context.Background())
+		if err != nil || url == "" {
+			return &httpclient.ProxyConfig{Type: httpclient.ProxyTypeDisabled}
+		}
+		return &httpclient.ProxyConfig{Type: httpclient.ProxyTypeURL, URL: url}
+	case dbmodel.ProxyUsageModeCustom:
+		if strings.TrimSpace(channel.ProxyURL) == "" {
+			return &httpclient.ProxyConfig{Type: httpclient.ProxyTypeDisabled}
+		}
+		return &httpclient.ProxyConfig{Type: httpclient.ProxyTypeURL, URL: channel.ProxyURL}
+	default:
+		return &httpclient.ProxyConfig{Type: httpclient.ProxyTypeDisabled}
+	}
 }
 
 // applyParamOverride 按「全局 → 模型规则 → 渠道覆盖」的顺序深合并 JSON 请求体覆盖，
@@ -1212,4 +1283,10 @@ func (ra *relayAttempt) collectResponse() {
 		actualModel = strings.TrimSpace(ra.internalRequest.Model)
 	}
 	ra.metrics.SetInternalResponse(internalResponse, actualModel)
+}
+
+// CloseUpstreamWS drains every pooled upstream WebSocket. It runs during
+// shutdown so idle sessions close cleanly.
+func CloseUpstreamWS() {
+	axon.CloseAllWebSocketTransports()
 }

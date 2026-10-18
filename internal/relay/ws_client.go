@@ -11,6 +11,7 @@ import (
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/transformer/axon"
 	"github.com/bestruirui/octopus/internal/transformer/inbound"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
@@ -379,18 +380,42 @@ func extractWSRequestModel(reqBody map[string]json.RawMessage) string {
 	return requestModel
 }
 
+// warmupUpstreamWSConnection opens one upstream WebSocket so the first real turn
+// finds a warm session. AxonHub's executor pools connections per session scope,
+// so the warmup must dial through it with the same scope the relay will use.
 func warmupUpstreamWSConnection(ctx context.Context, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey) error {
 	warmupCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	pc := TryUpstreamWS(warmupCtx, channel, channel.GetBaseUrl(), usedKey.ChannelKey, usedKey.ID, nil)
-	if pc == nil {
-		return fmt.Errorf("upstream ws unavailable")
+	scope := axon.WebSocketScope(channel.ID, usedKey.ID, channel.GetBaseUrl())
+	transport, err := axon.WebSocketTransportFor(scope, wsProxyConfig(channel))
+	if err != nil {
+		return fmt.Errorf("upstream ws unavailable: %w", err)
 	}
-
-	wsUpstreamPool.Put(pc)
-	return nil
+	out := axon.NewWebSocketOutbound(channel.EndpointPath, wsProxyConfig(channel))
+	view := &transformerModel.InternalLLMRequest{
+		Model:        channel.Model,
+		Stream:       boolPtr(true),
+		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
+		Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: strPtrValue("ping")}}},
+	}
+	wire, err := out.WireRequest(warmupCtx, view, channel.GetBaseUrl(), usedKey.ChannelKey)
+	if err != nil {
+		return fmt.Errorf("upstream ws warmup request failed: %w", err)
+	}
+	if wire.Headers == nil {
+		wire.Headers = make(http.Header)
+	}
+	wire.Headers.Set("User-Agent", "")
+	wsCtx := axon.WebSocketSessionContext(warmupCtx, "warmup", scope)
+	events, err := transport.DoStream(wsCtx, wire)
+	if err != nil {
+		return fmt.Errorf("upstream ws warmup failed: %w", err)
+	}
+	return events.Close()
 }
+
+func strPtrValue(value string) *string { return &value }
 
 func newWSRelayRequest(
 	ctx context.Context,

@@ -1,5 +1,14 @@
 # 更新日志
 
+## v2.0.17 - 2026-10-18
+
+- 上游 WebSocket 交由 AxonHub 处理：删除 Octopus 自建的连接池、`response.create` 报文构造、`previous_response_id` 续接和终止事件判定（`ws_pool.go`、`transport_ws.go`、`ws_runtime_state.go`，约 1000 行），改用 `responses.WebSocketExecutor`。连接池、会话复用、增量续接和重连策略全部由库负责；Octopus 只保留路由、首字计时、心跳、延迟提交和日志观测。
+- 新增 `axon.WebSocketTransportFor` / `WebSocketScope` / `WebSocketSessionContext` 封装 AxonHub 的 executor。连接池按「渠道 + key + Base URL」隔离，渠道地址变更不会复用旧主机的连接。
+- 渠道级代理设置现在也作用于上游 WS 握手：直连、系统代理、代理池、自定义代理四种模式都映射到 AxonHub 的 `ProxyConfig`。
+- 修复 WS 路径的客户端头透传：`Accept-Language` 等端到端头正常转发，WebSocket 握手头（`Connection`、`Upgrade`、`Sec-WebSocket-*`）不转发，避免破坏握手。
+- 死代码清理：删除零引用的 `RawSource`、`SSEBlockSource`、`WSSource`，移除生产代码从未赋值的 `StreamConfig.Transform` 字段，删除 `schema.go` 与整个 `Schema` 解析层（`ResponseFormat` 改为原样保留 `json_schema` 载荷），并移除 5 个零引用的 `TransformerMetadata*` 常量与 3 个未使用的 `APIFormat` 常量。
+- 净减少约 1850 行。`go test ./...`、`go vet ./...`、`go build ./...` 全部通过。
+
 ## v2.0.16 - 2026-10-18
 
 - 渠道新增「出站路径」`endpoint_path`，把 AxonHub 已有的 `EndpointPath` 能力接到 Octopus。填写后出站请求改用该路径，留空沿用协议默认路径；覆盖对全部 10 种渠道类型生效，包括 System One、Decisions、Rerank 以及 OpenAI／Responses／Anthropic／Gemini／火山引擎／Codex。典型场景是上游把 System One 暴露在 `/decisions`：把渠道类型设为 System One 并填 `endpoint_path=/decisions` 即可打通，无需改上游。

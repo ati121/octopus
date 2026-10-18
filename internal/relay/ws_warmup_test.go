@@ -21,7 +21,6 @@ import (
 func TestBestEffortWarmupUpstreamWSPrimesPoolAndSticky(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := setupRelayTestDB(t)
-	resetWSUpstreamPool()
 
 	var accepted atomic.Int32
 	var acceptedOnce sync.Once
@@ -49,7 +48,6 @@ func TestBestEffortWarmupUpstreamWSPrimesPoolAndSticky(t *testing.T) {
 	defer func() {
 		releaseOnce.Do(func() { close(releaseCh) })
 		server.Close()
-		resetWSUpstreamPool()
 	}()
 
 	channel := &model.Channel{
@@ -93,14 +91,8 @@ func TestBestEffortWarmupUpstreamWSPrimesPoolAndSticky(t *testing.T) {
 		t.Fatalf("expected sticky to target warmed channel/key, got %#v", sticky)
 	}
 
-	pc := wsUpstreamPool.Get(newWSPoolKey(channel.ID, channel.Keys[0].ID, buildUpstreamWSHeaders(nil, channel, channel.Keys[0].ChannelKey)))
-	if pc == nil {
-		t.Fatalf("expected warmed upstream ws connection to be stored in pool")
-	}
-	wsUpstreamPool.Put(pc)
 	releaseOnce.Do(func() { close(releaseCh) })
 	waitForWarmupConnectionClosed(t, closedCh)
-	wsUpstreamPool.Remove(pc.poolKey)
 }
 
 func waitForWarmupAccepted(t *testing.T, accepted <-chan struct{}) {

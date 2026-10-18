@@ -9,31 +9,6 @@ import (
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 )
 
-func TestBuildWSResponseCreateMessageNormalizesWSFields(t *testing.T) {
-	message, err := buildWSResponseCreateMessage(json.RawMessage(`{"model":"gpt-4o","stream":true,"background":true}`))
-	if err != nil {
-		t.Fatalf("buildWSResponseCreateMessage failed: %v", err)
-	}
-
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(message, &payload); err != nil {
-		t.Fatalf("unmarshal merged message failed: %v", err)
-	}
-
-	if got := string(payload["type"]); got != `"response.create"` {
-		t.Fatalf("expected type response.create, got %s", got)
-	}
-	if got := string(payload["stream"]); got != `true` {
-		t.Fatalf("expected stream field to be forced true, got %s in %#v", got, payload)
-	}
-	if _, exists := payload["background"]; exists {
-		t.Fatalf("expected background field to be removed, got %#v", payload)
-	}
-	if _, exists := payload["previous_response_id"]; exists {
-		t.Fatalf("expected no implicit previous_response_id injection, got %#v", payload)
-	}
-}
-
 func TestInjectWSPreviousResponseIDDoesNotInjectImplicitContinuation(t *testing.T) {
 	reqBody := map[string]json.RawMessage{
 		"model": json.RawMessage(`"gpt-4o"`),
@@ -140,33 +115,6 @@ func TestNormalizeUpstreamStatusCode(t *testing.T) {
 	}
 	if got := normalizeUpstreamStatusCode(http.StatusBadRequest, `{"error":{"message":"No tool call found for function call output with call_id fc_xxx"}}`); got != http.StatusConflict {
 		t.Fatalf("expected missing tool call to become 409, got %d", got)
-	}
-}
-
-func TestShouldMarkWSUnsupported(t *testing.T) {
-	if !shouldMarkWSUnsupported(&http.Response{StatusCode: http.StatusNotFound}, fmt.Errorf("bad handshake")) {
-		t.Fatalf("expected 404 handshake to mark ws unsupported")
-	}
-	if shouldMarkWSUnsupported(&http.Response{StatusCode: http.StatusServiceUnavailable}, fmt.Errorf("temporary upstream unavailable")) {
-		t.Fatalf("expected 503 handshake to remain retryable")
-	}
-	if shouldMarkWSUnsupported(nil, fmt.Errorf("failed handshake: expected handshake response status code 426 but got 426")) {
-		t.Fatalf("expected upgrade required handshake to remain retryable")
-	}
-}
-
-func TestIsUpstreamWSConnectionBroken(t *testing.T) {
-	for _, err := range []error{
-		fmt.Errorf("failed to write frame payload: write: broken pipe"),
-		fmt.Errorf("failed to get reader: failed to read frame header: EOF"),
-		fmt.Errorf("use of closed network connection"),
-	} {
-		if !isUpstreamWSConnectionBroken(err) {
-			t.Fatalf("expected %q to be treated as broken upstream ws", err)
-		}
-	}
-	if isUpstreamWSConnectionBroken(fmt.Errorf("temporary upstream unavailable")) {
-		t.Fatalf("expected unrelated error to not be treated as broken upstream ws")
 	}
 }
 

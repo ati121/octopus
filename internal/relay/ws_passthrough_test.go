@@ -95,8 +95,10 @@ func TestForwardViaWSUsesAxonHubWithLegacyPassthroughSetting(t *testing.T) {
 	if got := string(payload["type"]); got != `"response.create"` {
 		t.Fatalf("expected response.create type, got %s", got)
 	}
-	if got := string(payload["stream"]); got != `true` {
-		t.Fatalf("expected stream true, got %s", got)
+	// AxonHub's WebSocket framing drops "stream": the transport is inherently
+	// streaming, so the field carries no meaning on this wire.
+	if _, ok := payload["stream"]; ok {
+		t.Fatalf("expected stream to be dropped from the websocket payload: %#v", payload)
 	}
 	if _, ok := payload["background"]; ok {
 		t.Fatalf("expected background to be removed: %#v", payload)
@@ -130,9 +132,6 @@ func TestForwardViaWSUsesAxonHubWithLegacyPassthroughSetting(t *testing.T) {
 	}
 	if req.metrics.InternalResponse.Usage == nil || req.metrics.InternalResponse.Usage.PromptTokens != 3 || req.metrics.InternalResponse.Usage.CompletionTokens != 2 {
 		t.Fatalf("expected usage to be captured, got %#v", req.metrics.InternalResponse.Usage)
-	}
-	if _, ok := getWSResponseConn("resp_passthrough"); !ok {
-		t.Fatalf("expected local response->conn affinity")
 	}
 	if _, ok := getWSAffinityStore().Get(context.Background(), wsAffinityScope{APIKeyID: 1, GroupID: 1, RequestModel: "client-model", ResponseID: "resp_passthrough"}); !ok {
 		t.Fatalf("expected db response affinity")

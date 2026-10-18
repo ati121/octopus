@@ -16,34 +16,21 @@ import (
 type APIFormat string
 
 const (
-	APIFormatOpenAIChatCompletion  APIFormat = "openai/chat_completions"
-	APIFormatOpenAIResponse        APIFormat = "openai/responses"
-	APIFormatOpenAIImageGeneration APIFormat = "openai/image_generation"
-	APIFormatOpenAIEmbedding       APIFormat = "openai/embeddings"
-	APIFormatRerank                APIFormat = "rerank"
-	APIFormatSystemOne             APIFormat = "typesafe/systemone"
-	APIFormatOpenAIDecisions       APIFormat = "openai/decisions"
-	APIFormatGeminiContents        APIFormat = "gemini/contents"
-	APIFormatAnthropicMessage      APIFormat = "anthropic/messages"
-	APIFormatAiSDKText             APIFormat = "aisdk/text"
-	APIFormatAiSDKDataStream       APIFormat = "aisdk/datastream"
+	APIFormatOpenAIChatCompletion APIFormat = "openai/chat_completions"
+	APIFormatOpenAIResponse       APIFormat = "openai/responses"
+	APIFormatOpenAIEmbedding      APIFormat = "openai/embeddings"
+	APIFormatRerank               APIFormat = "rerank"
+	APIFormatSystemOne            APIFormat = "typesafe/systemone"
+	APIFormatOpenAIDecisions      APIFormat = "openai/decisions"
+	APIFormatGeminiContents       APIFormat = "gemini/contents"
+	APIFormatAnthropicMessage     APIFormat = "anthropic/messages"
 )
 
+// TransformerMetadata keys that Octopus itself reads or writes. Provider
+// metadata keys are AxonHub's concern and are not mirrored here.
 const (
-	TransformerMetadataOpenAIResponsesPassthroughRequired = "octopus_openai_responses_passthrough_required"
-	TransformerMetadataOpenAIResponsesPassthroughReason   = "octopus_openai_responses_passthrough_reason"
-	TransformerMetadataWSExecutionMode                    = "octopus_ws_execution_mode"
-	TransformerMetadataWSExecutionModeReplayExact         = "replay_exact"
-	TransformerMetadataAnthropicUserID                    = "anthropic_user_id"
-	TransformerMetadataAnthropicSystemArrayFormat         = "anthropic_system_array_format"
-	TransformerMetadataAnthropicContext1M                 = "anthropic_context_1m"
-	TransformerMetadataOpenAIOrganization                 = "openai_organization"
-	TransformerMetadataOpenAIProject                      = "openai_project"
-	TransformerMetadataGeminiFilesAPIURI                  = "gemini_files_api_uri"
-	TransformerMetadataGeminiTopK                         = "gemini_top_k"
-	TransformerMetadataGeminiMediaResolution              = "gemini_media_resolution"
-	TransformerMetadataGeminiCandidateCount               = "gemini_candidate_count"
-	TransformerMetadataGeminiSafetySettings               = "gemini_safety_settings"
+	TransformerMetadataWSExecutionMode            = "octopus_ws_execution_mode"
+	TransformerMetadataWSExecutionModeReplayExact = "replay_exact"
 )
 
 // Request is the unified llm request model for AxonHub, to keep compatibility with major app and framework.
@@ -1210,137 +1197,25 @@ type File struct {
 
 // ResponseFormat specifies the format of the response.
 //
-// OpenAI's `response_format: { type: "json_schema", json_schema: {...} }`
-// payload has two parts — a wrapper (name / strict / description) and the
-// actual schema. Schema holds the parsed form; RawSchema keeps the original
-// bytes so providers that prefer passthrough (or un-parseable schemas) stay
-// faithful to the client's intent. Callers should prefer Schema where
-// possible and fall back to RawSchema as an escape hatch.
+// The IR only carries this for logging and for forwarding the client's intent
+// verbatim. Structured-output schema parsing and provider-specific emission are
+// AxonHub's job, so the raw wire object is preserved without interpretation.
 type ResponseFormat struct {
-	// Any of "json_schema", "json_object", "text".
+	// Type is any of "json_schema", "json_object", "text".
 	Type string `json:"type"`
 
-	// Name is the OpenAI json_schema.name field (required by the strict
-	// OpenAI schema), carried through so outbound emitters can reproduce
-	// the wrapper verbatim.
+	// Name is the OpenAI json_schema.name field.
 	Name string `json:"name,omitempty"`
 
 	// Description mirrors json_schema.description.
 	Description string `json:"description,omitempty"`
 
-	// Strict mirrors json_schema.strict (OpenAI-only; null → client did
-	// not specify).
+	// Strict mirrors json_schema.strict.
 	Strict *bool `json:"strict,omitempty"`
 
-	// Schema is the parsed structured-output schema.
-	Schema *Schema `json:"-"`
-
-	// RawSchema preserves the original schema bytes for passthrough /
-	// provider-specific forwarding when the typed Schema cannot capture
-	// every keyword. Emitters should emit RawSchema only when Schema is
-	// nil or when an explicit passthrough is requested.
-	RawSchema json.RawMessage `json:"-"`
-
-	// JSONSchema is the legacy field name kept for backward compatibility
-	// with code paths that stored the raw schema bytes directly. New code
-	// should populate Schema / RawSchema instead.
+	// JSONSchema carries the client's json_schema payload unchanged, whether it
+	// is the canonical {name,strict,schema} wrapper or a bare schema object.
 	JSONSchema json.RawMessage `json:"json_schema,omitempty"`
-}
-
-// UnmarshalJSON parses both the canonical OpenAI Responses wire shape
-// (`{type, json_schema:{name,strict,schema}}`) and the legacy shape where
-// `json_schema` was a bare schema object. It populates Schema/RawSchema
-// uniformly so callers can treat them as the authoritative fields.
-func (r *ResponseFormat) UnmarshalJSON(data []byte) error {
-	var raw struct {
-		Type       string          `json:"type"`
-		JSONSchema json.RawMessage `json:"json_schema,omitempty"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	r.Type = raw.Type
-	r.JSONSchema = raw.JSONSchema
-
-	if len(raw.JSONSchema) == 0 {
-		return nil
-	}
-
-	// First attempt: the OpenAI wrapper {name, strict, description, schema}.
-	var wrapper struct {
-		Name        string          `json:"name,omitempty"`
-		Description string          `json:"description,omitempty"`
-		Strict      *bool           `json:"strict,omitempty"`
-		Schema      json.RawMessage `json:"schema,omitempty"`
-	}
-	if err := json.Unmarshal(raw.JSONSchema, &wrapper); err == nil && len(wrapper.Schema) > 0 {
-		r.Name = wrapper.Name
-		r.Description = wrapper.Description
-		r.Strict = wrapper.Strict
-		r.RawSchema = wrapper.Schema
-		if parsed, err := ParseSchema(wrapper.Schema); err == nil {
-			r.Schema = parsed
-		}
-		return nil
-	}
-
-	// Fallback: bare schema object (`json_schema: {type:"object", ...}`).
-	r.RawSchema = raw.JSONSchema
-	if parsed, err := ParseSchema(raw.JSONSchema); err == nil {
-		r.Schema = parsed
-	}
-	return nil
-}
-
-// MarshalJSON re-serialises the canonical OpenAI Responses wire shape. When
-// Schema is populated it's preferred over RawSchema; JSONSchema is kept as
-// the outermost carrier so downstream code that only reads the legacy field
-// still works.
-func (r ResponseFormat) MarshalJSON() ([]byte, error) {
-	type out struct {
-		Type       string          `json:"type"`
-		JSONSchema json.RawMessage `json:"json_schema,omitempty"`
-	}
-	o := out{Type: r.Type}
-
-	schemaBytes := r.RawSchema
-	if len(schemaBytes) == 0 && r.Schema != nil {
-		if b, err := json.Marshal(r.Schema); err == nil {
-			schemaBytes = b
-		}
-	}
-
-	// If we have no schema content but a legacy JSONSchema blob, pass it
-	// through unchanged.
-	if len(schemaBytes) == 0 {
-		o.JSONSchema = r.JSONSchema
-		return json.Marshal(o)
-	}
-
-	// Re-wrap into {name, strict, description, schema} whenever any of
-	// those metadata fields are set; otherwise emit the bare schema for
-	// backward compatibility with callers that read json_schema directly.
-	if r.Name != "" || r.Description != "" || r.Strict != nil {
-		wrapper := struct {
-			Name        string          `json:"name,omitempty"`
-			Description string          `json:"description,omitempty"`
-			Strict      *bool           `json:"strict,omitempty"`
-			Schema      json.RawMessage `json:"schema,omitempty"`
-		}{
-			Name:        r.Name,
-			Description: r.Description,
-			Strict:      r.Strict,
-			Schema:      schemaBytes,
-		}
-		b, err := json.Marshal(wrapper)
-		if err != nil {
-			return nil, err
-		}
-		o.JSONSchema = b
-	} else {
-		o.JSONSchema = schemaBytes
-	}
-	return json.Marshal(o)
 }
 
 // Response is the unified response model.

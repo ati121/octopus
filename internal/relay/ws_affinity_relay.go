@@ -7,9 +7,16 @@ import (
 	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
-func (ra *relayAttempt) recordSuccessfulWSAffinity(pc *pooledConn) {
+// recordSuccessfulWSAffinity pins the next turn of this response to the channel
+// and key that produced it. AxonHub owns the upstream WebSocket pool, so
+// Octopus only remembers which channel served the response; the library reuses
+// its own connection when that channel is selected again.
+func (ra *relayAttempt) recordSuccessfulWSAffinity(_ interface{}) {
+	if ra == nil || ra.metrics == nil {
+		return
+	}
 	ra.collectResponse()
-	if ra == nil || ra.metrics == nil || ra.metrics.InternalResponse == nil || pc == nil {
+	if ra.metrics.InternalResponse == nil {
 		return
 	}
 	responseID := strings.TrimSpace(ra.metrics.InternalResponse.ID)
@@ -17,7 +24,6 @@ func (ra *relayAttempt) recordSuccessfulWSAffinity(pc *pooledConn) {
 		return
 	}
 	ttl := wsAffinityTTL(ra.groupSessionTTL)
-	bindWSResponseConn(responseID, pc.id, ttl)
 	if ra.apiKeyID <= 0 || ra.groupID <= 0 || strings.TrimSpace(ra.requestModel) == "" {
 		return
 	}

@@ -66,7 +66,7 @@ var startCmd = &cobra.Command{
 		}
 		shutdown.Register(server.Close)
 		shutdown.Register(func() error {
-			relay.CloseUpstreamWSPool()
+			relay.CloseUpstreamWS()
 			return nil
 		})
 

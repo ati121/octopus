@@ -19,6 +19,7 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
+	"github.com/bestruirui/octopus/internal/transformer/axon"
 	"github.com/bestruirui/octopus/internal/transformer/inbound"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
@@ -1575,13 +1576,6 @@ func TestHandlerStopsFailoverWhenContinuationTransportIsUnavailable(t *testing.T
 		t.Fatalf("ChannelUpdate first channel failed: %v", err)
 	}
 
-	pc := TryUpstreamWS(context.Background(), firstChannel, firstChannel.GetBaseUrl(), firstChannel.Keys[0].ChannelKey, firstChannel.Keys[0].ID, c.Request.Header, true)
-	if pc == nil {
-		t.Fatalf("expected initial ws dial to succeed")
-	}
-	pc.conn.Close(websocket.StatusNormalClosure, "")
-	wsUpstreamPool.Put(pc)
-
 	Handler(inbound.InboundTypeOpenAIResponse, c)
 
 	if recorder.Code != http.StatusConflict {
@@ -1596,165 +1590,6 @@ func TestHandlerStopsFailoverWhenContinuationTransportIsUnavailable(t *testing.T
 	if sticky := balancer.GetSticky(77, "relay-ws-continuation-group", time.Minute); sticky != nil {
 		t.Fatalf("expected sticky to be cleared after continuation failure, got %#v", sticky)
 	}
-	wsUpstreamPool.Remove(pc.poolKey)
-	wsUpstreamPool.Remove(newWSPoolKey(secondChannel.ID, secondChannel.Keys[0].ID, buildUpstreamWSHeaders(c.Request.Header, secondChannel, secondChannel.Keys[0].ChannelKey)))
-}
-
-func TestForwardViaWSRedialsFreshRequestAfterStalePooledConnection(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctx := setupRelayTestDB(t)
-
-	var accepted atomic.Int32
-	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			return
-		}
-		accepted.Add(1)
-		defer conn.Close(websocket.StatusNormalClosure, "")
-
-		_, _, err = conn.Read(r.Context())
-		if err != nil {
-			return
-		}
-
-		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"type":"response.created","response":{"id":"resp_new","model":"gpt-4o"}}`))
-		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"type":"response.output_text.delta","delta":"ok"}`))
-		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"resp_new","model":"gpt-4o","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`))
-	}))
-	defer wsServer.Close()
-
-	channel := &model.Channel{
-		Name:     "relay-ws-redial",
-		Type:     outbound.OutboundTypeOpenAIResponse,
-		Enabled:  true,
-		BaseUrls: []model.BaseUrl{{URL: wsServer.URL + "/v1"}},
-		Model:    "gpt-4o",
-		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "fresh-key"}},
-	}
-	if err := op.ChannelCreate(channel, ctx); err != nil {
-		t.Fatalf("ChannelCreate failed: %v", err)
-	}
-
-	stale := TryUpstreamWS(context.Background(), channel, channel.GetBaseUrl(), channel.Keys[0].ChannelKey, channel.Keys[0].ID, nil, true)
-	if stale == nil {
-		t.Fatalf("expected initial ws dial to succeed")
-	}
-	stale.conn.Close(websocket.StatusNormalClosure, "")
-	wsUpstreamPool.Put(stale)
-
-	writer := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(writer)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	internalReq := &transformerModel.InternalLLMRequest{Model: "gpt-4o", Stream: boolPtr(true)}
-	req := &relayRequest{
-		c:               c,
-		inAdapter:       inbound.Get(inbound.InboundTypeOpenAIResponse),
-		internalRequest: internalReq,
-		metrics:         NewRelayMetrics(1, "gpt-4o", nil, internalReq),
-		apiKeyID:        1,
-		requestModel:    "gpt-4o",
-	}
-	ra := &relayAttempt{
-		relayRequest: req,
-		outAdapter:   outbound.Get(channel.Type),
-		channel:      channel,
-		usedKey:      channel.Keys[0],
-	}
-
-	statusCode, err := ra.forwardViaWS(context.Background())
-	if err != nil {
-		t.Fatalf("expected fresh ws request to recover by redial, got err %v", err)
-	}
-	if statusCode != http.StatusOK {
-		t.Fatalf("expected fresh ws request to succeed after redial, got %d", statusCode)
-	}
-	if accepted.Load() < 2 {
-		t.Fatalf("expected stale connection plus forced redial, got %d accepted connections", accepted.Load())
-	}
-	if req.metrics.WSRecovery == nil || *req.metrics.WSRecovery != model.RelayLogWSRecoveryReconnect {
-		t.Fatalf("expected ws reconnect recovery to be recorded, got %#v", req.metrics.WSRecovery)
-	}
-	wsUpstreamPool.Remove(stale.poolKey)
-}
-
-func TestForwardViaWSReconnectsContinuationAfterReadFailureBeforeFirstEvent(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctx := setupRelayTestDB(t)
-
-	var accepted atomic.Int32
-	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			return
-		}
-		accepted.Add(1)
-		defer conn.Close(websocket.StatusNormalClosure, "")
-
-		_, _, err = conn.Read(r.Context())
-		if err != nil {
-			return
-		}
-
-		if accepted.Load() == 1 {
-			conn.Close(websocket.StatusNormalClosure, "")
-			return
-		}
-
-		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"type":"response.created","response":{"id":"resp_cont_new","model":"gpt-4o"}}`))
-		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"type":"response.output_text.delta","delta":"ok"}`))
-		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"resp_cont_new","model":"gpt-4o","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`))
-	}))
-	defer wsServer.Close()
-
-	channel := &model.Channel{
-		Name:     "relay-ws-cont-read-reconnect",
-		Type:     outbound.OutboundTypeOpenAIResponse,
-		Enabled:  true,
-		BaseUrls: []model.BaseUrl{{URL: wsServer.URL + "/v1"}},
-		Model:    "gpt-4o",
-		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "cont-key"}},
-	}
-	if err := op.ChannelCreate(channel, ctx); err != nil {
-		t.Fatalf("ChannelCreate failed: %v", err)
-	}
-
-	writer := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(writer)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	internalReq := &transformerModel.InternalLLMRequest{Model: "gpt-4o", Stream: boolPtr(true), PreviousResponseID: stringPtr("resp_prev")}
-	req := &relayRequest{
-		c:               c,
-		inAdapter:       inbound.Get(inbound.InboundTypeOpenAIResponse),
-		internalRequest: internalReq,
-		metrics:         NewRelayMetrics(1, "gpt-4o", nil, internalReq),
-		apiKeyID:        1,
-		requestModel:    "gpt-4o",
-	}
-	ra := &relayAttempt{
-		relayRequest: req,
-		outAdapter:   outbound.Get(channel.Type),
-		channel:      channel,
-		usedKey:      channel.Keys[0],
-	}
-
-	statusCode, err := ra.forwardViaWS(context.Background())
-	if err != nil {
-		t.Fatalf("expected continuation ws request to recover by redial, got err %v", err)
-	}
-	if statusCode != http.StatusOK {
-		t.Fatalf("expected continuation ws request to succeed after redial, got %d", statusCode)
-	}
-	if accepted.Load() < 2 {
-		t.Fatalf("expected initial continuation attempt plus forced redial, got %d accepted connections", accepted.Load())
-	}
-	if req.metrics.WSRecovery == nil || *req.metrics.WSRecovery != model.RelayLogWSRecoveryReconnect {
-		t.Fatalf("expected ws reconnect recovery to be recorded, got %#v", req.metrics.WSRecovery)
-	}
-	if !strings.Contains(writer.Body.String(), `"response.completed"`) {
-		t.Fatalf("expected ws reconnect stream to complete, got %s", writer.Body.String())
-	}
-	wsUpstreamPool.Remove(newWSPoolKey(channel.ID, channel.Keys[0].ID, buildUpstreamWSHeaders(c.Request.Header, channel, channel.Keys[0].ChannelKey)))
 }
 
 func TestForwardDoesNotUseWSForFreshHTTPIngress(t *testing.T) {
@@ -1925,14 +1760,15 @@ func TestForwardViaWSPreservesClientUserAgentHeaders(t *testing.T) {
 		t.Fatalf("expected ws request to succeed, got %d", statusCode)
 	}
 
-	if got := seenUserAgent.Load(); got == nil || *got != "" {
-		t.Fatalf("expected upstream ws handshake to omit user-agent when client does not send one, got %#v", got)
+	// AxonHub's WebSocket dialer sets its own User-Agent; what matters is that
+	// Octopus does not leak the client's or Go's default value through.
+	if got := seenUserAgent.Load(); got != nil && strings.Contains(*got, "Go-http-client") {
+		t.Fatalf("expected upstream ws handshake to avoid Go's default user-agent, got %#v", got)
 	}
 	if got := seenAcceptLanguage.Load(); got == nil || *got != "zh-CN,zh;q=0.9" {
 		t.Fatalf("expected accept-language to be forwarded, got %#v", got)
 	}
 
-	wsUpstreamPool.Remove(newWSPoolKey(channel.ID, channel.Keys[0].ID, buildUpstreamWSHeaders(c.Request.Header, channel, channel.Keys[0].ChannelKey)))
 }
 
 func TestHandlerRetryEnabledDoesNotTurnRecent429IntoNoAvailableKey(t *testing.T) {
@@ -2338,9 +2174,8 @@ func setupRelayTestDB(t *testing.T) context.Context {
 	}
 	balancer.Reset()
 	resetWSConversationStateStore()
-	resetWSResponseConnStateForTest()
+	axon.ResetWebSocketTransportsForTest()
 	resetWSAffinityStoreForTest()
-	resetWSUpstreamPool()
 
 	dbPath := filepath.Join(t.TempDir(), "octopus-relay-test.db")
 	if err := dbpkg.InitDB("sqlite", dbPath, false); err != nil {
@@ -2352,9 +2187,8 @@ func setupRelayTestDB(t *testing.T) context.Context {
 	t.Cleanup(func() {
 		balancer.Reset()
 		resetWSConversationStateStore()
-		resetWSResponseConnStateForTest()
+		axon.ResetWebSocketTransportsForTest()
 		resetWSAffinityStoreForTest()
-		resetWSUpstreamPool()
 		_ = dbpkg.Close()
 	})
 

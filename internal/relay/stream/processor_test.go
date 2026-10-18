@@ -137,40 +137,6 @@ func TestStreamProcessor_UsesErrorCloseOnReadFailure(t *testing.T) {
 	}
 }
 
-func TestStreamProcessor_WithTransform(t *testing.T) {
-	events := [][]byte{
-		[]byte(`chunk1`),
-		[]byte(`chunk2`),
-	}
-
-	source := newMockStreamSource(events)
-	writer := newMockStreamWriter()
-	ctx := context.Background()
-
-	transform := func(ctx context.Context, data []byte) ([]byte, error) {
-		// Wrap in SSE format
-		return []byte("data: " + string(data) + "\n\n"), nil
-	}
-
-	processor := NewStreamProcessor(StreamConfig{
-		Source:    source,
-		Writer:    writer,
-		Context:   ctx,
-		Transform: transform,
-	})
-
-	err := processor.Run()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	output := writer.buffer.String()
-	expected := "data: chunk1\n\ndata: chunk2\n\n"
-	if output != expected {
-		t.Errorf("unexpected output:\ngot:  %q\nwant: %q", output, expected)
-	}
-}
-
 func TestStreamProcessor_FirstTokenCallback(t *testing.T) {
 	events := [][]byte{
 		[]byte(`chunk1`),
@@ -318,18 +284,18 @@ func TestStreamProcessor_ContextCancellation(t *testing.T) {
 }
 
 func TestStreamProcessor_ContextCancellationAfterTransformedTerminalEvent(t *testing.T) {
-	source := &cancelTestSource{first: []byte(`upstream terminal`)}
+	source := &cancelTestSource{first: []byte(`event: response.completed
+data: {"type":"response.completed"}
+
+`)}
 	writer := newMockStreamWriter()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	firstTokenSeen := make(chan struct{})
 	processor := NewStreamProcessor(StreamConfig{
-		Source:  source,
-		Writer:  writer,
-		Context: ctx,
-		Transform: func(context.Context, []byte) ([]byte, error) {
-			return []byte("event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n"), nil
-		},
+		Source:         source,
+		Writer:         writer,
+		Context:        ctx,
 		TerminalEvents: map[string]struct{}{"response.completed": {}},
 		OnFirstToken: func() {
 			close(firstTokenSeen)
@@ -505,34 +471,6 @@ data: {"type":"message_stop"}
 	err := <-errChan
 	if err != nil {
 		t.Errorf("expected nil error due to terminal event detection, got: %v", err)
-	}
-}
-
-func TestRawSource(t *testing.T) {
-	data := []byte("raw chunk data")
-	reader := io.NopCloser(bytes.NewReader(data))
-
-	source := NewRawSource(reader, 10)
-	defer source.Close()
-
-	var chunks [][]byte
-	for {
-		chunk, err := source.ReadEvent(context.Background())
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(chunk) > 0 {
-			chunks = append(chunks, chunk)
-		}
-	}
-
-	// Reconstruct data
-	result := bytes.Join(chunks, nil)
-	if !bytes.Equal(result, data) {
-		t.Errorf("data mismatch:\ngot:  %q\nwant: %q", result, data)
 	}
 }
 
