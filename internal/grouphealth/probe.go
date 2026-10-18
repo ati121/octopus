@@ -12,6 +12,7 @@ import (
 	"github.com/bestruirui/octopus/internal/model"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
+	"github.com/looplj/axonhub/llm"
 )
 
 type ProbeResult struct {
@@ -132,10 +133,27 @@ func buildProbeInternalRequest(channelType outbound.OutboundType, modelName stri
 			RerankPayload: []byte(`{"model":"probe","query":"ping","documents":["ping"]}`),
 		}
 	case outbound.OutboundTypeSystemOne:
+		// System One 直接使用 AxonHub 的原生请求结构，本地不再保存原始报文。
+		return &transformerModel.InternalLLMRequest{
+			Model:        modelName,
+			RawAPIFormat: transformerModel.APIFormatSystemOne,
+			Native: &llm.Request{
+				Model:       modelName,
+				RequestType: llm.RequestTypeSystemOne,
+				APIFormat:   llm.APIFormatTypeSafeSystemOne,
+				SystemOne: &llm.SystemOneRequest{
+					State: "ping",
+					Questions: map[string]llm.SystemOneQuestion{
+						"probe": {Type: "noul", Instructions: "Is this a ping?"},
+					},
+				},
+			},
+		}
+	case outbound.OutboundTypeDecisions:
 		return &transformerModel.InternalLLMRequest{
 			Model:            modelName,
-			RawAPIFormat:     transformerModel.APIFormatSystemOne,
-			SystemOnePayload: []byte(`{"model":"probe","state":"ping","questions":{"probe":{"type":"noul","instructions":"Is this a ping?"}}}`),
+			RawAPIFormat:     transformerModel.APIFormatOpenAIDecisions,
+			DecisionsPayload: []byte(`{"model":"probe","input":"ping","questions":[{"type":"noul","name":"probe","instructions":"Is this a ping?"}]}`),
 		}
 	case outbound.OutboundTypeOpenAIEmbedding:
 		return &transformerModel.InternalLLMRequest{

@@ -298,7 +298,6 @@ func cloneInternalRequest(req *transformerModel.InternalLLMRequest) *transformer
 	cloned.LogitBias = maps.Clone(req.LogitBias)
 	cloned.Metadata = maps.Clone(req.Metadata)
 	cloned.TransformerMetadata = maps.Clone(req.TransformerMetadata)
-	cloned.ProviderExtensions = transformerModel.CloneProviderExtensions(req.ProviderExtensions)
 	cloned.Query = cloneQuery(req.Query)
 	cloned.RawRequest = append([]byte(nil), req.RawRequest...)
 	cloned.ExtraBody = append([]byte(nil), req.ExtraBody...)

@@ -16,6 +16,7 @@ export enum ChannelType {
     Codex = 6,
     Rerank = 7,
     SystemOne = 8,
+    Decisions = 9,
 }
 
 /**
@@ -32,6 +33,7 @@ export const CHANNEL_TYPE_SHORT_LABELS: Record<ChannelType, string> = {
     [ChannelType.Codex]: 'Codex',
     [ChannelType.Rerank]: 'Rerank',
     [ChannelType.SystemOne]: 'SystemOne',
+    [ChannelType.Decisions]: 'Decisions',
 };
 
 /**

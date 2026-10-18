@@ -824,6 +824,8 @@ func CompactOutboundProtocolName(channelType outbound.OutboundType) string {
 		return "Rerank"
 	case outbound.OutboundTypeSystemOne:
 		return "SystemOne"
+	case outbound.OutboundTypeDecisions:
+		return "Decisions"
 	default:
 		return "Chat"
 	}

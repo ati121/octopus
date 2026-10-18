@@ -16,6 +16,9 @@ func TestOutboundTypeValuesRemainPersistenceSafe(t *testing.T) {
 	if OutboundTypeSystemOne != 8 {
 		t.Fatalf("expected SystemOne channel type to be appended as 8, got %d", OutboundTypeSystemOne)
 	}
+	if OutboundTypeDecisions != 9 {
+		t.Fatalf("expected Decisions channel type to be appended as 9, got %d", OutboundTypeDecisions)
+	}
 }
 
 func TestRerankOutboundRegistration(t *testing.T) {
@@ -56,5 +59,28 @@ func TestSystemOneOutboundRegistration(t *testing.T) {
 	}
 	if IsChatChannelType(OutboundTypeSystemOne) || IsEmbeddingChannelType(OutboundTypeSystemOne) || IsRerankChannelType(OutboundTypeSystemOne) {
 		t.Fatal("expected system one channel not to accept chat, embedding or rerank requests")
+	}
+}
+
+func TestDecisionsOutboundRegistration(t *testing.T) {
+	if APIFormatOf(OutboundTypeDecisions) != model.APIFormatOpenAIDecisions {
+		t.Fatalf("expected decisions API format, got %q", APIFormatOf(OutboundTypeDecisions))
+	}
+	if Get(OutboundTypeDecisions) == nil {
+		t.Fatal("expected decisions outbound factory")
+	}
+	if !IsValidChannelType(OutboundTypeDecisions) {
+		t.Fatal("expected decisions to be a valid channel type")
+	}
+	if !IsDecisionsChannelType(OutboundTypeDecisions) {
+		t.Fatal("expected decisions channel to accept decisions requests")
+	}
+	for _, channelType := range []OutboundType{OutboundTypeOpenAIChat, OutboundTypeOpenAIResponse, OutboundTypeOpenAIEmbedding, OutboundTypeRerank, OutboundTypeSystemOne} {
+		if IsDecisionsChannelType(channelType) {
+			t.Fatalf("expected channel type %d not to accept decisions requests", channelType)
+		}
+	}
+	if IsChatChannelType(OutboundTypeDecisions) || IsEmbeddingChannelType(OutboundTypeDecisions) || IsRerankChannelType(OutboundTypeDecisions) || IsSystemOneChannelType(OutboundTypeDecisions) {
+		t.Fatal("expected decisions channel not to accept chat, embedding, rerank or system one requests")
 	}
 }

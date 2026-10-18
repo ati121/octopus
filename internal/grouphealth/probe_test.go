@@ -143,3 +143,54 @@ func TestBuildProbeRequestUsesSystemOneModelType(t *testing.T) {
 		t.Fatalf("expected per-model system one type to probe /api/v1/systemone, got %s", req.URL.Path)
 	}
 }
+
+func TestBuildProbeRequestForDecisions(t *testing.T) {
+	channel := &model.Channel{
+		Type:     outbound.OutboundTypeDecisions,
+		BaseUrls: []model.BaseUrl{{URL: "https://api.openai.com/v1"}},
+	}
+	usedKey := &model.ChannelKey{ID: 1, ChannelKey: "oa-test"}
+
+	req, err := buildProbeRequest(context.Background(), channel, usedKey, "gpt-6-luna")
+	if err != nil {
+		t.Fatalf("buildProbeRequest returned error: %v", err)
+	}
+	if req.URL.Path != "/v1/decisions" {
+		t.Fatalf("expected /v1/decisions, got %s", req.URL.Path)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer oa-test" {
+		t.Fatalf("unexpected Authorization header: %q", got)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read probe body: %v", err)
+	}
+	var payload struct {
+		Model     string            `json:"model"`
+		Input     string            `json:"input"`
+		Questions []json.RawMessage `json:"questions"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode probe body: %v", err)
+	}
+	if payload.Model != "gpt-6-luna" || payload.Input != "ping" || len(payload.Questions) != 1 {
+		t.Fatalf("unexpected decisions probe payload: %s", body)
+	}
+}
+
+func TestBuildProbeRequestUsesDecisionsModelType(t *testing.T) {
+	channel := &model.Channel{
+		Type:       outbound.OutboundTypeOpenAIChat,
+		ModelTypes: model.ChannelModelTypes{"gpt-6-luna": outbound.OutboundTypeDecisions},
+		BaseUrls:   []model.BaseUrl{{URL: "https://gateway.example/api/v1"}},
+	}
+	usedKey := &model.ChannelKey{ID: 1, ChannelKey: "sk-test"}
+
+	req, err := buildProbeRequest(context.Background(), channel, usedKey, "gpt-6-luna")
+	if err != nil {
+		t.Fatalf("buildProbeRequest returned error: %v", err)
+	}
+	if req.URL.Path != "/api/v1/decisions" {
+		t.Fatalf("expected per-model decisions type to probe /api/v1/decisions, got %s", req.URL.Path)
+	}
+}

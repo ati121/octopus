@@ -14,6 +14,7 @@ const (
 	InboundTypeOpenAIEmbedding
 	InboundTypeRerank
 	InboundTypeSystemOne
+	InboundTypeDecisions
 )
 
 var inboundFactories = map[InboundType]func() model.Inbound{
@@ -23,6 +24,7 @@ var inboundFactories = map[InboundType]func() model.Inbound{
 	InboundTypeAnthropic:       func() model.Inbound { return axon.NewInbound(2) },
 	InboundTypeRerank:          func() model.Inbound { return axon.NewInbound(4) },
 	InboundTypeSystemOne:       func() model.Inbound { return axon.NewInbound(5) },
+	InboundTypeDecisions:       func() model.Inbound { return axon.NewInbound(6) },
 }
 
 func Get(inboundType InboundType) model.Inbound {

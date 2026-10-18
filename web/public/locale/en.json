@@ -866,6 +866,7 @@
             "typeCodex": "Codex",
             "typeRerank": "Rerank",
             "typeSystemOne": "System One (Jev)",
+            "typeDecisions": "Decisions",
             "autoSync": "Auto Sync",
             "skipHealthProbe": "Skip health probes",
             "autoGroup": "Auto Group",

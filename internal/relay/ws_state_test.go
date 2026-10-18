@@ -345,11 +345,6 @@ func TestWSConversationStateBuildReplayRequest(t *testing.T) {
 			{"type":"function_call_output","call_id":"call_123","output":[{"type":"input_text","text":"ok"}]},
 			{"type":"input_text","text":"tail","native_meta":{"keep":true}}
 		]`),
-		ProviderExtensions: &transformerModel.ProviderExtensions{
-			OpenAI: &transformerModel.OpenAIExtension{
-				RawResponseItems: json.RawMessage(`[{"type":"input_text","text":"stale"}]`),
-			},
-		},
 		Messages: []transformerModel.Message{{
 			Role:       "tool",
 			ToolCallID: stringPtr("call_123"),
@@ -393,15 +388,6 @@ func TestWSConversationStateBuildReplayRequest(t *testing.T) {
 	}
 	if _, ok := rawItems[2]["native_meta"]; !ok {
 		t.Fatalf("expected original raw input item native fields to be preserved, got %#v", rawItems[2])
-	}
-	if replayed.ProviderExtensions == nil || replayed.ProviderExtensions.OpenAI == nil {
-		t.Fatalf("expected replay request to keep OpenAI mirror in sync")
-	}
-	if string(replayed.ProviderExtensions.OpenAI.RawResponseItems) != string(replayed.RawInputItems) {
-		t.Fatalf("expected replayed OpenAI mirror to match authoritative RawInputItems, got mirror=%s raw=%s", replayed.ProviderExtensions.OpenAI.RawResponseItems, replayed.RawInputItems)
-	}
-	if req.ProviderExtensions != nil && req.ProviderExtensions.OpenAI != nil && string(req.ProviderExtensions.OpenAI.RawResponseItems) == string(replayed.RawInputItems) {
-		t.Fatalf("expected replay build to avoid mutating original request extension mirror")
 	}
 }
 
@@ -506,35 +492,30 @@ func TestWSConversationStateApplySuccessfulStreamTurnBuildsReplayWindow(t *testi
 			Content: transformerModel.MessageContent{Content: stringPtr("hello")},
 		}},
 	}
-	events := []transformerModel.StreamEvent{
-		{Kind: transformerModel.StreamEventKindMessageStart, ID: "resp_stream", Model: "gpt-4o", Role: "assistant"},
-		{Kind: transformerModel.StreamEventKindToolCallStart, ID: "resp_stream", Model: "gpt-4o", Index: 0, ToolCall: &transformerModel.ToolCall{
-			ID:    "call_123",
-			Type:  "function",
+	// 聚合后的流式响应：工具调用与 raw output items 由 AxonHub 迭代器产出。
+	streamedItems := json.RawMessage(`[
+		{"type":"function_call","call_id":"call_123","name":"lookup","arguments":"{}","status":"completed"}
+	]`)
+	response := &transformerModel.InternalLLMResponse{
+		ID:    "resp_stream",
+		Model: "gpt-4o",
+		Choices: []transformerModel.Choice{{
 			Index: 0,
-			Function: transformerModel.FunctionCall{
-				Name: "lookup",
+			Message: &transformerModel.Message{
+				Role: "assistant",
+				ToolCalls: []transformerModel.ToolCall{{
+					ID:    "call_123",
+					Type:  "function",
+					Index: 0,
+					Function: transformerModel.FunctionCall{
+						Name: "lookup",
+					},
+				}},
 			},
 		}},
-		{Kind: transformerModel.StreamEventKindMessageStop, ID: "resp_stream", Model: "gpt-4o", StopReason: transformerModel.FinishReasonToolCalls, ProviderExtensions: &transformerModel.ProviderExtensions{
-			OpenAI: &transformerModel.OpenAIExtension{
-				RawResponseItems: json.RawMessage(`[
-					{"type":"function_call","call_id":"call_123","name":"lookup","arguments":"{}","status":"completed"}
-				]`),
-			},
-		}},
-		{Kind: transformerModel.StreamEventKindUsageDelta, ID: "resp_stream", Model: "gpt-4o", Usage: &transformerModel.Usage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2}, ProviderExtensions: &transformerModel.ProviderExtensions{
-			OpenAI: &transformerModel.OpenAIExtension{
-				RawResponseItems: json.RawMessage(`[
-					{"type":"function_call","call_id":"call_123","name":"lookup","arguments":"{}","status":"completed"}
-				]`),
-			},
-		}},
+		Usage: &transformerModel.Usage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2},
 	}
-	response := transformerModel.InternalResponseFromStreamEvents(events)
-	if response == nil {
-		t.Fatalf("expected streamed events to rebuild response")
-	}
+	response.RawResponsesOutputItems = streamedItems
 
 	state.ApplySuccessfulTurn(request, response)
 

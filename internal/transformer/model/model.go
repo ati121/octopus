@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 
 	"github.com/looplj/axonhub/llm"
@@ -23,6 +22,7 @@ const (
 	APIFormatOpenAIEmbedding       APIFormat = "openai/embeddings"
 	APIFormatRerank                APIFormat = "rerank"
 	APIFormatSystemOne             APIFormat = "typesafe/systemone"
+	APIFormatOpenAIDecisions       APIFormat = "openai/decisions"
 	APIFormatGeminiContents        APIFormat = "gemini/contents"
 	APIFormatAnthropicMessage      APIFormat = "anthropic/messages"
 	APIFormatAiSDKText             APIFormat = "aisdk/text"
@@ -80,11 +80,11 @@ type InternalLLMRequest struct {
 	// The outbound adapter only replaces the routed model name.
 	RerankPayload json.RawMessage `json:"-"`
 
-	// SystemOnePayload preserves the complete TypeSafe System One request
-	// object ({state, model, questions}). State, instructions and criteria
-	// accept strings, objects or arrays, so the wire payload is forwarded as-is
-	// and the outbound adapter only replaces the routed model name.
-	SystemOnePayload json.RawMessage `json:"-"`
+	// DecisionsPayload preserves the complete OpenAI Decisions request object
+	// ({model, input, questions}). Question schemas are provider-defined and
+	// forward-compatible, so the wire payload is forwarded as-is and the
+	// outbound adapter only replaces the routed model name.
+	DecisionsPayload json.RawMessage `json:"-"`
 
 	// Model is the model ID used to generate the response.
 	Model string `json:"model" validator:"required"`
@@ -335,70 +335,22 @@ type InternalLLMRequest struct {
 	// Provider-specific pass-through fields.
 	// These preserve wire-level provider capabilities that do not belong in the
 	// stable IR. Prefer exposing new provider-specific behavior through
-	// ProviderExtensions and provider-specific accessors instead of growing more
-	// top-level passthrough fields.
-	// OpenAIResponsesPassthroughRequired is a compatibility mirror for the
-	// OpenAI Responses passthrough flag. New OpenAI-specific call sites should
-	// prefer request.HasOpenAIResponsesPassthrough() / request.GetOpenAIExtensions()
-	// as the primary read path.
-	OpenAIResponsesPassthroughRequired bool `json:"-"`
-	// OpenAIResponsesPassthroughReason is a compatibility mirror for the
-	// passthrough reason text. New OpenAI-specific call sites should prefer
-	// request.OpenAIResponsesPassthroughReasonTextValue() /
-	// request.GetOpenAIExtensions() as the primary read path.
-	OpenAIResponsesPassthroughReason string          `json:"-"`
-	PreviousResponseID               *string         `json:"-"`
-	Background                       *bool           `json:"-"`
-	Prompt                           json.RawMessage `json:"-"`
-	ResponsesPromptCacheKey          *string         `json:"-"`
-	PromptCacheRetention             *string         `json:"-"`
-	MaxToolCalls                     *int64          `json:"-"`
-	Conversation                     json.RawMessage `json:"-"`
-	ContextManagement                json.RawMessage `json:"-"`
-	ResponsesStreamOptions           json.RawMessage `json:"-"`
-	ReasoningSummary                 *string         `json:"-"`
-	ReasoningGenerateSummary         *string         `json:"-"`
+	// ProviderExtensions instead of growing more top-level passthrough fields.
+	PreviousResponseID       *string         `json:"-"`
+	Background               *bool           `json:"-"`
+	Prompt                   json.RawMessage `json:"-"`
+	ResponsesPromptCacheKey  *string         `json:"-"`
+	PromptCacheRetention     *string         `json:"-"`
+	MaxToolCalls             *int64          `json:"-"`
+	Conversation             json.RawMessage `json:"-"`
+	ContextManagement        json.RawMessage `json:"-"`
+	ResponsesStreamOptions   json.RawMessage `json:"-"`
+	ReasoningSummary         *string         `json:"-"`
+	ReasoningGenerateSummary *string         `json:"-"`
 	// RawInputItems preserves original Responses input items when the request cannot
 	// be losslessly normalized into Messages. Relay replay/exact-replay depends on
-	// this top-level field directly and it remains the authoritative runtime
-	// source even when ProviderExtensions also carries a compatibility mirror.
+	// this top-level field directly and it remains the authoritative runtime source.
 	RawInputItems json.RawMessage `json:"-"`
-
-	// Gemini-specific pass-through fields (only meaningful for Gemini outbound).
-	//
-	// GeminiCachedContentRef is a compatibility mirror for the Gemini cached
-	// content reference. New Gemini-specific call sites should prefer
-	// ProviderExtensions.Gemini / request.GetGeminiExtensions() as the primary
-	// access path.
-	// Ref: https://ai.google.dev/gemini-api/docs/caching
-	GeminiCachedContentRef *string `json:"-"`
-
-	// GeminiSpeechConfig is a compatibility mirror for Gemini's raw
-	// speechConfig passthrough. New Gemini-specific call sites should prefer
-	// ProviderExtensions.Gemini / request.GetGeminiExtensions() as the primary
-	// access path. Left as raw JSON because the schema is deeply nested and
-	// shared with the Live API. G-H11.
-	GeminiSpeechConfig json.RawMessage `json:"-"`
-
-	// Anthropic-specific pass-through fields (only meaningful for
-	// Anthropic outbound).
-	//
-	// AnthropicMCPServers is a compatibility mirror for Anthropic's raw
-	// `mcp_servers` passthrough. New Anthropic-specific call sites should prefer
-	// ProviderExtensions.Anthropic / request.GetAnthropicExtensions() as the
-	// primary access path. Triggers the mcp-client-2025-11-20 beta header
-	// automatically. A-H6.
-	AnthropicMCPServers json.RawMessage `json:"-"`
-
-	// AnthropicContainer is a compatibility mirror for Anthropic's raw
-	// `container` passthrough. New Anthropic-specific call sites should prefer
-	// ProviderExtensions.Anthropic / request.GetAnthropicExtensions() as the
-	// primary access path. A-H6.
-	AnthropicContainer json.RawMessage `json:"-"`
-
-	// ProviderExtensions stores provider-specific request hints that are not part
-	// of the core cross-provider request model. It is internal-only.
-	ProviderExtensions *ProviderExtensions `json:"-"`
 
 	// Query stores the original query parameters from the inbound request.
 	// This is a help field and will not be sent to the llm service.
@@ -450,24 +402,25 @@ func (r *InternalLLMRequest) Validate() error {
 		}
 	}
 
-	// 请求类型必须互斥。Rerank 与 System One 都使用原始 JSON 载荷承载
-	// 请求字段及供应商扩展字段，因此各自作为独立的请求类型参与校验。
+	// 请求类型必须互斥。Rerank 与 Decisions 使用原始 JSON 载荷承载请求字段及
+	// 供应商扩展字段；System One 直接使用 AxonHub 的原生请求结构，因此总会
+	// 命中上面的 Native 分支，不参与这里的本地互斥判定。
 	isEmbeddingRequest := r.EmbeddingInput != nil
 	isChatRequest := r.IsChatRequest()
 	isRerankRequest := r.IsRerankRequest()
-	isSystemOneRequest := r.IsSystemOneRequest()
+	isDecisionsRequest := r.IsDecisionsRequest()
 
 	requestTypeCount := 0
-	for _, present := range []bool{isEmbeddingRequest, isChatRequest, isRerankRequest, isSystemOneRequest} {
+	for _, present := range []bool{isEmbeddingRequest, isChatRequest, isRerankRequest, isDecisionsRequest} {
 		if present {
 			requestTypeCount++
 		}
 	}
 	if requestTypeCount > 1 {
-		return errors.New("messages, embedding input, rerank payload, and system one payload are mutually exclusive")
+		return errors.New("messages, embedding input, rerank payload, and decisions payload are mutually exclusive")
 	}
 	if requestTypeCount == 0 {
-		return errors.New("messages, embedding input, rerank payload, or system one payload is required")
+		return errors.New("messages, embedding input, rerank payload, or decisions payload is required")
 	}
 
 	// 验证 embedding 请求
@@ -486,8 +439,8 @@ func (r *InternalLLMRequest) Validate() error {
 		return errors.New("rerank payload must be valid JSON")
 	}
 
-	if isSystemOneRequest && !json.Valid(r.SystemOnePayload) {
-		return errors.New("system one payload must be valid JSON")
+	if isDecisionsRequest && !json.Valid(r.DecisionsPayload) {
+		return errors.New("decisions payload must be valid JSON")
 	}
 
 	if len(r.Messages) > 0 {
@@ -496,11 +449,6 @@ func (r *InternalLLMRequest) Validate() error {
 	}
 
 	return nil
-}
-
-func isRawJSONArray(raw json.RawMessage) bool {
-	_, ok := parseRawJSONArray(raw)
-	return ok
 }
 
 func parseRawJSONArray(raw json.RawMessage) ([]json.RawMessage, bool) {
@@ -643,30 +591,19 @@ func (r *InternalLLMRequest) IsRerankRequest() bool {
 }
 
 // IsSystemOneRequest returns true if this is a TypeSafe System One request.
+// System One uses AxonHub's native request structure directly.
 func (r *InternalLLMRequest) IsSystemOneRequest() bool {
-	return len(r.SystemOnePayload) > 0
+	return r.Native != nil && r.Native.SystemOne != nil
+}
+
+// IsDecisionsRequest returns true if this is an OpenAI Decisions request.
+func (r *InternalLLMRequest) IsDecisionsRequest() bool {
+	return len(r.DecisionsPayload) > 0
 }
 
 // IsChatRequest returns true if this is a chat completion request.
 func (r *InternalLLMRequest) IsChatRequest() bool {
 	return len(r.Messages) > 0 || (r.RawAPIFormat == APIFormatOpenAIResponse && len(r.RawInputItems) > 0)
-}
-
-func (r *InternalLLMRequest) MarkOpenAIResponsesPassthroughRequired(reason string) {
-	if r == nil {
-		return
-	}
-	reason = strings.TrimSpace(reason)
-	existing := r.OpenAIResponsesPassthroughReasonTextValue()
-	if reason != "" && existing != "" {
-		reason = existing + "," + reason
-	} else if reason == "" {
-		reason = existing
-	}
-	r.SetOpenAIExtensions(OpenAIExtension{
-		ResponsesPassthroughRequired: true,
-		ResponsesPassthroughReason:   reason,
-	})
 }
 
 func (r *InternalLLMRequest) IsOpenAIExactReplayRequest() bool {
@@ -723,19 +660,6 @@ func (r *InternalLLMRequest) NormalizeMessages() {
 	for i := range r.Messages {
 		r.Messages[i].Normalize()
 	}
-}
-
-// EnforceMessageAlternation rewrites r.Messages so consecutive same-role
-// turns are merged and provider-specific opening requirements are met.
-// Intended to be called by outbound transformers whose upstream enforces
-// strict user/assistant alternation (Anthropic and Gemini). Callers for
-// lax providers (OpenAI) can safely skip this.
-func (r *InternalLLMRequest) EnforceMessageAlternation(provider AlternationProvider) {
-	r.Messages = EnforceAlternation(r.Messages, provider)
-}
-
-func (r *InternalLLMRequest) IsImageGenerationRequest() bool {
-	return len(r.Modalities) > 0 && slices.Contains(r.Modalities, "image")
 }
 
 type TransformOptions struct {
@@ -858,7 +782,7 @@ type Message struct {
 	ReasoningContent *string `json:"reasoning_content,omitempty"`
 
 	// Reasoning is used by some providers (e.g., OpenRouter, Ollama cloud) as an alternative to ReasoningContent.
-	// Both fields serve the same purpose, use GetReasoningContent() to get the value.
+	// Both fields serve the same purpose.
 	Reasoning *string `json:"reasoning,omitempty"`
 
 	// Help field, will not be sent to the llm service, to adapt the anthropic think signature.
@@ -876,9 +800,6 @@ type Message struct {
 	// multi-turn tool-use scenarios (Anthropic extended thinking, Gemini 3 thoughtSignature) can be
 	// replayed to the upstream without signature_mismatch / FAILED_PRECONDITION errors.
 	ReasoningBlocks []ReasoningBlock `json:"-"`
-
-	// ProviderExtensions stores provider-specific message hints. It is internal-only.
-	ProviderExtensions *ProviderExtensions `json:"-"`
 
 	// CacheControl is used for provider-specific cache control (e.g., Anthropic).
 	// This field is not serialized in JSON.
@@ -917,30 +838,6 @@ type ReasoningBlock struct {
 	// swapped and Gemini rejects the replay with 400. See G-H7.
 	ToolCallID   string `json:"tool_call_id,omitempty"`
 	ToolCallName string `json:"tool_call_name,omitempty"`
-}
-
-// AppendReasoningBlock appends a reasoning block preserving insertion order.
-// Index is auto-assigned based on the current slice length when the caller passes a negative Index.
-func (m *Message) AppendReasoningBlock(block ReasoningBlock) {
-	if block.Index < 0 {
-		block.Index = len(m.ReasoningBlocks)
-	}
-	m.ReasoningBlocks = append(m.ReasoningBlocks, block)
-}
-
-// ReasoningBlocksByProvider returns the subset of blocks authored by the given provider.
-// Pass an empty string to get the full slice.
-func (m *Message) ReasoningBlocksByProvider(provider string) []ReasoningBlock {
-	if provider == "" {
-		return m.ReasoningBlocks
-	}
-	out := make([]ReasoningBlock, 0, len(m.ReasoningBlocks))
-	for _, b := range m.ReasoningBlocks {
-		if b.Provider == provider {
-			out = append(out, b)
-		}
-	}
-	return out
 }
 
 func (m *Message) ClearHelpFields() {
@@ -1080,23 +977,6 @@ func isEmptyTextPart(p MessageContentPart) bool {
 	return p.Text == nil || *p.Text == ""
 }
 
-// GetReasoningContent returns the reasoning content from either ReasoningContent or Reasoning field.
-// Different providers use different field names for the same purpose.
-func (m *Message) GetReasoningContent() string {
-	if m.ReasoningContent != nil {
-		return *m.ReasoningContent
-	}
-	if m.Reasoning != nil {
-		return *m.Reasoning
-	}
-	return ""
-}
-
-// SetReasoningContent sets the reasoning content to the ReasoningContent field.
-func (m *Message) SetReasoningContent(s string) {
-	m.ReasoningContent = &s
-}
-
 type MessageContent struct {
 	Content         *string              `json:"content,omitempty"`
 	MultipleContent []MessageContentPart `json:"multiple_content,omitempty"`
@@ -1173,9 +1053,6 @@ type MessageContentPart struct {
 	// dedicated server_* name so routing logic can distinguish them.
 	// json:"-" for the same reason as Document.
 	ServerToolResult *ServerToolResultBlock `json:"-"`
-
-	// ProviderExtensions stores provider-specific content-part hints. It is internal-only.
-	ProviderExtensions *ProviderExtensions `json:"-"`
 
 	// CacheControl is used for provider-specific cache control (e.g., Anthropic).
 	// This field is not serialized in JSON.
@@ -1482,10 +1359,10 @@ type InternalLLMResponse struct {
 	// rerank endpoint can return every result/meta extension unchanged.
 	RerankPayload json.RawMessage `json:"-"`
 
-	// SystemOnePayload preserves the TypeSafe System One response
-	// ({model, answers, usage}) so the /v1/systemone endpoint can return every
-	// typed answer, probability and confidence field unchanged.
-	SystemOnePayload json.RawMessage `json:"-"`
+	// DecisionsPayload preserves the OpenAI Decisions response
+	// ({model, answers, usage}) so the /v1/decisions endpoint can return every
+	// typed answer and provider extension unchanged.
+	DecisionsPayload json.RawMessage `json:"-"`
 
 	// A list of chat completion choices. Can be more than one if `n` is greater
 	// than 1.
@@ -1553,13 +1430,14 @@ func (r *InternalLLMResponse) IsRerankResponse() bool {
 }
 
 // IsSystemOneResponse returns true if this is a TypeSafe System One response.
+// System One uses AxonHub's native response structure directly.
 func (r *InternalLLMResponse) IsSystemOneResponse() bool {
-	return len(r.SystemOnePayload) > 0
+	return r.Native != nil && r.Native.SystemOne != nil
 }
 
-// IsChatResponse returns true if this is a chat completion response.
-func (r *InternalLLMResponse) IsChatResponse() bool {
-	return len(r.Choices) > 0
+// IsDecisionsResponse returns true if this is an OpenAI Decisions response.
+func (r *InternalLLMResponse) IsDecisionsResponse() bool {
+	return len(r.DecisionsPayload) > 0
 }
 
 // Choice represents a choice in the response.
@@ -1757,22 +1635,6 @@ type Usage struct {
 	CacheCreation5mInputTokens int64 `json:"cache_creation_5m_input_tokens,omitempty"`
 	CacheCreation1hInputTokens int64 `json:"cache_creation_1h_input_tokens,omitempty"`
 	CacheReadInputTokens       int64 `json:"cache_read_input_tokens,omitempty"`
-}
-
-func (u *Usage) GetCompletionTokens() *int64 {
-	if u == nil {
-		return nil
-	}
-
-	return &u.CompletionTokens
-}
-
-func (u *Usage) GetPromptTokens() *int64 {
-	if u == nil {
-		return nil
-	}
-
-	return &u.PromptTokens
 }
 
 // HasAnthropicCacheSemantic reports whether PromptTokens excludes cached tokens
@@ -2023,9 +1885,6 @@ type ToolCall struct {
 	// multi-turn tool use can be replayed without losing the provider-required
 	// signature binding. Help field only; never serialized to client JSON.
 	ThoughtSignature string `json:"-"`
-
-	// ProviderExtensions stores provider-specific tool-call hints. It is internal-only.
-	ProviderExtensions *ProviderExtensions `json:"-"`
 
 	// CacheControl is used for provider-specific cache control (e.g., Anthropic).
 	CacheControl *CacheControl `json:"-"`

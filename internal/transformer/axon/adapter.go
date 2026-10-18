@@ -26,6 +26,7 @@ import (
 	"github.com/looplj/axonhub/llm/transformer/jina"
 	"github.com/looplj/axonhub/llm/transformer/openai"
 	"github.com/looplj/axonhub/llm/transformer/openai/codex"
+	"github.com/looplj/axonhub/llm/transformer/openai/decisions"
 	"github.com/looplj/axonhub/llm/transformer/openai/responses"
 	"github.com/looplj/axonhub/llm/transformer/typesafe"
 	"github.com/tidwall/sjson"
@@ -54,6 +55,8 @@ func NewInbound(kind int) *Inbound {
 		i.Transformer, i.Format = jina.NewRerankInboundTransformer(), model.APIFormatRerank
 	case 5:
 		i.Transformer, i.Format = typesafe.NewSystemOneInboundTransformer(), model.APIFormatSystemOne
+	case 6:
+		i.Transformer, i.Format = decisions.NewInboundTransformer(), model.APIFormatOpenAIDecisions
 	default:
 		return nil
 	}
@@ -108,8 +111,8 @@ func ProjectRequest(r *llm.Request, format model.APIFormat, raw []byte) (*model.
 	if r.Rerank != nil {
 		view.RerankPayload = append([]byte(nil), raw...)
 	}
-	if r.SystemOne != nil {
-		view.SystemOnePayload = append([]byte(nil), raw...)
+	if r.Decisions != nil {
+		view.DecisionsPayload = append([]byte(nil), raw...)
 	}
 	if format == model.APIFormatOpenAIResponse {
 		var wire struct {
@@ -142,6 +145,11 @@ func NativeRequest(ctx context.Context, view *model.InternalLLMRequest) (*llm.Re
 			return nil, err
 		}
 		r.ProviderExtensions = llm.CloneProviderExtensions(view.Native.ProviderExtensions)
+		// llm.DecisionsRequest.Body has no JSON tag, so it does not survive the
+		// round-trip above; restore the raw payload the outbound adapter rewrites.
+		if r.Decisions != nil && len(r.Decisions.Body) == 0 {
+			r.Decisions.Body = append([]byte(nil), view.DecisionsPayload...)
+		}
 		if view.Native.Image != nil {
 			r.Image.ModelSpecified = view.Native.Image.ModelSpecified
 			r.Image.Mask = bytes.Clone(view.Native.Image.Mask)
@@ -173,8 +181,8 @@ func NativeRequest(ctx context.Context, view *model.InternalLLMRequest) (*llm.Re
 		return &r, nil
 	}
 	// Locally generated health probes contain no provider extensions.
-	if len(view.SystemOnePayload) > 0 {
-		r, e := NewInbound(5).TransformRequest(ctx, view.SystemOnePayload)
+	if len(view.DecisionsPayload) > 0 {
+		r, e := NewInbound(6).TransformRequest(ctx, view.DecisionsPayload)
 		if e != nil {
 			return nil, e
 		}
@@ -236,8 +244,14 @@ func ProjectResponse(r *llm.Response) (*model.InternalLLMResponse, error) {
 	if r.Rerank != nil {
 		view.RerankPayload, _ = json.Marshal(r.Rerank)
 	}
-	if r.SystemOne != nil {
-		view.SystemOnePayload, _ = json.Marshal(r.SystemOne)
+	if r.Decisions != nil {
+		// llm.DecisionsResponse.Body is also untagged; prefer the raw upstream
+		// body so the inbound transformer can return it unchanged.
+		if len(r.Decisions.Body) > 0 {
+			view.DecisionsPayload = append([]byte(nil), r.Decisions.Body...)
+		} else if len(r.Decisions.Answers) > 0 {
+			view.DecisionsPayload, _ = json.Marshal(r.Decisions)
+		}
 	}
 	return &view, nil
 }
@@ -314,6 +328,8 @@ func (o *Outbound) configure(base, key string) error {
 		o.Transformer, err = jina.NewOutboundTransformer(base, key)
 	case 8:
 		o.Transformer, err = typesafe.NewOutboundTransformer(base, key)
+	case 9:
+		o.Transformer, err = decisions.NewOutboundTransformer(base, key)
 	default:
 		err = fmt.Errorf("unknown outbound type %d", o.Kind)
 	}

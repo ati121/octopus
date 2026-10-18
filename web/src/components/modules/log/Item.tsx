@@ -165,6 +165,7 @@ const LOG_PROTOCOL_ALIASES: Record<string, string> = {
     openaiembedding: 'Embedding',
     rerank: 'Rerank',
     systemone: 'SystemOne',
+    decisions: 'Decisions',
     codex: 'Codex',
     unsupported: 'Unsupported',
 };

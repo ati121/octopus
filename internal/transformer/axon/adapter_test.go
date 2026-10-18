@@ -155,3 +155,58 @@ func TestImageEndpointsUseAxonHub(t *testing.T) {
 		t.Fatal("streaming image request must follow AxonHub's rejection")
 	}
 }
+
+const decisionsAnswer = `{"model":"upstream","answers":[{"type":"choice","name":"department","choice":"billing"}],"usage":{"input_tokens":120}}`
+
+// Decisions 的原始报文只在 llm.DecisionsRequest.Body（无 JSON tag）里，
+// 必须经 DecisionsPayload 跨重试保留，否则出站请求体会为空。
+func TestDecisionsRequestSurvivesNativeRoundTrip(t *testing.T) {
+	ctx := t.Context()
+	body := []byte(`{"model":"group","input":"hello","questions":[{"type":"choice","name":"department"}],"x_beta":1}`)
+	in := NewInbound(6)
+	request, err := in.TransformRequest(ctx, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.RawAPIFormat != model.APIFormatOpenAIDecisions {
+		t.Fatalf("unexpected api format %q", request.RawAPIFormat)
+	}
+	if len(request.DecisionsPayload) == 0 {
+		t.Fatal("expected decisions payload projection")
+	}
+
+	request.Model = "upstream"
+	out := NewOutbound(9)
+	wire, err := out.TransformRequest(ctx, request, "https://gateway.example/v1", "upstream-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wire.URL.Path != "/v1/decisions" {
+		t.Fatalf("path %s, want /v1/decisions", wire.URL.Path)
+	}
+	raw, _ := io.ReadAll(wire.Body)
+	if !bytes.Contains(raw, []byte(`"input":"hello"`)) {
+		t.Fatalf("lost decisions input: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"x_beta":1`)) {
+		t.Fatalf("lost decisions extension fields: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"model":"upstream"`)) {
+		t.Fatalf("expected routed model in payload: %s", raw)
+	}
+
+	response, err := out.TransformResponse(ctx, &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(decisionsAnswer))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.IsDecisionsResponse() {
+		t.Fatal("expected decisions response projection")
+	}
+	rendered, err := in.TransformResponse(ctx, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(rendered, []byte(`"choice":"billing"`)) {
+		t.Fatalf("expected upstream answers to be returned unchanged, got %s", rendered)
+	}
+}

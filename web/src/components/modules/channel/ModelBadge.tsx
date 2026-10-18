@@ -17,6 +17,7 @@ export const CHANNEL_TYPE_OPTIONS = [
     { value: ChannelType.Codex, labelKey: 'typeCodex' },
     { value: ChannelType.Rerank, labelKey: 'typeRerank' },
     { value: ChannelType.SystemOne, labelKey: 'typeSystemOne' },
+    { value: ChannelType.Decisions, labelKey: 'typeDecisions' },
 ] as const;
 
 function channelTypeLabelKey(type: ChannelType) {

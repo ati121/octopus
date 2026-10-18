@@ -7,6 +7,7 @@ import (
 
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
+	"github.com/looplj/axonhub/llm"
 )
 
 func TestIsClientCancellationMatchesWrappedRequestErrors(t *testing.T) {
@@ -57,7 +58,7 @@ func TestStreamResponseCompleted(t *testing.T) {
 	}{
 		{name: "nil", resp: nil, want: false},
 		{name: "no choices", resp: &transformerModel.InternalLLMResponse{}, want: false},
-		{name: "system one payload", resp: &transformerModel.InternalLLMResponse{SystemOnePayload: []byte(`{"answers":{"q":{"type":"noul","noul":1}}}`)}, want: true},
+		{name: "system one response", resp: &transformerModel.InternalLLMResponse{Native: &llm.Response{SystemOne: &llm.SystemOneResponse{}}}, want: true},
 		{
 			name: "missing finish reason",
 			resp: &transformerModel.InternalLLMResponse{Choices: []transformerModel.Choice{{Index: 0}}},

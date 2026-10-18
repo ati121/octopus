@@ -22,6 +22,9 @@ const (
 	// OutboundTypeSystemOne 对接 TypeSafe System One（Jev 模型）的 /v1/systemone，
 	// 同样追加在末尾，保持已持久化的类型值稳定。
 	OutboundTypeSystemOne
+	// OutboundTypeDecisions 对接 OpenAI Decisions 的 /v1/decisions，
+	// 同样追加在末尾，保持已持久化的类型值稳定。
+	OutboundTypeDecisions
 )
 
 // EmbeddingChannelTypes 定义支持 embedding 请求的 channel 类型集合
@@ -37,6 +40,11 @@ var RerankChannelTypes = map[OutboundType]bool{
 // SystemOneChannelTypes 定义支持 System One 请求的 channel 类型集合。
 var SystemOneChannelTypes = map[OutboundType]bool{
 	OutboundTypeSystemOne: true,
+}
+
+// DecisionsChannelTypes 定义支持 Decisions 请求的 channel 类型集合。
+var DecisionsChannelTypes = map[OutboundType]bool{
+	OutboundTypeDecisions: true,
 }
 
 // ChatChannelTypes 定义支持 chat 请求的 channel 类型集合
@@ -63,6 +71,7 @@ var outboundAPIFormats = map[OutboundType]model.APIFormat{
 	OutboundTypeCodex:     model.APIFormatOpenAIResponse,
 	OutboundTypeRerank:    model.APIFormatRerank,
 	OutboundTypeSystemOne: model.APIFormatSystemOne,
+	OutboundTypeDecisions: model.APIFormatOpenAIDecisions,
 }
 
 // APIFormatOf 返回出站 channel 类型对应的 provider APIFormat。
@@ -86,6 +95,11 @@ func IsSystemOneChannelType(channelType OutboundType) bool {
 	return SystemOneChannelTypes[channelType]
 }
 
+// IsDecisionsChannelType 判断 channel 类型是否支持 Decisions 请求。
+func IsDecisionsChannelType(channelType OutboundType) bool {
+	return DecisionsChannelTypes[channelType]
+}
+
 // IsChatChannelType 判断 channel 类型是否支持 chat 请求
 func IsChatChannelType(channelType OutboundType) bool {
 	return ChatChannelTypes[channelType]
@@ -107,6 +121,7 @@ var outboundFactories = map[OutboundType]func() model.Outbound{
 	OutboundTypeCodex:           func() model.Outbound { return axon.NewOutbound(6) },
 	OutboundTypeRerank:          func() model.Outbound { return axon.NewOutbound(7) },
 	OutboundTypeSystemOne:       func() model.Outbound { return axon.NewOutbound(8) },
+	OutboundTypeDecisions:       func() model.Outbound { return axon.NewOutbound(9) },
 }
 
 func Get(outboundType OutboundType) model.Outbound {

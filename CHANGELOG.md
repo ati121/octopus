@@ -1,5 +1,11 @@
 # 更新日志
 
+## v2.0.15 - 2026-10-18
+
+- 新增 OpenAI Decisions 协议：网关对外暴露 `POST /v1/decisions`，渠道类型新增 `Decisions`（持久化值 `9`），也可在「已选模型」里把单个模型单独设为 Decisions。请求与响应原样转发，仅改写路由后的模型名，`input`/`questions` 的供应商扩展字段保留。Decisions 请求只会发往 Decisions 类型渠道，其它协议请求也不会误发到 Decisions 渠道。该协议不支持流式，用量按上游 `input_tokens` 记录。
+- System One 改为完全使用 AxonHub 的原生请求/响应结构：删除本地 `SystemOnePayload` 原始报文投影与对应校验分支，探活也直接构造 `llm.SystemOneRequest`。`/v1/systemone` 路由、渠道类型和协议转换行为保持不变。
+- 清理接入 AxonHub 后遗留的本地协议转换死代码：删除 `internal/transformer/model` 下零调用的 `gemini.go`、`alternation.go`、`stream_event.go`、`stream_aggregator.go`、`unknown_fields.go`、`finishreason.go` 及其测试，移除 `Schema.ToGemini`／`ToAnthropicToolInputSchema`／`ErrSchemaLossy`、`EnforceMessageAlternation`，以及 `ProviderExtensions` 兼容镜像体系（`Get*Extensions`／`Set*Extensions`／`CloneProviderExtensions` 与 6 个镜像字段）。`model` 包由 7289 行降至 3397 行，并清理 13 个空目录。转发链路与行为不变。
+
 ## v2.0.14 - 2026-10-17
 
 - 修复渠道表单「刷新」只增不减的问题：现在直接用上游返回的模型列表替换自动同步模型，上游已下架的模型会一并移除，手动添加的自定义模型保持不变；刷新后保存渠道生效。

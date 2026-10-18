@@ -25,6 +25,7 @@ import (
 	"github.com/bestruirui/octopus/internal/utils/tokenizer"
 	"github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
+	"github.com/looplj/axonhub/llm"
 )
 
 func TestParseRequestReturnsBadRequestForInvalidPayload(t *testing.T) {
@@ -80,8 +81,17 @@ func TestChannelTypeCompatibilitySeparatesChatEmbeddingAndRerank(t *testing.T) {
 		RerankPayload: json.RawMessage(`{"query":"q","documents":["d"]}`),
 	}
 	systemOneRequest := &transformerModel.InternalLLMRequest{
-		Model:            "jev-latest",
-		SystemOnePayload: json.RawMessage(`{"state":"s","questions":{"q":{"type":"noul","instructions":"i"}}}`),
+		Model: "jev-latest",
+		Native: &llm.Request{
+			Model:       "jev-latest",
+			RequestType: llm.RequestTypeSystemOne,
+			APIFormat:   llm.APIFormatTypeSafeSystemOne,
+			SystemOne:   &llm.SystemOneRequest{State: "s"},
+		},
+	}
+	decisionsRequest := &transformerModel.InternalLLMRequest{
+		Model:            "gpt-6-luna",
+		DecisionsPayload: json.RawMessage(`{"input":"i","questions":[{"type":"choice"}]}`),
 	}
 
 	tests := []struct {
@@ -106,6 +116,12 @@ func TestChannelTypeCompatibilitySeparatesChatEmbeddingAndRerank(t *testing.T) {
 		{name: "system one to chat", request: systemOneRequest, channelType: outbound.OutboundTypeOpenAIChat},
 		{name: "system one to response", request: systemOneRequest, channelType: outbound.OutboundTypeOpenAIResponse},
 		{name: "system one to rerank", request: systemOneRequest, channelType: outbound.OutboundTypeRerank},
+		{name: "decisions to decisions", request: decisionsRequest, channelType: outbound.OutboundTypeDecisions, compatible: true},
+		{name: "decisions to chat", request: decisionsRequest, channelType: outbound.OutboundTypeOpenAIChat},
+		{name: "decisions to response", request: decisionsRequest, channelType: outbound.OutboundTypeOpenAIResponse},
+		{name: "decisions to system one", request: decisionsRequest, channelType: outbound.OutboundTypeSystemOne},
+		{name: "chat to decisions", request: chatRequest, channelType: outbound.OutboundTypeDecisions},
+		{name: "system one to decisions", request: systemOneRequest, channelType: outbound.OutboundTypeDecisions},
 	}
 
 	for _, tt := range tests {
@@ -128,10 +144,10 @@ func TestIsEmptyUpstreamResponseAcceptsRerankPayload(t *testing.T) {
 	}
 }
 
-func TestIsEmptyUpstreamResponseAcceptsSystemOnePayload(t *testing.T) {
-	response := &transformerModel.InternalLLMResponse{SystemOnePayload: json.RawMessage(`{"model":"jev-1.13.0","answers":{"q":{"type":"noul","noul":0.9}}}`)}
+func TestIsEmptyUpstreamResponseAcceptsSystemOneResponse(t *testing.T) {
+	response := &transformerModel.InternalLLMResponse{Native: &llm.Response{SystemOne: &llm.SystemOneResponse{}}}
 	if isEmptyUpstreamResponse(response) {
-		t.Fatal("expected system one payload to count as a non-empty upstream response")
+		t.Fatal("expected system one response to count as a non-empty upstream response")
 	}
 }
 
