@@ -859,7 +859,7 @@
             "modelNoSelected": "No models selected",
             "modelClearAll": "Clear All",
             "modelTypeFollow": "Follow channel type",
-            "modelTypeHint": "Click a model to set its own channel type, which takes priority over the channel type above",
+            "modelTypeHint": "Click a model to set its own channel type, which takes priority over the channel type above; models with their own type are outlined in that protocol's color",
             "typeOpenAIChat": "OpenAI Chat",
             "typeOpenAIResponse": "OpenAI Response",
             "typeOpenAIEmbedding": "OpenAI Embedding",

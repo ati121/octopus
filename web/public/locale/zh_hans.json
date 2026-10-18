@@ -859,7 +859,7 @@
             "modelNoSelected": "暂未选择模型",
             "modelClearAll": "清除全部",
             "modelTypeFollow": "跟随渠道类型",
-            "modelTypeHint": "点击模型可单独设置渠道类型，优先于上方的渠道类型",
+            "modelTypeHint": "点击模型可单独设置渠道类型，优先于上方的渠道类型；已单独设置的模型会用对应协议的彩色边框标出",
             "typeOpenAIChat": "OpenAI Chat",
             "typeOpenAIResponse": "OpenAI Response",
             "typeOpenAIEmbedding": "OpenAI Embedding",

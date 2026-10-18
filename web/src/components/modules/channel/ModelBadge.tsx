@@ -24,6 +24,63 @@ function channelTypeLabelKey(type: ChannelType) {
     return CHANNEL_TYPE_OPTIONS.find((option) => option.value === type)?.labelKey ?? 'typeOpenAIChat';
 }
 
+/**
+ * 模型单独设置渠道类型后的强调色：外圈边框、底色和协议短名使用同一色相，
+ * 便于模型较多时一眼分辨哪些模型覆盖了渠道类型、各自走什么协议。
+ */
+const CHANNEL_TYPE_ACCENTS: Record<ChannelType, { border: string; tint: string; text: string }> = {
+    [ChannelType.OpenAIChat]: {
+        border: 'border-sky-500/70',
+        tint: 'bg-sky-500/10',
+        text: 'text-sky-700 dark:text-sky-300',
+    },
+    [ChannelType.OpenAIResponse]: {
+        border: 'border-violet-500/70',
+        tint: 'bg-violet-500/10',
+        text: 'text-violet-700 dark:text-violet-300',
+    },
+    [ChannelType.Anthropic]: {
+        border: 'border-orange-500/70',
+        tint: 'bg-orange-500/10',
+        text: 'text-orange-700 dark:text-orange-300',
+    },
+    [ChannelType.Gemini]: {
+        border: 'border-indigo-500/70',
+        tint: 'bg-indigo-500/10',
+        text: 'text-indigo-700 dark:text-indigo-300',
+    },
+    [ChannelType.Volcengine]: {
+        border: 'border-rose-500/70',
+        tint: 'bg-rose-500/10',
+        text: 'text-rose-700 dark:text-rose-300',
+    },
+    [ChannelType.OpenAIEmbedding]: {
+        border: 'border-teal-500/70',
+        tint: 'bg-teal-500/10',
+        text: 'text-teal-700 dark:text-teal-300',
+    },
+    [ChannelType.Codex]: {
+        border: 'border-fuchsia-500/70',
+        tint: 'bg-fuchsia-500/10',
+        text: 'text-fuchsia-700 dark:text-fuchsia-300',
+    },
+    [ChannelType.Rerank]: {
+        border: 'border-lime-600/70',
+        tint: 'bg-lime-500/10',
+        text: 'text-lime-700 dark:text-lime-300',
+    },
+    [ChannelType.SystemOne]: {
+        border: 'border-amber-500/70',
+        tint: 'bg-amber-500/10',
+        text: 'text-amber-700 dark:text-amber-300',
+    },
+    [ChannelType.Decisions]: {
+        border: 'border-pink-500/70',
+        tint: 'bg-pink-500/10',
+        text: 'text-pink-700 dark:text-pink-300',
+    },
+};
+
 interface ModelBadgeProps {
     model: string;
     custom: boolean;
@@ -36,6 +93,7 @@ interface ModelBadgeProps {
 /**
  * 已选模型徽标：点击模型名可单独指定渠道类型，优先于渠道本身的类型；
  * 选「跟随渠道类型」则清除单独设置。
+ * 设置了单独类型的模型用该协议的强调色描边，未设置的保持中性的自动/自定义样式。
  */
 export function ModelBadge({ model, custom, channelType, modelType, onModelTypeChange, onRemove }: ModelBadgeProps) {
     const t = useTranslations('channel.form');
@@ -46,10 +104,19 @@ export function ModelBadge({ model, custom, channelType, modelType, onModelTypeC
         setOpen(false);
     };
 
+    const accent = modelType === undefined ? undefined : CHANNEL_TYPE_ACCENTS[modelType];
+
     return (
         <Badge
             variant={custom ? 'default' : 'secondary'}
-            className={custom ? 'bg-primary hover:bg-primary/90' : 'bg-muted hover:bg-muted/80'}
+            className={cn(
+                'gap-1',
+                custom ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted hover:bg-muted/80',
+                accent && 'border-2',
+                accent?.border,
+                accent && !custom && [accent.tint, accent.text],
+            )}
+            title={modelType === undefined ? undefined : t(channelTypeLabelKey(modelType))}
         >
             <Popover open={open} onOpenChange={setOpen}>
                 <PopoverTrigger asChild>
@@ -58,10 +125,12 @@ export function ModelBadge({ model, custom, channelType, modelType, onModelTypeC
                         className="inline-flex items-center gap-1 rounded-sm cursor-pointer hover:underline decoration-dotted underline-offset-2 focus:outline-none focus:ring-1 focus:ring-ring"
                     >
                         {model}
-                        {modelType !== undefined && (
+                        {modelType !== undefined && accent && (
                             <span
-                                className="rounded-full bg-background/70 px-1.5 text-[10px] leading-4 text-foreground"
-                                title={t(channelTypeLabelKey(modelType))}
+                                className={cn(
+                                    'rounded-full bg-background/85 px-1.5 text-[10px] leading-4 font-semibold',
+                                    accent.text,
+                                )}
                             >
                                 {CHANNEL_TYPE_SHORT_LABELS[modelType]}
                             </span>
