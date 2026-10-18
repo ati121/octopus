@@ -492,7 +492,7 @@ func runWSRelay(ctx context.Context, req *relayRequest, group *dbmodel.Group) ws
 			continue
 		}
 
-		outAdapter := outbound.Get(channel.Type)
+		outAdapter := outbound.GetWithEndpointPath(channel.Type, channel.EndpointPath)
 		if outAdapter == nil {
 			req.iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("unsupported channel type: %d", channel.Type))
 			continue

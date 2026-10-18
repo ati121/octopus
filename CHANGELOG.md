@@ -1,5 +1,12 @@
 # 更新日志
 
+## v2.0.16 - 2026-10-18
+
+- 渠道新增「出站路径」`endpoint_path`，把 AxonHub 已有的 `EndpointPath` 能力接到 Octopus。填写后出站请求改用该路径，留空沿用协议默认路径；覆盖对全部 10 种渠道类型生效，包括 System One、Decisions、Rerank 以及 OpenAI／Responses／Anthropic／Gemini／火山引擎／Codex。典型场景是上游把 System One 暴露在 `/decisions`：把渠道类型设为 System One 并填 `endpoint_path=/decisions` 即可打通，无需改上游。
+- 路径按 AxonHub 语义原样拼在渠道 Base URL 之后，填写后不再自动补 `/v1`。Base URL 已含 `/v1` 时只填 `/decisions`；Base URL 不含版本时填 `/v1/decisions`。表单与提示按此说明。
+- 新增路径校验：必须为空或以 `/` 开头的站内路径，拒绝 `//`、`://`、查询串与片段，避免拼出指向其它主机的 URL。创建和更新渠道都走同一校验，非法值返回 400。
+- 探活、图片转发、普通转发和 Responses WS 四条出站路径都使用同一份 `endpoint_path`，探活结果与真实转发保持一致。
+
 ## v2.0.15 - 2026-10-18
 
 - 新增 OpenAI Decisions 协议：网关对外暴露 `POST /v1/decisions`，渠道类型新增 `Decisions`（持久化值 `9`），也可在「已选模型」里把单个模型单独设为 Decisions。请求与响应原样转发，仅改写路由后的模型名，`input`/`questions` 的供应商扩展字段保留。Decisions 请求只会发往 Decisions 类型渠道，其它协议请求也不会误发到 Decisions 渠道。该协议不支持流式，用量按上游 `input_tokens` 记录。

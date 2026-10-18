@@ -116,12 +116,15 @@ type Channel struct {
 	CustomHeader    []CustomHeader        `json:"custom_header" gorm:"serializer:json"`
 	WSMode          ChannelWSMode         `json:"ws_mode" gorm:"type:varchar(16);not null;default:'inherit'"`
 	ParamOverride   *string               `json:"param_override"`
-	ChannelProxy    *string               `json:"-" gorm:"column:channel_proxy"`
-	Stats           *StatsChannel         `json:"stats,omitempty" gorm:"-"`
-	MatchRegex      *string               `json:"match_regex"`
-	RoundRobin      bool                  `json:"round_robin" gorm:"default:false"`
-	Managed         bool                  `json:"managed" gorm:"-"`
-	ManagedSource   *ManagedChannelSource `json:"managed_source,omitempty" gorm:"-"`
+	// EndpointPath 覆盖出站协议默认的请求路径，例如把 System One 的默认
+	// /systemone 改成上游实际暴露的 /decisions。留空时沿用协议默认路径。
+	EndpointPath  string                `json:"endpoint_path" gorm:"type:varchar(512);not null;default:''"`
+	ChannelProxy  *string               `json:"-" gorm:"column:channel_proxy"`
+	Stats         *StatsChannel         `json:"stats,omitempty" gorm:"-"`
+	MatchRegex    *string               `json:"match_regex"`
+	RoundRobin    bool                  `json:"round_robin" gorm:"default:false"`
+	Managed       bool                  `json:"managed" gorm:"-"`
+	ManagedSource *ManagedChannelSource `json:"managed_source,omitempty" gorm:"-"`
 }
 
 func (c *Channel) UnmarshalJSON(data []byte) error {
@@ -196,6 +199,7 @@ type ChannelUpdateRequest struct {
 	WSMode          *ChannelWSMode         `json:"ws_mode,omitempty"`
 	ChannelProxy    *string                `json:"-"`
 	ParamOverride   *string                `json:"param_override,omitempty"`
+	EndpointPath    *string                `json:"endpoint_path,omitempty"`
 	MatchRegex      *string                `json:"match_regex,omitempty"`
 	RoundRobin      *bool                  `json:"round_robin,omitempty"`
 
@@ -234,6 +238,29 @@ func (c *Channel) TypeForModel(modelName string) outbound.OutboundType {
 		return channelType
 	}
 	return c.Type
+}
+
+// NormalizeEndpointPath 校验并规范化渠道自定义出站路径。
+// 空串表示沿用协议默认路径；非空时必须是以 "/" 开头的站内绝对路径，
+// 避免拼出指向其他主机或带查询串的 URL。
+func NormalizeEndpointPath(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		return "", fmt.Errorf("endpoint path must start with /")
+	}
+	if strings.HasPrefix(trimmed, "//") {
+		return "", fmt.Errorf("endpoint path must not start with //")
+	}
+	if strings.ContainsAny(trimmed, "?#") {
+		return "", fmt.Errorf("endpoint path must not contain query or fragment")
+	}
+	if strings.Contains(trimmed, "://") {
+		return "", fmt.Errorf("endpoint path must not contain a scheme")
+	}
+	return trimmed, nil
 }
 
 func (c *Channel) GetBaseUrl() string {

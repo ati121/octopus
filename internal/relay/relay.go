@@ -194,7 +194,7 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 		}
 
 		// 出站适配器
-		outAdapter := outbound.Get(channel.Type)
+		outAdapter := outbound.GetWithEndpointPath(channel.Type, channel.EndpointPath)
 		if outAdapter == nil {
 			iter.Skip(channel.ID, 0, channel.Name, fmt.Sprintf("unsupported channel type: %d", channel.Type))
 			continue
@@ -253,7 +253,7 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 				}
 
 				// 重建 outAdapter 以重置流式状态（toolIndex, toolCalls 等）
-				outAdapter = outbound.Get(channel.Type)
+				outAdapter = outbound.GetWithEndpointPath(channel.Type, channel.EndpointPath)
 			}
 
 			attemptInAdapter := inbound.Get(inboundType)

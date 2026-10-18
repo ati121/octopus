@@ -35,6 +35,7 @@ export interface ChannelFormData {
     proxy_config_id: number | null;
     proxy_url: string;
     param_override: string;
+    endpoint_path: string;
     keys: ChannelKeyFormItem[];
     model: string;
     custom_model: string;
@@ -620,6 +621,21 @@ export function ChannelForm({
                                     </div>
                                 ))}
                             </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <label htmlFor={`${idPrefix}-endpoint-path`} className="text-sm font-medium text-card-foreground">
+                                {t('endpointPath')}
+                            </label>
+                            <Input
+                                id={`${idPrefix}-endpoint-path`}
+                                type="text"
+                                value={formData.endpoint_path}
+                                onChange={(e) => onFormDataChange({ ...formData, endpoint_path: e.target.value })}
+                                placeholder={t('endpointPathPlaceholder')}
+                                className="rounded-xl"
+                            />
+                            <p className="text-xs text-muted-foreground">{t('endpointPathHint')}</p>
                         </div>
 
                         <div className="space-y-2">

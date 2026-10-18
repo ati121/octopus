@@ -113,7 +113,7 @@ func buildProbeRequest(ctx context.Context, channel *model.Channel, usedKey *mod
 	// 模型单独设置的出站类型优先于渠道类型，探测请求需与真实转发走同一协议。
 	channelType := channel.TypeForModel(modelName)
 	request := buildProbeInternalRequest(channelType, modelName)
-	adapter := outbound.Get(channelType)
+	adapter := outbound.GetWithEndpointPath(channelType, channel.EndpointPath)
 	if adapter == nil {
 		return nil, fmt.Errorf("unsupported outbound type: %d", channelType)
 	}

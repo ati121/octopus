@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/bestruirui/octopus/internal/transformer/model"
+	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/tidwall/gjson"
 )
@@ -208,5 +209,59 @@ func TestDecisionsRequestSurvivesNativeRoundTrip(t *testing.T) {
 	}
 	if !bytes.Contains(rendered, []byte(`"choice":"billing"`)) {
 		t.Fatalf("expected upstream answers to be returned unchanged, got %s", rendered)
+	}
+}
+
+// endpoint_path 让渠道把协议默认路径换掉：EMRank 这类上游把 System One
+// 暴露在 /decisions，只能靠路径覆盖打通。
+//
+// AxonHub 在 EndpointPath 非空时不做 "/v1" 归一化，而是把路径原样拼在渠道
+// BaseURL 之后。因此 base 已含 /v1 时，endpoint_path 只需写 /decisions。
+func TestOutboundEndpointPathOverride(t *testing.T) {
+	ctx := t.Context()
+	systemOne := &model.InternalLLMRequest{
+		Model: "upstream",
+		Native: &llm.Request{
+			Model:       "upstream",
+			RequestType: llm.RequestTypeSystemOne,
+			APIFormat:   llm.APIFormatTypeSafeSystemOne,
+			SystemOne: &llm.SystemOneRequest{
+				State:     "ping",
+				Questions: map[string]llm.SystemOneQuestion{"probe": {Type: "noul", Instructions: "Is this a ping?"}},
+			},
+		},
+	}
+
+	cases := []struct {
+		name     string
+		kind     int
+		base     string
+		path     string
+		wantPath string
+	}{
+		{name: "systemone default", kind: 8, base: "https://emrank.tech/v1", wantPath: "/v1/systemone"},
+		{name: "systemone overridden", kind: 8, base: "https://emrank.tech/v1", path: "/decisions", wantPath: "/v1/decisions"},
+		{name: "decisions default", kind: 9, base: "https://emrank.tech/v1", wantPath: "/v1/decisions"},
+		{name: "decisions overridden", kind: 9, base: "https://emrank.tech/v1", path: "/systemone", wantPath: "/v1/systemone"},
+		{name: "systemone overridden without versioned base", kind: 8, base: "https://emrank.tech", path: "/v1/decisions", wantPath: "/v1/decisions"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := NewOutboundWithEndpointPath(tc.kind, tc.path)
+			view := systemOne
+			if tc.kind == 9 {
+				view = &model.InternalLLMRequest{
+					Model:            "upstream",
+					DecisionsPayload: []byte(`{"model":"upstream","input":"ping","questions":[{"type":"noul","name":"probe","instructions":"Is this a ping?"}]}`),
+				}
+			}
+			wire, err := out.TransformRequest(ctx, view, tc.base, "upstream-key")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if wire.URL.Path != tc.wantPath {
+				t.Fatalf("path %s, want %s", wire.URL.Path, tc.wantPath)
+			}
+		})
 	}
 }

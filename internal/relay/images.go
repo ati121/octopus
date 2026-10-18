@@ -453,7 +453,7 @@ func imagesAttempt(
 	channelKey string,
 	actualModel string,
 ) (statusCode int, written bool, usage *imagesUsage, upstreamCT string, err error) {
-	out := axon.NewOutbound(int(channel.Type))
+	out := axon.NewOutboundWithEndpointPath(int(channel.Type), channel.EndpointPath)
 	req, err := out.TransformRequest(ctx, &transformerModel.InternalLLMRequest{Native: native, Model: actualModel}, channel.GetBaseUrl(), channelKey)
 	if err != nil {
 		return 0, false, nil, "", err

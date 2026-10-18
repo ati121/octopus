@@ -51,6 +51,11 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 	if channel == nil {
 		return fmt.Errorf("channel is nil")
 	}
+	endpointPath, err := model.NormalizeEndpointPath(channel.EndpointPath)
+	if err != nil {
+		return err
+	}
+	channel.EndpointPath = endpointPath
 	if channel.ProxyMode == "" {
 		channel.ProxyMode = model.ProxyUsageModeDirect
 	}
@@ -339,6 +344,15 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	if req.ParamOverride != nil {
 		selectFields = append(selectFields, "param_override")
 		updates.ParamOverride = req.ParamOverride
+	}
+	if req.EndpointPath != nil {
+		endpointPath, err := model.NormalizeEndpointPath(*req.EndpointPath)
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		selectFields = append(selectFields, "endpoint_path")
+		updates.EndpointPath = endpointPath
 	}
 	if req.MatchRegex != nil {
 		selectFields = append(selectFields, "match_regex")

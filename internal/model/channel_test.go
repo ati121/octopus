@@ -154,3 +154,35 @@ func TestGetChannelKeyRoundRobinRespectsPreferredKeyID(t *testing.T) {
 	}
 	roundRobinKeyIndexes.Delete(44)
 }
+
+func TestNormalizeEndpointPath(t *testing.T) {
+	valid := map[string]string{
+		"":                  "",
+		"   ":               "",
+		"/decisions":        "/decisions",
+		"  /v1/systemone  ": "/v1/systemone",
+		"/custom/path":      "/custom/path",
+	}
+	for input, want := range valid {
+		got, err := NormalizeEndpointPath(input)
+		if err != nil {
+			t.Fatalf("NormalizeEndpointPath(%q) returned error: %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("NormalizeEndpointPath(%q) = %q, want %q", input, got, want)
+		}
+	}
+
+	invalid := []string{
+		"decisions",
+		"//evil.example/path",
+		"/decisions?x=1",
+		"/decisions#frag",
+		"https://evil.example/decisions",
+	}
+	for _, input := range invalid {
+		if _, err := NormalizeEndpointPath(input); err == nil {
+			t.Fatalf("expected %q to be rejected", input)
+		}
+	}
+}

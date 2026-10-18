@@ -101,6 +101,10 @@ func createChannel(c *gin.Context) {
 		respondChannelValidationFailed(c, err)
 		return
 	}
+	if _, err := model.NormalizeEndpointPath(channel.EndpointPath); err != nil {
+		respondChannelValidationFailed(c, err)
+		return
+	}
 	modelTypes, err := channel.ModelTypes.Normalize()
 	if err != nil {
 		respondChannelValidationFailed(c, err)
@@ -161,6 +165,12 @@ func updateChannel(c *gin.Context) {
 	if err := validateChannelMatchRegex(req.MatchRegex); err != nil {
 		respondChannelValidationFailed(c, err)
 		return
+	}
+	if req.EndpointPath != nil {
+		if _, err := model.NormalizeEndpointPath(*req.EndpointPath); err != nil {
+			respondChannelValidationFailed(c, err)
+			return
+		}
 	}
 	if req.ModelTypes != nil {
 		modelTypes, err := req.ModelTypes.Normalize()

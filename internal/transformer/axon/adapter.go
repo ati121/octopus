@@ -17,6 +17,7 @@ import (
 	"github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/looplj/axonhub/llm"
+	"github.com/looplj/axonhub/llm/auth"
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/looplj/axonhub/llm/oauth"
 	"github.com/looplj/axonhub/llm/transformer"
@@ -299,9 +300,19 @@ type Outbound struct {
 	Kind        int
 	Transformer transformer.Outbound
 	Request     *httpclient.Request
+	// EndpointPath overrides the protocol default path (for example /systemone
+	// becomes /decisions). Empty keeps the AxonHub default.
+	EndpointPath string
 }
 
 func NewOutbound(kind int) *Outbound { return &Outbound{Kind: kind} }
+
+// NewOutboundWithEndpointPath builds an outbound adapter that overrides the
+// protocol default path. AxonHub resolves BaseURL + EndpointPath verbatim, so a
+// non-empty path also disables its "/v1" normalization.
+func NewOutboundWithEndpointPath(kind int, endpointPath string) *Outbound {
+	return &Outbound{Kind: kind, EndpointPath: strings.TrimSpace(endpointPath)}
+}
 
 type staticToken string
 
@@ -309,27 +320,90 @@ func (s staticToken) Get(context.Context) (*oauth.OAuthCredentials, error) {
 	return &oauth.OAuthCredentials{AccessToken: string(s)}, nil
 }
 
+// configure builds the AxonHub outbound transformer. The legacy constructors are
+// kept for an empty path so existing channels behave exactly as before; a custom
+// path goes through the WithConfig entry points that expose EndpointPath.
 func (o *Outbound) configure(base, key string) error {
 	var err error
+	path := o.EndpointPath
+	if path == "" {
+		switch o.Kind {
+		case 0, 5:
+			o.Transformer, err = openai.NewOutboundTransformer(base, key)
+		case 1:
+			o.Transformer, err = responses.NewOutboundTransformer(base, key)
+		case 2:
+			o.Transformer, err = anthropic.NewOutboundTransformer(base, key)
+		case 3:
+			o.Transformer, err = gemini.NewOutboundTransformer(base, key)
+		case 4:
+			o.Transformer, err = doubao.NewOutboundTransformer(base, key)
+		case 6:
+			o.Transformer, err = codex.NewOutboundTransformer(codex.Params{BaseURL: base, TokenProvider: staticToken(key), Transport: "http"})
+		case 7:
+			o.Transformer, err = jina.NewOutboundTransformer(base, key)
+		case 8:
+			o.Transformer, err = typesafe.NewOutboundTransformer(base, key)
+		case 9:
+			o.Transformer, err = decisions.NewOutboundTransformer(base, key)
+		default:
+			err = fmt.Errorf("unknown outbound type %d", o.Kind)
+		}
+		return err
+	}
 	switch o.Kind {
 	case 0, 5:
-		o.Transformer, err = openai.NewOutboundTransformer(base, key)
+		o.Transformer, err = openai.NewOutboundTransformerWithConfig(&openai.Config{
+			PlatformType:   openai.PlatformOpenAI,
+			BaseURL:        base,
+			APIKeyProvider: auth.NewStaticKeyProvider(key),
+			EndpointPath:   path,
+		})
 	case 1:
-		o.Transformer, err = responses.NewOutboundTransformer(base, key)
+		o.Transformer, err = responses.NewOutboundTransformerWithConfig(&responses.Config{
+			BaseURL:        base,
+			APIKeyProvider: auth.NewStaticKeyProvider(key),
+			EndpointPath:   path,
+		})
 	case 2:
-		o.Transformer, err = anthropic.NewOutboundTransformer(base, key)
+		o.Transformer, err = anthropic.NewOutboundTransformerWithConfig(&anthropic.Config{
+			Type:           anthropic.PlatformDirect,
+			BaseURL:        base,
+			APIKeyProvider: auth.NewStaticKeyProvider(key),
+			EndpointPath:   path,
+		})
 	case 3:
-		o.Transformer, err = gemini.NewOutboundTransformer(base, key)
+		o.Transformer, err = gemini.NewOutboundTransformerWithConfig(gemini.Config{
+			BaseURL:        base,
+			APIKeyProvider: auth.NewStaticKeyProvider(key),
+			EndpointPath:   path,
+		})
 	case 4:
-		o.Transformer, err = doubao.NewOutboundTransformer(base, key)
+		o.Transformer, err = doubao.NewOutboundTransformerWithConfig(&doubao.Config{
+			BaseURL:        base,
+			APIKeyProvider: auth.NewStaticKeyProvider(key),
+			EndpointPath:   path,
+		})
 	case 6:
-		o.Transformer, err = codex.NewOutboundTransformer(codex.Params{BaseURL: base, TokenProvider: staticToken(key), Transport: "http"})
+		o.Transformer, err = codex.NewOutboundTransformer(codex.Params{BaseURL: base, TokenProvider: staticToken(key), Transport: "http", EndpointPath: path})
 	case 7:
-		o.Transformer, err = jina.NewOutboundTransformer(base, key)
+		o.Transformer, err = jina.NewOutboundTransformerWithConfig(&jina.Config{
+			BaseURL:        base,
+			APIKeyProvider: auth.NewStaticKeyProvider(key),
+			EndpointPath:   path,
+		})
 	case 8:
-		o.Transformer, err = typesafe.NewOutboundTransformer(base, key)
+		o.Transformer, err = typesafe.NewOutboundTransformerWithConfig(&typesafe.Config{
+			BaseURL:        base,
+			APIKeyProvider: auth.NewStaticKeyProvider(key),
+			EndpointPath:   path,
+		})
 	case 9:
-		o.Transformer, err = decisions.NewOutboundTransformer(base, key)
+		o.Transformer, err = decisions.NewOutboundTransformerWithConfig(&decisions.Config{
+			BaseURL:        base,
+			APIKeyProvider: auth.NewStaticKeyProvider(key),
+			EndpointPath:   path,
+		})
 	default:
 		err = fmt.Errorf("unknown outbound type %d", o.Kind)
 	}

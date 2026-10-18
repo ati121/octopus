@@ -130,3 +130,12 @@ func Get(outboundType OutboundType) model.Outbound {
 	}
 	return nil
 }
+
+// GetWithEndpointPath 返回带自定义出站路径的适配器。endpointPath 为空时行为与 Get 一致，
+// 调用方可以无条件传入渠道配置，无需自己判空。
+func GetWithEndpointPath(outboundType OutboundType, endpointPath string) model.Outbound {
+	if _, ok := outboundFactories[outboundType]; !ok {
+		return nil
+	}
+	return axon.NewOutboundWithEndpointPath(int(outboundType), endpointPath)
+}
