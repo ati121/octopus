@@ -36,10 +36,9 @@ export function formatDurationPair(firstTokenMs: number | null, useTimeMs: numbe
     return `${firstToken} / ${total}`;
 }
 
-// 日志页按 Magpie TTFT 口径把首内容固定显示为「首字」；缺少该字段的旧日志回退到 ftut。
-// 首响尚未到达时先显示前段实时计时，首响到达后再开始显示后段总耗时。
-export function durationPairText(firstResponseMs: number, ftutMs: number, liveMs: number | null, useTimeMs: number): string {
-    const firstTokenMs = firstResponseMs > 0 ? firstResponseMs : ftutMs > 0 ? ftutMs : null;
+// 首字写出前显示等待时间，写出后固定首字时间并继续推进总耗时。
+export function durationPairText(ftutMs: number, liveMs: number | null, useTimeMs: number): string {
+    const firstTokenMs = ftutMs > 0 ? ftutMs : null;
     if (liveMs != null) {
         if (firstTokenMs == null) {
             return formatDurationPair(liveMs, null);

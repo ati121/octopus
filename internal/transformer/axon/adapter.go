@@ -475,6 +475,14 @@ func (o *Outbound) WireRequest(ctx context.Context, view *model.InternalLLMReque
 	if err != nil {
 		return nil, err
 	}
+	// Chat-compatible streams only report final usage when explicitly requested.
+	if (o.Kind == 0 || o.Kind == 4) && r.Stream != nil && *r.Stream &&
+		(r.RequestType == llm.RequestTypeChat || r.RequestType == "") {
+		if r.StreamOptions == nil {
+			r.StreamOptions = &llm.StreamOptions{}
+		}
+		r.StreamOptions.IncludeUsage = true
+	}
 	o.Request, err = o.Transformer.TransformRequest(ctx, r)
 	if err != nil {
 		return nil, err

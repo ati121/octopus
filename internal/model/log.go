@@ -62,12 +62,12 @@ type RelayLog struct {
 	Protocol             string              `json:"protocol,omitempty" gorm:"-"`              // 出站协议（Chat/Response/Anthropic 等）
 	ActualModelName      string              `json:"actual_model_name"`                        // 实际使用模型名称
 	InputTokens          int                 `json:"input_tokens"`                             // 输入Token
-	TransportInputTokens *int                `json:"transport_input_tokens,omitempty"`         // 实际发送到上游请求体的 Token 估算
+	TransportInputTokens *int                `json:"transport_input_tokens,omitempty"`         // 旧日志兼容字段，新请求不再估算
 	BillInputTokens      *int                `json:"bill_input_tokens,omitempty"`              // 按常规输入价格计费的 Token
 	CacheReadTokens      *int                `json:"cache_read_tokens,omitempty"`              // 从缓存读取的 Token
 	CacheWriteTokens     *int                `json:"cache_write_tokens,omitempty"`             // 写入缓存的 Token
 	OutputTokens         int                 `json:"output_tokens"`                            // 输出 Token
-	FirstResponseTime    int                 `json:"first_response_time"`                      // 首内容时间(毫秒)，按 Magpie TTFT 口径
+	FirstResponseTime    int                 `json:"first_response_time"`                      // 旧日志兼容字段，新请求不再采集首响
 	Ftut                 int                 `json:"ftut"`                                     // 首个有效输出时间(毫秒)
 	UseTime              int                 `json:"use_time"`                                 // 总用时(毫秒)
 	RequestContent       string              `json:"request_content"`                          // 请求内容

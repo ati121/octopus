@@ -72,24 +72,24 @@ test('分页接缝保留完整 Unicode 与全部文本，包含末页', () => {
     assert.match(pages.at(-1), /END$/);
 });
 
-test('首响前先显示前段，首响后再刷新总耗时', () => {
-    assert.equal(durationPairText(0, 0, 1000, 0), '1.00s / --');
-    assert.equal(durationPairText(1000, 4000, 1000, 0), '1.00s / 1.00s');
-    assert.equal(durationPairText(1000, 4000, 4000, 0), '1.00s / 4.00s');
+test('首字前显示等待时间，首字后固定首字并刷新总耗时', () => {
+    assert.equal(durationPairText(0, 1000, 0), '1.00s / --');
+    assert.equal(durationPairText(1000, 1000, 0), '1.00s / 1.00s');
+    assert.equal(durationPairText(1000, 4000, 0), '1.00s / 4.00s');
 });
 
-test('结束后使用首响回退值和服务端总耗时', () => {
-    assert.equal(durationPairText(3606, 7304, null, 8829), '3.61s / 8.83s');
-    assert.equal(durationPairText(0, 7304, null, 8829), '7.30s / 8.83s');
+test('结束后只显示实际首字和服务端总耗时', () => {
+    assert.equal(durationPairText(7304, null, 8829), '7.30s / 8.83s');
+    assert.equal(durationPairText(0, null, 8829), '-- / 8.83s');
 });
 
-test('主机时钟差不影响首段计时，首响进度到达后总耗时继续推进', () => {
+test('主机时钟差不影响首段计时，首字进度到达后总耗时继续推进', () => {
     const started = observeLogTiming({ time: 100, start_time_ms: 100900, elapsed_ms: 100, processing: true }, 2000, 500000);
     assert.equal(liveLogElapsedMs(started, 2500), 600);
-    assert.equal(durationPairText(0, 0, liveLogElapsedMs(started, 2500), 0), '600ms / --');
+    assert.equal(durationPairText(0, liveLogElapsedMs(started, 2500), 0), '600ms / --');
     const progress = observeLogTiming({ ...started, elapsed_ms: 2100 }, 4000, 502000);
-    assert.equal(durationPairText(2000, 0, liveLogElapsedMs(progress, 4500), 0), '2.00s / 2.60s');
-    assert.equal(durationPairText(2000, 0, liveLogElapsedMs(progress, 5000), 0), '2.00s / 3.10s');
+    assert.equal(durationPairText(2000, liveLogElapsedMs(progress, 4500), 0), '2.00s / 2.60s');
+    assert.equal(durationPairText(2000, liveLogElapsedMs(progress, 5000), 0), '2.00s / 3.10s');
     assert.equal(liveLogElapsedMs({ ...progress, processing: false }, 5000), null);
 });
 

@@ -23,7 +23,6 @@ import (
 	"github.com/bestruirui/octopus/internal/transformer/inbound"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
-	"github.com/bestruirui/octopus/internal/utils/tokenizer"
 	"github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
@@ -1301,6 +1300,18 @@ func TestHandlerFirstTokenTimeoutStopsAfterFirstStreamChunk(t *testing.T) {
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
+		var request struct {
+			StreamOptions struct {
+				IncludeUsage bool `json:"include_usage"`
+			} `json:"stream_options"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode upstream request: %v", err)
+		}
+		if !request.StreamOptions.IncludeUsage {
+			t.Error("upstream stream did not request usage")
+		}
+		time.Sleep(20 * time.Millisecond)
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher, _ := w.(http.Flusher)
 		_, _ = w.Write([]byte(`data: {"id":"stream","object":"chat.completion.chunk","created":1,"model":"stream-model","choices":[{"index":0,"delta":{"role":"assistant","content":"first"}}]}
@@ -1311,6 +1322,8 @@ func TestHandlerFirstTokenTimeoutStopsAfterFirstStreamChunk(t *testing.T) {
 		}
 		time.Sleep(1200 * time.Millisecond)
 		_, _ = w.Write([]byte(`data: {"id":"stream","object":"chat.completion.chunk","created":1,"model":"stream-model","choices":[{"index":0,"delta":{"content":" second"}}]}
+
+data: {"id":"stream","object":"chat.completion.chunk","created":1,"model":"stream-model","choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":30,"total_tokens":1230,"prompt_tokens_details":{"cached_tokens":900}}}
 
 data: [DONE]
 
@@ -1353,6 +1366,49 @@ data: [DONE]
 	body := recorder.Body.String()
 	if !strings.Contains(body, `"content":"first"`) || !strings.Contains(body, `"content":" second"`) {
 		t.Fatalf("expected stream to continue after first chunk, got %s", body)
+	}
+	logs, err := op.RelayLogList(ctx, nil, nil, nil, 1, 1)
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("expected one completed log, got %v, err=%v", logs, err)
+	}
+	entry := logs[0]
+	if entry.RequestModelName != group.Name {
+		t.Fatalf("expected current request log, got %q", entry.RequestModelName)
+	}
+	if entry.InputTokens != 1200 || entry.OutputTokens != 30 || entry.CacheReadTokens == nil || *entry.CacheReadTokens != 900 || entry.BillInputTokens == nil || *entry.BillInputTokens != 300 {
+		t.Fatalf("upstream usage and cache breakdown not preserved: %+v", entry)
+	}
+	if entry.TransportInputTokens != nil || entry.FirstResponseTime != 0 {
+		t.Fatalf("unexpected local estimate or first-response timing: %+v", entry)
+	}
+	if entry.Ftut <= 0 || entry.UseTime < entry.Ftut+1000 {
+		t.Fatalf("first token and total duration not preserved: %+v", entry)
+	}
+}
+
+func TestRelayWithoutParamOverridesDoesNotReadRequestBody(t *testing.T) {
+	ctx := setupRelayTestDB(t)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://gateway.example/v1/chat/completions", strings.NewReader(`{"messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := request.Body
+	request.GetBody = func() (io.ReadCloser, error) {
+		t.Error("request body must not be reread for local token estimation")
+		return nil, errors.New("unexpected request body read")
+	}
+	attempt := &relayAttempt{
+		relayRequest: &relayRequest{
+			ctx:             ctx,
+			internalRequest: &transformerModel.InternalLLMRequest{Model: "no-override-model"},
+		},
+		channel: &model.Channel{},
+	}
+	if err := attempt.applyParamOverride(request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Body != body {
+		t.Fatal("request body changed without overrides")
 	}
 }
 
@@ -1441,8 +1497,6 @@ func TestRelayMetricsKeepsResponseModelAndTokenUsage(t *testing.T) {
 
 func TestRelayMetricsCapturesOpenAICompatibleInputBreakdown(t *testing.T) {
 	metrics := NewRelayMetrics(0, "alias-model", nil, &transformerModel.InternalLLMRequest{Model: "alias-model"})
-	payload := []byte(`{"model":"gpt-4o-mini","input":"hello world"}`)
-	metrics.SetTransportRequestPayload(payload, "gpt-4o-mini")
 	metrics.SetInternalResponse(&transformerModel.InternalLLMResponse{
 		Model: "gpt-4o-mini",
 		Usage: &transformerModel.Usage{
@@ -1454,9 +1508,6 @@ func TestRelayMetricsCapturesOpenAICompatibleInputBreakdown(t *testing.T) {
 		},
 	}, "gpt-4o-mini")
 
-	if metrics.TransportInputTokens == nil || *metrics.TransportInputTokens != tokenizer.CountTokens(string(payload), "gpt-4o-mini") {
-		t.Fatalf("expected transport input tokens to be estimated from payload, got %#v", metrics.TransportInputTokens)
-	}
 	if metrics.BillInputTokens == nil || *metrics.BillInputTokens != 300 {
 		t.Fatalf("expected billed input tokens to exclude cache read tokens, got %#v", metrics.BillInputTokens)
 	}

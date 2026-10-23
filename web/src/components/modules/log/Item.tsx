@@ -54,7 +54,7 @@ function formatDuration(ms: number): string {
 }
 
 // useLiveProcessingMs 在请求进行中每 500ms 刷新一次；进入处理中后异步立即校准一次，避免首帧显示停住。
-// 用服务端已耗时加本地单调时钟推进，避免主机时钟差和首响事件重置计时。
+// 用服务端已耗时加本地单调时钟推进，避免主机时钟差和进度事件重置计时。
 function useLiveProcessingMs(log: RelayLog): number | null {
     const [now, setNow] = useState(() => performance.now());
     const processing = log.processing;
@@ -699,7 +699,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                         className="whitespace-nowrap"
                                         title={`${t('duration')}: ${t('firstToken')} / ${t('totalTime')}`}
                                     >
-                                        {durationPairText(log.first_response_time, log.ftut, liveElapsedMs, log.use_time)}
+                                        {durationPairText(log.ftut, liveElapsedMs, log.use_time)}
                                     </span>
                                 </div>
                                 <div className="flex min-w-0 items-center gap-1.5">
@@ -1010,7 +1010,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                             <div className="flex items-center gap-1.5">
                                 <Zap className={cn('size-3.5 text-amber-500', displayLog.processing && 'animate-pulse')} />
                                 <span>
-                                    {t('duration')}: {durationPairText(displayLog.first_response_time, displayLog.ftut, liveElapsedMs, displayLog.use_time)}
+                                    {t('duration')}: {durationPairText(displayLog.ftut, liveElapsedMs, displayLog.use_time)}
                                 </span>
                             </div>
                         </div>

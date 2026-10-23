@@ -207,7 +207,6 @@ func forwardResponsesCompact(c *gin.Context, metrics *RelayMetrics, iter *balanc
 		span.End(dbmodel.AttemptFailed, 0, err.Error())
 		return 0, 0, fmt.Errorf("failed to create compact request: %w", err)
 	}
-	metrics.SetTransportRequestPayload(requestBody, iter.Item().ModelName)
 	copyProxyHeaders(c.Request.Header, channel, request.Header)
 
 	response, err := sendCompactRequest(channel, request)

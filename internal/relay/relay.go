@@ -749,9 +749,6 @@ func (ra *relayAttempt) handleAxonWebSocketStream(ctx context.Context, events st
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
 		TerminalEvents:    inboundStreamTerminalEvents(ra.inAdapter),
-		OnFirstResponse: func() {
-			ra.metrics.SetFirstResponseTime(time.Now())
-		},
 		OnFirstToken: func() {
 			ra.metrics.SetFirstTokenTime(time.Now())
 			ra.stopFirstTokenTimer()
@@ -973,7 +970,6 @@ func (ra *relayAttempt) applyParamOverrideToWire(wire *httpclient.Request) error
 		return err
 	}
 	wire.Body = body
-	ra.metrics.SetTransportRequestPayload(body, ra.internalRequest.Model)
 	return nil
 }
 
@@ -1008,19 +1004,13 @@ func wsProxyConfig(channel *dbmodel.Channel) *httpclient.ProxyConfig {
 }
 
 // applyParamOverride 按「全局 → 模型规则 → 渠道覆盖」的顺序深合并 JSON 请求体覆盖，
-// 并记录最终上游载荷。匹配用解析后的上游模型名，全部为空时不触碰请求体。
+// 匹配用解析后的上游模型名，全部为空时不触碰请求体。
 func (ra *relayAttempt) applyParamOverride(outboundRequest *http.Request) error {
 	overrides := op.UpstreamParamOverrideChain(ra.internalRequest.Model)
 	if ra.channel.ParamOverride != nil {
 		overrides = append(overrides, []byte(*ra.channel.ParamOverride))
 	}
-	if err := helper.ApplyParamOverrides(outboundRequest, overrides...); err != nil {
-		return err
-	}
-	if requestBody, readErr := readOutboundRequestBody(outboundRequest); readErr == nil {
-		ra.metrics.SetTransportRequestPayload(requestBody, ra.internalRequest.Model)
-	}
-	return nil
+	return helper.ApplyParamOverrides(outboundRequest, overrides...)
 }
 
 // copyHeaders 复制请求头，过滤 hop-by-hop 头
@@ -1161,9 +1151,6 @@ func (ra *relayAttempt) handleStreamResponseV2(ctx context.Context, response *ht
 		FirstTokenTimeout: firstTokenTimeout,
 		HeartbeatInterval: streamHeartbeatInterval(),
 		TerminalEvents:    inboundStreamTerminalEvents(ra.inAdapter),
-		OnFirstResponse: func() {
-			ra.metrics.SetFirstResponseTime(time.Now())
-		},
 		OnFirstToken: func() {
 			ra.metrics.SetFirstTokenTime(time.Now())
 			ra.stopFirstTokenTimer()

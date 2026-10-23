@@ -22,15 +22,21 @@ func TestRelayMetricsTimingSnapshotsKeepPreciseStart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if entry.StartTimeMs != m.StartTime.UnixMilli() || entry.ElapsedMs < 2500 || entry.FirstResponseTime != wantFirst {
+		if entry.StartTimeMs != m.StartTime.UnixMilli() || entry.ElapsedMs < 2500 || entry.Ftut != wantFirst || entry.FirstResponseTime != 0 {
 			t.Fatalf("unexpected timing snapshot: %+v", entry)
 		}
 	}
 	assertSnapshot(0)
-	m.SetFirstResponseTime(m.StartTime.Add(2 * time.Second))
-	assertSnapshot(2000)
 	m.SetFirstTokenTime(m.StartTime.Add(2100 * time.Millisecond))
-	assertSnapshot(2000)
+	assertSnapshot(2100)
+	m.SaveWithChannelStats(ctx, true, nil, nil, false)
+	entry, err := op.RelayLogGet(ctx, m.LogID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Ftut != 2100 || entry.UseTime < 2500 || entry.FirstResponseTime != 0 {
+		t.Fatalf("unexpected final timing: %+v", entry)
+	}
 }
 
 // StartLog 把记录挂进 op 的在途表后，只有终态更新会摘掉它。这里固化两条曾经漏掉

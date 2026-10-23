@@ -24,6 +24,49 @@ const responsesAnswer = `{"id":"resp-1","object":"response","model":"upstream","
 const anthropicAnswer = `{"id":"msg-1","type":"message","model":"upstream","role":"assistant","content":[{"type":"text","text":"answer"}],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":3}}`
 const geminiAnswer = `{"modelVersion":"upstream","candidates":[{"content":{"role":"model","parts":[{"text":"answer"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":3,"totalTokenCount":15}}`
 
+func TestChatStreamsRequestUsageWithoutChangingClientOptions(t *testing.T) {
+	for _, input := range []struct {
+		name string
+		kind int
+		body string
+	}{
+		{"chat default", 0, `{"model":"group","messages":[{"role":"user","content":"hello"}],"stream":true}`},
+		{"chat disabled", 0, `{"model":"group","messages":[{"role":"user","content":"hello"}],"stream":true,"stream_options":{"include_usage":false}}`},
+		{"responses", 1, `{"model":"group","input":"hello","stream":true}`},
+		{"anthropic", 2, `{"model":"group","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":true}`},
+	} {
+		for _, kind := range []int{0, 4} {
+			t.Run(fmt.Sprintf("%s_to_%d", input.name, kind), func(t *testing.T) {
+				request, err := NewInbound(input.kind).TransformRequest(t.Context(), []byte(input.body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				wire, err := NewOutbound(kind).WireRequest(t.Context(), request, "https://gateway.example", "key")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !gjson.GetBytes(wire.Body, "stream_options.include_usage").Bool() {
+					t.Fatalf("upstream stream must request usage: %s", wire.Body)
+				}
+				if request.Native.StreamOptions != nil && request.Native.StreamOptions.IncludeUsage {
+					t.Fatal("upstream usage option leaked into the client request")
+				}
+			})
+		}
+	}
+	request, err := NewInbound(0).TransformRequest(t.Context(), []byte(`{"model":"group","messages":[{"role":"user","content":"hello"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := NewOutbound(0).WireRequest(t.Context(), request, "https://gateway.example", "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gjson.GetBytes(wire.Body, "stream_options").Exists() {
+		t.Fatalf("non-streaming request must not gain stream options: %s", wire.Body)
+	}
+}
+
 func TestConversationProtocolMatrix(t *testing.T) {
 	inputs := []string{`{"model":"group","messages":[{"role":"user","content":"hello"}]}`, `{"model":"group","input":"hello"}`, `{"model":"group","max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`}
 	outputs := []struct {

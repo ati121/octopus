@@ -65,12 +65,12 @@ export interface RelayLog extends LogTiming {
     protocol?: string;            // 出站协议（Chat/Response/Anthropic 等）
     actual_model_name: string;   // 实际使用模型名称
     input_tokens: number;        // 输入Token
-    transport_input_tokens?: number | null; // 实际发送到上游请求体的 Token 估算
+    transport_input_tokens?: number | null; // 旧日志兼容字段，新请求不再估算
     bill_input_tokens?: number | null; // 按常规输入价格计费的 Token
     cache_read_tokens?: number | null; // 从缓存读取的 Token
     cache_write_tokens?: number | null; // 写入缓存的 Token
     output_tokens: number;       // 输出Token
-    first_response_time: number; // 首内容时间(毫秒，Magpie TTFT)
+    first_response_time: number; // 旧日志兼容字段，新请求不再采集首响
     ftut: number;                // 首个有效输出时间(毫秒)
     use_time: number;            // 总用时(毫秒)
     request_content: string;     // 请求内容

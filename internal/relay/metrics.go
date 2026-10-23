@@ -11,7 +11,6 @@ import (
 	"github.com/bestruirui/octopus/internal/op"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/utils/log"
-	"github.com/bestruirui/octopus/internal/utils/tokenizer"
 )
 
 // RelayMetrics 负责最终的统计收集与进程内日志更新。
@@ -25,9 +24,8 @@ type RelayMetrics struct {
 	// 只有 SaveWithChannelStats 会把它摘掉，因此需要这个标记给兜底清理判重。
 	logSaved bool
 
-	// 首响和首字时间。首响按 Magpie TTFT 记录首个有内容事件，首字记录首个有效输出。
-	FirstResponseTime time.Time
-	FirstTokenTime    time.Time
+	// 首字记录首个有效输出实际写出客户端的时间。
+	FirstTokenTime time.Time
 
 	// 请求和响应内容
 	RawRequest       []byte
@@ -42,10 +40,9 @@ type RelayMetrics struct {
 	WSExecMode  *model.RelayLogWSExecMode
 	WSRecovery  *model.RelayLogWSRecovery
 
-	TransportInputTokens *int
-	BillInputTokens      *int
-	CacheReadTokens      *int
-	CacheWriteTokens     *int
+	BillInputTokens  *int
+	CacheReadTokens  *int
+	CacheWriteTokens *int
 }
 
 func (m *RelayMetrics) StartLog() {
@@ -75,16 +72,9 @@ func (m *RelayMetrics) SetFirstTokenTime(t time.Time) {
 	m.publishProgress()
 }
 
-func (m *RelayMetrics) SetFirstResponseTime(t time.Time) {
-	if m.FirstResponseTime.IsZero() {
-		m.FirstResponseTime = t
-		m.publishProgress()
-	}
-}
-
-// publishProgress 在首响或首字到达时向实时日志推送中间进度。
+// publishProgress 在首字写出后向实时日志推送中间进度。
 func (m *RelayMetrics) publishProgress() {
-	if m.LogID == 0 || (m.FirstResponseTime.IsZero() && m.FirstTokenTime.IsZero()) {
+	if m.LogID == 0 || m.FirstTokenTime.IsZero() {
 		return
 	}
 	actualModel := m.ActualModel
@@ -98,17 +88,11 @@ func (m *RelayMetrics) publishProgress() {
 		RequestModelName: m.RequestModel,
 		ActualModelName:  actualModel,
 	}
-	if !m.FirstResponseTime.IsZero() {
-		progress.FirstResponseTime = int(m.FirstResponseTime.Sub(m.StartTime).Milliseconds())
-	}
-	if !m.FirstTokenTime.IsZero() {
-		progress.Ftut = int(m.FirstTokenTime.Sub(m.StartTime).Milliseconds())
-	}
+	progress.Ftut = int(m.FirstTokenTime.Sub(m.StartTime).Milliseconds())
 	op.RelayLogProgress(progress)
 }
 
 func (m *RelayMetrics) ResetAttemptResponse() {
-	m.FirstResponseTime = time.Time{}
 	m.FirstTokenTime = time.Time{}
 	m.InternalResponse = nil
 	m.ActualModel = ""
@@ -119,14 +103,6 @@ func (m *RelayMetrics) ResetAttemptResponse() {
 	m.BillInputTokens = nil
 	m.CacheReadTokens = nil
 	m.CacheWriteTokens = nil
-}
-
-func (m *RelayMetrics) SetTransportRequestPayload(payload []byte, modelName string) {
-	if len(payload) == 0 {
-		return
-	}
-	count := tokenizer.CountTokens(string(payload), modelName)
-	m.TransportInputTokens = intPtr(count)
 }
 
 func (m *RelayMetrics) SetWSMode(mode model.RelayLogWSMode) {
@@ -158,7 +134,6 @@ func (m *RelayMetrics) SetInternalResponse(resp *transformerModel.InternalLLMRes
 		return
 	}
 
-	inputReported := false
 	if usage := resp.Usage; usage != nil {
 		nonCachedInput := usage.BillableNonCachedInput()
 		cacheReadTokens := usage.BillableCacheReadInput()
@@ -173,17 +148,6 @@ func (m *RelayMetrics) SetInternalResponse(resp *transformerModel.InternalLLMRes
 		m.Stats.OutputToken = usage.CompletionTokens
 		m.Stats.CacheReadToken = cacheReadTokens
 		m.Stats.CacheWriteToken = cacheWriteTokens
-		inputReported = usage.EffectiveInputTokens() > 0
-
-	}
-
-	// 降级：上游未上报 input（usage 缺失，或 usage 中输入侧全为 0）时，用请求侧
-	// 估算的 TransportInputTokens 兜底，使 input token 不为 0；output 无法从
-	// 请求侧估算，保持 0。tiktoken 统一用 o200k_base，对 Claude/Gemini 为近似值。
-	if !inputReported && m.TransportInputTokens != nil && *m.TransportInputTokens > 0 {
-		estimated := int64(*m.TransportInputTokens)
-		m.Stats.InputToken = estimated
-		m.BillInputTokens = intPtr(int(estimated))
 	}
 }
 
@@ -242,20 +206,15 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 	}
 	op.StatsSiteModelHourlyRecordAttempts(attempts, m.ActualModel)
 
-	// 上游未上报 usage（或输入侧全为 0）时打告警，便于定位是哪个通道缺失 usage。
+	// 缺少输入用量时只记录诊断信息，不对请求正文做本地分词估算。
 	if success && (m.InternalResponse == nil || m.InternalResponse.Usage == nil ||
 		m.InternalResponse.Usage.EffectiveInputTokens() == 0) {
-		fallbackInput := 0
-		if m.TransportInputTokens != nil {
-			fallbackInput = *m.TransportInputTokens
-		}
 		log.Debugw("relay.usage_missing",
 			"actual_model", m.ActualModel,
 			"channel_id", logChannelID,
 			"channel", logChannelName,
 			"protocol", protocol,
 			"had_usage", m.InternalResponse != nil && m.InternalResponse.Usage != nil,
-			"fallback_input_tokens", fallbackInput,
 		)
 	}
 
@@ -382,10 +341,7 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 		relayLog.RequestAPIKeyName = apiKey.Name
 	}
 
-	// 首响和首字时间
-	if !m.FirstResponseTime.IsZero() {
-		relayLog.FirstResponseTime = int(m.FirstResponseTime.Sub(m.StartTime).Milliseconds())
-	}
+	// 首字时间
 	if !m.FirstTokenTime.IsZero() {
 		relayLog.Ftut = int(m.FirstTokenTime.Sub(m.StartTime).Milliseconds())
 	}
@@ -398,7 +354,6 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 		relayLog.InputTokens = int(m.InternalResponse.Usage.PromptTokens)
 	}
 	relayLog.OutputTokens = int(m.Stats.OutputToken)
-	relayLog.TransportInputTokens = m.TransportInputTokens
 	relayLog.BillInputTokens = m.BillInputTokens
 	relayLog.CacheReadTokens = m.CacheReadTokens
 	relayLog.CacheWriteTokens = m.CacheWriteTokens

@@ -6,31 +6,34 @@ import (
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 )
 
-// usage 完全缺失时，应使用 TransportInputTokens 兜底填充 input，output 保持 0。
-func TestSetInternalResponseFallbackWhenUsageMissing(t *testing.T) {
-	m := &RelayMetrics{TransportInputTokens: intPtr(123)}
+// 缺失 usage 时保留未知用量，不把媒体编码或 JSON 当作模型输入估算。
+func TestSetInternalResponseLeavesMissingUsageUnknown(t *testing.T) {
+	m := NewRelayMetrics(0, "test-model", []byte(`{"messages":[{"role":"user","content":"hello"}]}`), nil)
 	m.SetInternalResponse(&transformerModel.InternalLLMResponse{}, "test-model")
 
-	if m.Stats.InputToken != 123 {
-		t.Fatalf("input token: got %d want 123 (fallback)", m.Stats.InputToken)
+	if m.Stats.InputToken != 0 {
+		t.Fatalf("input token: got %d want 0", m.Stats.InputToken)
 	}
-	if m.BillInputTokens == nil || *m.BillInputTokens != 123 {
-		t.Fatalf("bill input tokens: got %v want 123", m.BillInputTokens)
+	if m.BillInputTokens != nil || m.CacheReadTokens != nil || m.CacheWriteTokens != nil {
+		t.Fatal("missing usage must not produce a token breakdown")
 	}
 	if m.Stats.OutputToken != 0 {
 		t.Fatalf("output token: got %d want 0", m.Stats.OutputToken)
 	}
 }
 
-// usage 存在但输入侧全为 0（仅上报 output）时，input 兜底、output 保留。
-func TestSetInternalResponseFallbackWhenInputZero(t *testing.T) {
-	m := &RelayMetrics{TransportInputTokens: intPtr(50)}
+// 上游只上报 output 时，输入保持 0，输出照常记录。
+func TestSetInternalResponsePreservesOutputOnlyUsage(t *testing.T) {
+	m := &RelayMetrics{}
 	m.SetInternalResponse(&transformerModel.InternalLLMResponse{
 		Usage: &transformerModel.Usage{PromptTokens: 0, CompletionTokens: 30},
 	}, "test-model")
 
-	if m.Stats.InputToken != 50 {
-		t.Fatalf("input token: got %d want 50 (fallback)", m.Stats.InputToken)
+	if m.Stats.InputToken != 0 {
+		t.Fatalf("input token: got %d want 0", m.Stats.InputToken)
+	}
+	if m.BillInputTokens == nil || *m.BillInputTokens != 0 {
+		t.Fatalf("bill input tokens: got %v want reported zero", m.BillInputTokens)
 	}
 	if m.Stats.OutputToken != 30 {
 		t.Fatalf("output token: got %d want 30 (preserved)", m.Stats.OutputToken)
@@ -39,7 +42,7 @@ func TestSetInternalResponseFallbackWhenInputZero(t *testing.T) {
 
 // 上游正常上报 input 时不触发兜底（保留真实值，而非估算值）。
 func TestSetInternalResponseNoFallbackWhenInputReported(t *testing.T) {
-	m := &RelayMetrics{TransportInputTokens: intPtr(999)}
+	m := &RelayMetrics{}
 	m.SetInternalResponse(&transformerModel.InternalLLMResponse{
 		Usage: &transformerModel.Usage{PromptTokens: 12, CompletionTokens: 7},
 	}, "test-model")
@@ -54,7 +57,7 @@ func TestSetInternalResponseNoFallbackWhenInputReported(t *testing.T) {
 
 // 仅缓存命中（input_tokens=0 但 cache_read>0）属于已上报输入，不应被估算覆盖。
 func TestSetInternalResponseNoFallbackWhenCacheOnly(t *testing.T) {
-	m := &RelayMetrics{TransportInputTokens: intPtr(999)}
+	m := &RelayMetrics{}
 	m.SetInternalResponse(&transformerModel.InternalLLMResponse{
 		Usage: &transformerModel.Usage{PromptTokens: 0, CacheReadInputTokens: 40, CompletionTokens: 5},
 	}, "test-model")
