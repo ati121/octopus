@@ -2,6 +2,7 @@
 
 ## 未发布
 
+- 安全升级（govulncheck 审计结果）：Go 工具链由 1.26.5 升至 1.26.10，修复标准库 net/http、crypto/tls、crypto/x509、net/url、html/template 等 17 项已知漏洞；`golang.org/x/net` 0.58.0 → 0.60.0（4 项）、`quic-go` 0.59.0 → 0.59.1、`pgx/v5` 5.6.0 → 5.9.2（SQL 注入）。升级后 govulncheck 复扫无影响调用代码的漏洞。
 - 清理构建残留：删除已无代码引用的 `scripts/updatePrice.py` 及 `scripts/build.sh` 中的 `update_price` 步骤，手动构建不再依赖 python3 和外部价格源；移除 `internal/webdav`、`internal/price`、`internal/providercompat` 空目录残留。
 - 移除前端未使用依赖 `@uiw/react-json-view` 与 `date-fns`（当前代码零引用）；`go mod tidy` 将零引用的 `tmaxmax/go-sse` 归位为间接依赖（保留 AxonHub 所需的 replace）。
 - 新增 `octopus passwd <password>` 命令，忘记管理台密码时可经命令行重置；运行中的服务缓存了用户信息，重置后需重启生效。
