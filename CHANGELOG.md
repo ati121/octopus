@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布
+## v2.0.19 - 2026-10-24
 
 - 移除普通 HTTP、WebSocket 和 Responses compact 发送前对完整请求体的同步 Token 分词，避免 Base64 图片等大载荷拖慢首字和总耗时。用量直接使用上游 `usage`，保留输入、输出和缓存统计；上游未上报时不再本地估算。
 - Chat 兼容流式请求主动设置 `stream_options.include_usage=true`，包括其他入站协议转换到 Chat 的请求；客户端原始流选项保持隔离。
