@@ -253,16 +253,13 @@ build_frontend() {
         return 1
     fi
 
-    return 0
-}
-
-update_price() {
-    log_step "Updating price"
-    if ! python3 scripts/updatePrice.py; then
-        log_error "Failed to update price"
+    # Generate precompressed (.gz) variants served by the static middleware
+    if ! bash scripts/compress-static.sh "static/out"; then
+        log_error "Failed to precompress static assets"
         return 1
     fi
-    log_success "Price updated"
+
+    return 0
 }
 
 
@@ -538,12 +535,6 @@ main() {
             exit 1
         fi
 
-        # Update price
-        if ! update_price; then
-            log_error "Failed to update price"
-            exit 1
-        fi
-
         # Build for specified platform
         log_step "Building binary"
 
@@ -569,12 +560,6 @@ main() {
         # Build frontend
         if ! build_frontend; then
             log_error "Failed to build frontend"
-            exit 1
-        fi
-
-        # Update price
-        if ! update_price; then
-            log_error "Failed to update price"
             exit 1
         fi
 

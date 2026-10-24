@@ -1,5 +1,13 @@
 # 更新日志
 
+## 未发布
+
+- 清理构建残留：删除已无代码引用的 `scripts/updatePrice.py` 及 `scripts/build.sh` 中的 `update_price` 步骤，手动构建不再依赖 python3 和外部价格源；移除 `internal/webdav`、`internal/price`、`internal/providercompat` 空目录残留。
+- 移除前端未使用依赖 `@uiw/react-json-view` 与 `date-fns`（当前代码零引用）；`go mod tidy` 将零引用的 `tmaxmax/go-sse` 归位为间接依赖（保留 AxonHub 所需的 replace）。
+- 新增 `octopus passwd <password>` 命令，忘记管理台密码时可经命令行重置；运行中的服务缓存了用户信息，重置后需重启生效。
+- Service Worker 路径判断与预缓存改为以 SW scope 为基准的相对路径，反向代理子路径部署时 PWA 预缓存与离线回退不再指向域根；缓存版本升级为 v2。
+- 静态资源支持构建期预压缩：前端嵌入后为文本类资源生成 `.gz` 变体，服务端按 `Accept-Encoding` 直接返回，省去每请求动态压缩 CPU；对应扩展名已从动态 gzip 中间件排除，无预压缩变体时回退原文件。
+
 ## v2.0.20 - 2026-10-24
 
 - 请求、响应和用量直接使用 AxonHub 原生对象，删除本地维护的协议模型及整份 JSON 投影。每次尝试复用已解析的请求，只隔离路由与传输可变字段，避免重复解析和大媒体深拷贝；保留图片、工具、供应商私有字段和会话回放。
