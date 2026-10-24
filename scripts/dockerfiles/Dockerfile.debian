@@ -3,10 +3,10 @@ FROM debian:bookworm
 ARG TARGETPLATFORM
 ENV TZ=Asia/Shanghai
 
-RUN apt-get update && apt-get install -y ca-certificates tzdata gosu && \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata gosu && \
     ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
-    rm -rf /var/cache/apt/*  && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/* && \
     mkdir -p /app
 
 COPY build/docker/${TARGETPLATFORM}/octopus /app/octopus

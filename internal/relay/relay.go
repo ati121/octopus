@@ -264,10 +264,7 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 				result = attemptResult{Err: fmt.Errorf("unsupported inbound type: %d", inboundType)}
 				break
 			}
-			if _, adapterErr := attemptInAdapter.TransformRequest(c.Request.Context(), rawBody); adapterErr != nil {
-				result = attemptResult{Err: fmt.Errorf("failed to reset inbound adapter: %w", adapterErr)}
-				break
-			}
+			// A fresh adapter isolates response collection; the request is already parsed.
 			req.inAdapter = attemptInAdapter
 			req.streamPayloadWritten.Store(false)
 			req.responseCollected.Store(false)

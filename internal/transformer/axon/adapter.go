@@ -90,7 +90,11 @@ func (i *Inbound) TransformHTTPRequest(ctx context.Context, req *http.Request, b
 
 // ProjectRequest creates an observation/session view. Native remains authoritative.
 func ProjectRequest(r *llm.Request, format model.APIFormat, raw []byte) (*model.InternalLLMRequest, error) {
-	b, err := json.Marshal(r)
+	// The transport body is not part of the observation view. Serializing it
+	// would encode the entire request a second time, including inline media.
+	projection := *r
+	projection.RawRequest = nil
+	b, err := json.Marshal(&projection)
 	if err != nil {
 		return nil, err
 	}
@@ -136,37 +140,24 @@ func NativeRequest(ctx context.Context, view *model.InternalLLMRequest) (*llm.Re
 		return nil, errors.New("request is nil")
 	}
 	if view.Native != nil {
-		// Isolate retries, including nested messages and provider-private fields.
-		b, err := json.Marshal(view.Native)
-		if err != nil {
-			return nil, err
-		}
-		var r llm.Request
-		if err := json.Unmarshal(b, &r); err != nil {
-			return nil, err
-		}
-		r.ProviderExtensions = llm.CloneProviderExtensions(view.Native.ProviderExtensions)
-		// llm.DecisionsRequest.Body has no JSON tag, so it does not survive the
-		// round-trip above; restore the raw payload the outbound adapter rewrites.
+		r := cloneNativeRequest(view.Native)
 		if r.Decisions != nil && len(r.Decisions.Body) == 0 {
 			r.Decisions.Body = append([]byte(nil), view.DecisionsPayload...)
 		}
-		if view.Native.Image != nil {
-			r.Image.ModelSpecified = view.Native.Image.ModelSpecified
-			r.Image.Mask = bytes.Clone(view.Native.Image.Mask)
-			r.Image.Images = make([][]byte, len(view.Native.Image.Images))
-			for n, data := range view.Native.Image.Images {
-				r.Image.Images[n] = bytes.Clone(data)
-			}
-		}
 		r.Model, r.Stream = view.Model, view.Stream
+		if view.Stream != nil {
+			stream := *view.Stream
+			r.Stream = &stream
+		}
 		if r.RawRequest != nil {
-			raw := *r.RawRequest
-			raw.Query = view.Query
-			r.RawRequest = &raw
+			r.RawRequest.Query = cloneRequestQuery(view.Query)
 		}
 		if view.RawAPIFormat == model.APIFormatOpenAIResponse {
 			r.PreviousResponseID = view.GetOpenAIResponsesOptions().PreviousResponseID
+			if r.PreviousResponseID != nil {
+				previous := *r.PreviousResponseID
+				r.PreviousResponseID = &previous
+			}
 			if view.IsOpenAIExactReplayRequest() {
 				// Session recovery changes raw input, so parse that request with AxonHub again.
 				body, err := sjson.SetRawBytes(view.RawRequest, "input", view.OpenAIRawInputItems())
@@ -179,7 +170,7 @@ func NativeRequest(ctx context.Context, view *model.InternalLLMRequest) (*llm.Re
 				return responses.NewInboundTransformer().TransformRequest(ctx, &httpclient.Request{Method: "POST", Body: body, ContentType: "application/json", Headers: http.Header{"Content-Type": {"application/json"}}, Query: view.Query})
 			}
 		}
-		return &r, nil
+		return r, nil
 	}
 	// Locally generated health probes contain no provider extensions.
 	if len(view.DecisionsPayload) > 0 {
