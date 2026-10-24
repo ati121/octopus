@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/bestruirui/octopus/internal/conf"
-	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/relay/balancer"
@@ -20,15 +19,12 @@ import (
 	"github.com/bestruirui/octopus/internal/transformer/axon"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
-	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/looplj/axonhub/llm/transformer"
 )
-
-const imagesUpstreamErrorBodyLimit = 16 * 1024
 
 // ImagesHandler 是 OpenAI Images API 的统一 relay 入口。
 // endpoint 形如：/images/generations、/images/edits、/images/variations（不含 /v1 前缀）。
@@ -453,48 +449,17 @@ func imagesAttempt(
 	channelKey string,
 	actualModel string,
 ) (statusCode int, written bool, usage *imagesUsage, upstreamCT string, err error) {
-	out := axon.NewOutboundWithEndpointPath(int(channel.Type), channel.EndpointPath)
-	req, err := out.TransformRequest(ctx, &transformerModel.InternalLLMRequest{Native: native, Model: actualModel}, channel.GetBaseUrl(), channelKey)
-	if err != nil {
-		return 0, false, nil, "", err
+	request := *native
+	request.Model = actualModel
+	metrics := &RelayMetrics{}
+	attempt := &relayAttempt{relayRequest: &relayRequest{
+		c: c, inAdapter: &axon.Inbound{Transformer: in}, internalRequest: &transformerModel.InternalLLMRequest{Request: request}, metrics: metrics,
+	}, channel: channel, usedKey: model.ChannelKey{ChannelKey: channelKey}, outAdapter: axon.NewOutboundWithEndpointPath(int(channel.Type), channel.EndpointPath)}
+	statusCode, err = attempt.pipelineHTTP(ctx)
+	upstreamCT = c.Writer.Header().Get("Content-Type")
+	if metrics.InternalResponse != nil && metrics.InternalResponse.Usage != nil {
+		u := metrics.InternalResponse.Usage
+		usage = &imagesUsage{InputTokens: int(u.PromptTokens), OutputTokens: int(u.CompletionTokens), TotalTokens: int(u.TotalTokens)}
 	}
-	copyProxyHeaders(c.Request.Header, channel, req.Header)
-
-	// 发送请求
-	httpClient, err := helper.ChannelHTTPClientWithContext(ctx, channel)
-	if err != nil {
-		return 0, false, nil, "", err
-	}
-
-	respUp, err := httpClient.Do(req)
-	if err != nil {
-		return 0, false, nil, "", fmt.Errorf("failed to send request: %w", err)
-	}
-	defer respUp.Body.Close()
-
-	upstreamCT = respUp.Header.Get("Content-Type")
-
-	if respUp.StatusCode < 200 || respUp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(respUp.Body, imagesUpstreamErrorBodyLimit))
-		return respUp.StatusCode, false, nil, upstreamCT, fmt.Errorf("upstream error: %d: %s", respUp.StatusCode, string(b))
-	}
-
-	responseBody, err := iolimit.ReadAll(respUp.Body, iolimit.UpstreamResponseMaxBytes())
-	if err != nil {
-		return respUp.StatusCode, false, nil, upstreamCT, err
-	}
-	nativeResponse, err := out.Transformer.TransformResponse(ctx, &httpclient.Response{StatusCode: respUp.StatusCode, Headers: respUp.Header, Body: responseBody, Request: out.Request})
-	if err != nil {
-		return respUp.StatusCode, false, nil, upstreamCT, err
-	}
-	wire, err := in.TransformResponse(ctx, nativeResponse)
-	if err != nil {
-		return respUp.StatusCode, false, nil, upstreamCT, err
-	}
-	var u *imagesUsage
-	if nativeResponse.Usage != nil {
-		u = &imagesUsage{InputTokens: int(nativeResponse.Usage.PromptTokens), OutputTokens: int(nativeResponse.Usage.CompletionTokens), TotalTokens: int(nativeResponse.Usage.TotalTokens)}
-	}
-	c.Data(wire.StatusCode, "application/json", wire.Body)
-	return respUp.StatusCode, c.Writer.Written(), u, upstreamCT, nil
+	return statusCode, c.Writer.Written(), usage, upstreamCT, err
 }

@@ -174,11 +174,17 @@ func (s *wsConversationState) BuildReplayRequest(req *transformerModel.InternalL
 		return nil
 	}
 	replayed := cloneInternalRequest(req)
-	responsesOptions := replayed.GetOpenAIResponsesOptions()
-	responsesOptions.PreviousResponseID = nil
-	responsesOptions.Conversation = nil
-	responsesOptions.RawInputItems = nil
-	replayed.SetOpenAIResponsesOptions(responsesOptions)
+	replayed.PreviousResponseID = nil
+	if req.HasOpenAIConversation() {
+		ext := *req.ProviderExtensions
+		responses := *ext.OpenAIResponses
+		request := *responses.Request
+		request.RawFields = maps.Clone(request.RawFields)
+		delete(request.RawFields, "conversation")
+		responses.Request = &request
+		ext.OpenAIResponses = &responses
+		replayed.ProviderExtensions = &ext
+	}
 	replayed.SetOpenAIRawInputItems(nil)
 	replayed.Messages = retainInstructionMessages(req.Messages)
 
@@ -192,7 +198,7 @@ func (s *wsConversationState) BuildReplayRequest(req *transformerModel.InternalL
 	replayed.SetOpenAIRawInputItems(mergedRawInputItems)
 	replayed.TransformOptions.ArrayInputs = boolPtr(true)
 	if replayed.TransformerMetadata == nil {
-		replayed.TransformerMetadata = map[string]string{}
+		replayed.TransformerMetadata = map[string]any{}
 	}
 	replayed.MarkOpenAIExactReplayRequest()
 	return replayed
@@ -292,20 +298,8 @@ func cloneInternalRequest(req *transformerModel.InternalLLMRequest) *transformer
 	}
 	cloned := *req
 	cloned.Messages = cloneMessages(req.Messages)
-	cloned.Modalities = append([]string(nil), req.Modalities...)
-	cloned.Tools = append([]transformerModel.Tool(nil), req.Tools...)
-	cloned.Include = append([]string(nil), req.Include...)
-	cloned.LogitBias = maps.Clone(req.LogitBias)
-	cloned.Metadata = maps.Clone(req.Metadata)
 	cloned.TransformerMetadata = maps.Clone(req.TransformerMetadata)
 	cloned.Query = cloneQuery(req.Query)
-	cloned.RawRequest = append([]byte(nil), req.RawRequest...)
-	cloned.ExtraBody = append([]byte(nil), req.ExtraBody...)
-	cloned.Prompt = append([]byte(nil), req.Prompt...)
-	cloned.Conversation = append([]byte(nil), req.Conversation...)
-	cloned.ContextManagement = append([]byte(nil), req.ContextManagement...)
-	cloned.ResponsesStreamOptions = append([]byte(nil), req.ResponsesStreamOptions...)
-	cloned.RawInputItems = append([]byte(nil), req.RawInputItems...)
 	return &cloned
 }
 
@@ -331,9 +325,6 @@ func cloneMessage(message transformerModel.Message) transformerModel.Message {
 	cloned.ToolCallIsError = cloneBoolPointer(message.ToolCallIsError)
 	cloned.Content = cloneMessageContent(message.Content)
 	cloned.ToolCalls = append([]transformerModel.ToolCall(nil), message.ToolCalls...)
-	cloned.Images = cloneContentParts(message.Images)
-	cloned.RedactedThinkingBlocks = append([]string(nil), message.RedactedThinkingBlocks...)
-	cloned.ReasoningBlocks = append([]transformerModel.ReasoningBlock(nil), message.ReasoningBlocks...)
 	if message.Audio != nil {
 		audio := *message.Audio
 		cloned.Audio = &audio
@@ -360,14 +351,6 @@ func cloneContentParts(parts []transformerModel.MessageContentPart) []transforme
 			imageURL := *part.ImageURL
 			imageURL.Detail = cloneStringPointer(part.ImageURL.Detail)
 			cloned[i].ImageURL = &imageURL
-		}
-		if part.Audio != nil {
-			audio := *part.Audio
-			cloned[i].Audio = &audio
-		}
-		if part.File != nil {
-			file := *part.File
-			cloned[i].File = &file
 		}
 	}
 	return cloned

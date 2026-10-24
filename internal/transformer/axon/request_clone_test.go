@@ -1,7 +1,6 @@
 package axon
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -14,58 +13,27 @@ import (
 	"github.com/looplj/axonhub/llm/httpclient"
 )
 
-func TestNativeRequestCopiesMutablePayloads(t *testing.T) {
+func TestNativeRequestIsolatesAttemptOptions(t *testing.T) {
 	stream := true
-	text := "hello"
-	src := &llm.Request{
-		Model: "group", Stream: &stream,
-		Messages: []llm.Message{{Role: "user", Content: llm.MessageContent{MultipleContent: []llm.MessageContentPart{
-			{Type: "image_url", ImageURL: &llm.ImageURL{URL: "data:image/png;base64,AAAA"}},
-			{Type: "text", Text: &text, TransformerMetadata: map[string]any{"raw": json.RawMessage(`{"ok":true}`)}},
-		}}}},
-		TransformerMetadata: map[string]any{"nested": []any{map[string]any{"bytes": []byte("original")}}},
-		RawRequest:          &httpclient.Request{Body: []byte(`{"original":true}`), Headers: http.Header{"X-Test": {"original"}}, Auth: &httpclient.AuthConfig{APIKey: "original"}},
-		Image:               &llm.ImageRequest{ModelSpecified: true, Images: [][]byte{[]byte("image")}, Mask: []byte("mask")},
-		Decisions:           &llm.DecisionsRequest{Body: []byte(`{"state":1}`)},
-		ProviderExtensions: &llm.ProviderExtensions{OpenAIResponses: &llm.OpenAIResponsesProviderExtensions{Request: &llm.OpenAIResponsesRequestExtensions{
-			RawFields:               map[string]json.RawMessage{"unknown": json.RawMessage(`{"ok":true}`)},
-			RawInputItems:           []llm.OpenAIResponsesRawFragment{{Raw: json.RawMessage(`{"type":"message"}`)}},
-			OmittedInputItemIndices: []int{2},
-		}}},
-	}
-	view := &model.InternalLLMRequest{Native: src, Model: "upstream", Stream: &stream, Query: url.Values{"test": {"original"}}}
-	snapshot := cloneNativeRequest(src)
+	src := &llm.Request{Model: "upstream", Stream: &stream, StreamOptions: &llm.StreamOptions{},
+		TransformerMetadata: map[string]any{"key": "original"},
+		RawRequest:          &httpclient.Request{Headers: http.Header{"X-Test": {"original"}}}}
+	view := &model.InternalLLMRequest{Request: *src, Query: url.Values{"test": {"original"}}}
 	first, err := NativeRequest(t.Context(), view)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !first.Image.ModelSpecified || !bytes.Equal(first.Decisions.Body, src.Decisions.Body) || len(first.ProviderExtensions.OpenAIResponses.Request.OmittedInputItemIndices) != 1 {
-		t.Fatal("non-JSON payload fields were lost")
-	}
-	first.Messages[0].Content.MultipleContent[0].ImageURL.URL = "changed"
-	*first.Messages[0].Content.MultipleContent[1].Text = "changed"
-	first.Messages[0].Content.MultipleContent[1].TransformerMetadata["raw"].(json.RawMessage)[0] = ' '
-	first.TransformerMetadata["nested"].([]any)[0].(map[string]any)["bytes"].([]byte)[0] = 'X'
-	first.RawRequest.Body[0] = ' '
-	first.RawRequest.Headers["X-Test"][0] = "changed"
-	first.RawRequest.Auth.APIKey = "changed"
-	first.RawRequest.Query["test"][0] = "changed"
-	first.Image.Images[0][0] = 'X'
-	first.Image.Mask[0] = 'X'
-	first.Decisions.Body[0] = ' '
-	first.ProviderExtensions.OpenAIResponses.Request.RawFields["unknown"][0] = ' '
-	first.ProviderExtensions.OpenAIResponses.Request.RawInputItems[0].Raw[0] = ' '
-	first.ProviderExtensions.OpenAIResponses.Request.OmittedInputItemIndices[0] = 3
+	first.TransformerMetadata["key"] = "changed"
+	first.RawRequest.Headers.Set("X-Test", "changed")
+	first.RawRequest.Query.Set("test", "changed")
+	first.StreamOptions.IncludeUsage = true
 	*first.Stream = false
-	if !reflect.DeepEqual(src, snapshot) || !stream || view.Query.Get("test") != "original" {
-		t.Fatal("attempt modified the authoritative request")
-	}
 	second, err := NativeRequest(t.Context(), view)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.Messages[0].Content.MultipleContent[0].ImageURL.URL != "data:image/png;base64,AAAA" || second.RawRequest.Auth.APIKey != "original" {
-		t.Fatal("retry inherited a prior attempt's changes")
+	if second.TransformerMetadata["key"] != "original" || second.RawRequest.Headers.Get("X-Test") != "original" || second.RawRequest.Query.Get("test") != "original" || second.StreamOptions.IncludeUsage || !*second.Stream {
+		t.Fatal("attempt options leaked into retry")
 	}
 }
 
@@ -84,7 +52,7 @@ func TestNativeRequestWireMatchesJSONClone(t *testing.T) {
 			t.Fatal(err)
 		}
 		view.Model = "upstream"
-		legacy, err := json.Marshal(view.Native)
+		legacy, err := json.Marshal(&view.Request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,9 +60,9 @@ func TestNativeRequestWireMatchesJSONClone(t *testing.T) {
 		if err := json.Unmarshal(legacy, &old); err != nil {
 			t.Fatal(err)
 		}
-		old.ProviderExtensions = llm.CloneProviderExtensions(view.Native.ProviderExtensions)
+		old.ProviderExtensions = llm.CloneProviderExtensions(view.ProviderExtensions)
 		oldView := *view
-		oldView.Native = &old
+		oldView.Request = old
 		for _, kind := range []int{0, 1, 2, 3, 4, 6} {
 			actual, actualErr := NewOutbound(kind).WireRequest(t.Context(), view, "https://gateway.example/v1", "key")
 			want, wantErr := NewOutbound(kind).WireRequest(t.Context(), &oldView, "https://gateway.example/v1", "key")
@@ -128,8 +96,28 @@ func TestNativeRequestIsolatesResponsesPreviousID(t *testing.T) {
 		t.Fatal("previous response ID was lost")
 	}
 	*first.PreviousResponseID = "resp_changed"
-	if *view.PreviousResponseID != "resp_original" || *view.Native.PreviousResponseID != "resp_original" {
+	if *view.PreviousResponseID != "resp_original" {
 		t.Fatal("previous response ID leaked across attempts")
+	}
+}
+
+func TestNativeRequestRetainsQuery(t *testing.T) {
+	for _, fromNative := range []bool{true, false} {
+		view := &model.InternalLLMRequest{}
+		query := url.Values{"test": {"original"}}
+		if fromNative {
+			view.RawRequest = &httpclient.Request{Headers: make(http.Header), Query: query}
+		} else {
+			view.Query = query
+		}
+		native, err := NativeRequest(t.Context(), view)
+		if err != nil || native.RawRequest == nil || native.RawRequest.Query.Get("test") != "original" {
+			t.Fatalf("query lost (native=%t): %v", fromNative, err)
+		}
+		native.RawRequest.Query.Set("test", "changed")
+		if query.Get("test") != "original" {
+			t.Fatal("query mutation leaked into source")
+		}
 	}
 }
 

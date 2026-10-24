@@ -22,9 +22,8 @@ func TestHandleResponseForwardsSearchCall(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	req := &model.InternalLLMRequest{
-		Model: "search-model",
-		Tools: []model.Tool{{Type: "web_search"}},
+	req := &model.InternalLLMRequest{Request: model.Request{Messages: []model.Message{{Role: "user", Content: model.MessageContent{Content: stringPtr("hello")}}}, Model: "search-model",
+		Tools: []model.Tool{{Type: "web_search"}}},
 	}
 	ra := &relayAttempt{
 		relayRequest: &relayRequest{

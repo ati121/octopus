@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bestruirui/octopus/internal/helper"
 	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/outlierwindow"
@@ -61,7 +60,7 @@ func HandleResponsesCompact(c *gin.Context) {
 		return
 	}
 
-	metricsReq := &transformerModel.InternalLLMRequest{Model: requestModel, RawRequest: body}
+	metricsReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: requestModel}, RawBody: body}
 	metrics := NewRelayMetrics(apiKeyID, requestModel, body, metricsReq)
 
 	var lastErr error
@@ -140,7 +139,7 @@ func HandleResponsesCompact(c *gin.Context) {
 				}
 			}
 
-			statusCode, retryAfter, attemptErr = forwardResponsesCompact(c, metrics, iter, channel, usedKey, body)
+			statusCode, retryAfter, attemptErr = forwardResponsesCompact(c, metrics, iter, channel, usedKey, &transformerModel.InternalLLMRequest{Request: *compactReq})
 			if attemptErr == nil {
 				success = true
 				break
@@ -200,106 +199,18 @@ func supportsResponsesCompact(channelType outbound.OutboundType) bool {
 	}
 }
 
-func forwardResponsesCompact(c *gin.Context, metrics *RelayMetrics, iter *balancer.Iterator, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, requestBody []byte) (int, time.Duration, error) {
+func forwardResponsesCompact(c *gin.Context, metrics *RelayMetrics, iter *balancer.Iterator, channel *dbmodel.Channel, usedKey dbmodel.ChannelKey, request *transformerModel.InternalLLMRequest) (int, time.Duration, error) {
 	span := iter.StartAttempt(channel.ID, usedKey.ID, channel.Name)
-	request, err := buildResponsesCompactRequest(c.Request.Context(), channel, usedKey.ChannelKey, iter.Item().ModelName, requestBody)
+	view := *request
+	view.Model = iter.Item().ModelName
+	attempt := &relayAttempt{relayRequest: &relayRequest{c: c, inAdapter: &axon.Inbound{Transformer: axonResponses.NewCompactInboundTransformer()}, internalRequest: &view, metrics: metrics}, channel: channel, usedKey: usedKey, outAdapter: axon.NewOutboundWithEndpointPath(int(channel.Type), channel.EndpointPath)}
+	status, err := attempt.pipelineHTTP(c.Request.Context())
 	if err != nil {
-		span.End(dbmodel.AttemptFailed, 0, err.Error())
-		return 0, 0, fmt.Errorf("failed to create compact request: %w", err)
+		span.End(dbmodel.AttemptFailed, status, err.Error())
+	} else {
+		span.End(dbmodel.AttemptSuccess, status, "")
 	}
-	copyProxyHeaders(c.Request.Header, channel, request.Header)
-
-	response, err := sendCompactRequest(channel, request)
-	if err != nil {
-		span.End(dbmodel.AttemptFailed, 0, err.Error())
-		return 0, 0, fmt.Errorf("failed to send compact request: %w", err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body, truncated, readErr := iolimit.ReadAtMost(response.Body, iolimit.DefaultErrorBodyMaxBytes)
-		if readErr != nil {
-			span.End(dbmodel.AttemptFailed, response.StatusCode, readErr.Error())
-			return response.StatusCode, 0, fmt.Errorf("failed to read compact response body: %w", readErr)
-		}
-		if truncated {
-			body = append(body, []byte("\n[upstream error body truncated]")...)
-		}
-		retryAfter := parseRetryAfter(response.Header.Get("Retry-After"))
-		statusCode := normalizeUpstreamStatusCode(response.StatusCode, string(body))
-		span.End(dbmodel.AttemptFailed, statusCode, string(body))
-		return statusCode, retryAfter, fmt.Errorf("upstream error: %d: %s", response.StatusCode, string(body))
-	}
-
-	body, readErr := iolimit.ReadAll(response.Body, iolimit.UpstreamResponseMaxBytes())
-	if readErr != nil {
-		span.End(dbmodel.AttemptFailed, response.StatusCode, readErr.Error())
-		return response.StatusCode, 0, fmt.Errorf("failed to read compact response body: %w", readErr)
-	}
-
-	out, err := axonResponses.NewOutboundTransformer(channel.GetBaseUrl(), usedKey.ChannelKey)
-	if err != nil {
-		span.End(dbmodel.AttemptFailed, response.StatusCode, err.Error())
-		return response.StatusCode, 0, err
-	}
-	native, err := out.TransformResponse(c.Request.Context(), &httpclient.Response{StatusCode: response.StatusCode, Headers: response.Header, Body: body, Request: &httpclient.Request{RequestType: "compact"}})
-	if err != nil {
-		span.End(dbmodel.AttemptFailed, response.StatusCode, err.Error())
-		return response.StatusCode, 0, err
-	}
-	wire, err := axonResponses.NewCompactInboundTransformer().TransformResponse(c.Request.Context(), native)
-	if err != nil {
-		span.End(dbmodel.AttemptFailed, response.StatusCode, err.Error())
-		return response.StatusCode, 0, err
-	}
-	copyProxyResponseHeaders(c.Writer.Header(), response.Header)
-	c.Data(wire.StatusCode, "application/json", wire.Body)
-	if view, err := axon.ProjectResponse(native); err == nil {
-		metrics.SetInternalResponse(view, iter.Item().ModelName)
-	}
-
-	span.End(dbmodel.AttemptSuccess, response.StatusCode, "")
-	return response.StatusCode, 0, nil
-}
-
-func buildResponsesCompactRequest(ctx context.Context, channel *dbmodel.Channel, key, actualModel string, requestBody []byte) (*http.Request, error) {
-	in := axonResponses.NewCompactInboundTransformer()
-	native, err := in.TransformRequest(ctx, &httpclient.Request{Method: "POST", Body: requestBody, ContentType: "application/json", Headers: make(http.Header)})
-	if err != nil {
-		return nil, err
-	}
-	native.Model = actualModel
-	out, err := axonResponses.NewOutboundTransformer(channel.GetBaseUrl(), key)
-	if err != nil {
-		return nil, err
-	}
-	wire, err := out.TransformRequest(ctx, native)
-	if err != nil {
-		return nil, err
-	}
-	return axon.HTTPRequest(ctx, wire)
-}
-
-func copyProxyHeaders(src http.Header, channel *dbmodel.Channel, dst http.Header) {
-	for key, values := range src {
-		lowerKey := strings.ToLower(key)
-		if hopByHopHeaders[lowerKey] || lowerKey == "content-type" {
-			continue
-		}
-		for _, value := range values {
-			dst.Add(key, value)
-		}
-	}
-	for _, header := range channel.CustomHeader {
-		if strings.EqualFold(header.HeaderKey, "Content-Type") {
-			continue
-		}
-		dst.Set(header.HeaderKey, header.HeaderValue)
-	}
-	// 防止 Go 默认 User-Agent 泄露到上游
-	if dst.Get("User-Agent") == "" {
-		dst.Set("User-Agent", "")
-	}
+	return status, attempt.retryAfter, err
 }
 
 func copyProxyResponseHeaders(dst http.Header, src http.Header) {
@@ -312,12 +223,4 @@ func copyProxyResponseHeaders(dst http.Header, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
-}
-
-func sendCompactRequest(channel *dbmodel.Channel, req *http.Request) (*http.Response, error) {
-	httpClient, err := helper.ChannelHTTPClientWithContext(req.Context(), channel)
-	if err != nil {
-		return nil, err
-	}
-	return httpClient.Do(req)
 }

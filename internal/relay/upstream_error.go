@@ -5,32 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/looplj/axonhub/llm"
 )
-
-type upstreamHTTPError struct {
-	status  int
-	body    string
-	message string
-}
-
-func newUpstreamHTTPError(status int, body []byte) *upstreamHTTPError {
-	trimmed := strings.TrimSpace(string(body))
-	return &upstreamHTTPError{
-		status:  status,
-		body:    trimmed,
-		message: extractUpstreamErrorMessage(body),
-	}
-}
-
-func (e *upstreamHTTPError) Error() string {
-	if e == nil {
-		return "upstream error"
-	}
-	if e.body == "" {
-		return fmt.Sprintf("upstream error: %d", e.status)
-	}
-	return fmt.Sprintf("upstream error: %d: %s", e.status, e.body)
-}
 
 func extractUpstreamErrorMessage(body []byte) string {
 	var payload struct {
@@ -109,9 +86,12 @@ func extractDetailFieldMessage(raw json.RawMessage) string {
 }
 
 func publicRelayErrorMessage(err error) string {
-	var upstreamErr *upstreamHTTPError
-	if errors.As(err, &upstreamErr) && upstreamErr != nil && upstreamErr.message != "" {
-		return upstreamErr.message
+	var native *llm.ResponseError
+	if errors.As(err, &native) && strings.TrimSpace(native.Detail.Message) != "" {
+		if message := extractUpstreamErrorMessage([]byte(native.Detail.Message)); message != "" {
+			return message
+		}
+		return native.Detail.Message
 	}
 	return "channel failed"
 }

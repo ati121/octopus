@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
-	"github.com/bestruirui/octopus/internal/providercompat"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
 	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/dlclark/regexp2"
@@ -340,7 +339,7 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 			return nil, err
 		}
 		applyDefaultModelRequestHeaders(req, request)
-		providercompat.SetAnthropicAuthHeader(req.Header, request.GetBaseUrl(), request.GetChannelKey().ChannelKey)
+		req.Header.Set("X-API-Key", request.GetChannelKey().ChannelKey)
 		req.Header.Set("Anthropic-Version", "2023-06-01")
 		q := req.URL.Query()
 		if afterID != "" {

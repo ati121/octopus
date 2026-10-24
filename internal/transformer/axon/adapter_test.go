@@ -48,7 +48,7 @@ func TestChatStreamsRequestUsageWithoutChangingClientOptions(t *testing.T) {
 				if !gjson.GetBytes(wire.Body, "stream_options.include_usage").Bool() {
 					t.Fatalf("upstream stream must request usage: %s", wire.Body)
 				}
-				if request.Native.StreamOptions != nil && request.Native.StreamOptions.IncludeUsage {
+				if request.StreamOptions != nil && request.StreamOptions.IncludeUsage {
 					t.Fatal("upstream usage option leaked into the client request")
 				}
 			})
@@ -82,7 +82,7 @@ func TestConversationProtocolMatrix(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if request.Native == nil {
+				if request.RawRequest == nil {
 					t.Fatal("missing authoritative AxonHub request")
 				}
 				request.Model = "upstream"
@@ -151,7 +151,8 @@ func TestImageEndpointsUseAxonHub(t *testing.T) {
 				t.Fatal(err)
 			}
 			out := NewOutbound(0)
-			wire, err := out.TransformRequest(t.Context(), &model.InternalLLMRequest{Model: "image-native", Native: native}, "https://gateway.example/v1", "key")
+			native.Model = "image-native"
+			wire, err := out.TransformRequest(t.Context(), &model.InternalLLMRequest{Request: *native}, "https://gateway.example/v1", "key")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -212,10 +213,10 @@ func TestDecisionsRequestSurvivesNativeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.RawAPIFormat != model.APIFormatOpenAIDecisions {
-		t.Fatalf("unexpected api format %q", request.RawAPIFormat)
+	if request.APIFormat != model.APIFormatOpenAIDecisions {
+		t.Fatalf("unexpected api format %q", request.APIFormat)
 	}
-	if len(request.DecisionsPayload) == 0 {
+	if request.Decisions == nil || len(request.Decisions.Body) == 0 {
 		t.Fatal("expected decisions payload projection")
 	}
 
@@ -262,17 +263,14 @@ func TestDecisionsRequestSurvivesNativeRoundTrip(t *testing.T) {
 // BaseURL 之后。因此 base 已含 /v1 时，endpoint_path 只需写 /decisions。
 func TestOutboundEndpointPathOverride(t *testing.T) {
 	ctx := t.Context()
-	systemOne := &model.InternalLLMRequest{
-		Model: "upstream",
-		Native: &llm.Request{
-			Model:       "upstream",
-			RequestType: llm.RequestTypeSystemOne,
-			APIFormat:   llm.APIFormatTypeSafeSystemOne,
-			SystemOne: &llm.SystemOneRequest{
-				State:     "ping",
-				Questions: map[string]llm.SystemOneQuestion{"probe": {Type: "noul", Instructions: "Is this a ping?"}},
-			},
-		},
+	systemOne := &model.InternalLLMRequest{Request: model.Request{Model: "upstream",
+
+		RequestType: llm.RequestTypeSystemOne,
+		APIFormat:   llm.APIFormatTypeSafeSystemOne,
+		SystemOne: &llm.SystemOneRequest{
+			State:     "ping",
+			Questions: map[string]llm.SystemOneQuestion{"probe": {Type: "noul", Instructions: "Is this a ping?"}},
+		}},
 	}
 
 	cases := []struct {
@@ -292,10 +290,11 @@ func TestOutboundEndpointPathOverride(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			out := NewOutboundWithEndpointPath(tc.kind, tc.path)
 			view := systemOne
+			var err error
 			if tc.kind == 9 {
-				view = &model.InternalLLMRequest{
-					Model:            "upstream",
-					DecisionsPayload: []byte(`{"model":"upstream","input":"ping","questions":[{"type":"noul","name":"probe","instructions":"Is this a ping?"}]}`),
+				view, err = NewInbound(6).TransformRequest(ctx, []byte(`{"model":"upstream","input":"ping","questions":[{"type":"noul","name":"probe","instructions":"Is this a ping?"}]}`))
+				if err != nil {
+					t.Fatal(err)
 				}
 			}
 			wire, err := out.TransformRequest(ctx, view, tc.base, "upstream-key")

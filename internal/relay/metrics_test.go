@@ -25,9 +25,7 @@ func TestSetInternalResponseLeavesMissingUsageUnknown(t *testing.T) {
 // 上游只上报 output 时，输入保持 0，输出照常记录。
 func TestSetInternalResponsePreservesOutputOnlyUsage(t *testing.T) {
 	m := &RelayMetrics{}
-	m.SetInternalResponse(&transformerModel.InternalLLMResponse{
-		Usage: &transformerModel.Usage{PromptTokens: 0, CompletionTokens: 30},
-	}, "test-model")
+	m.SetInternalResponse(&transformerModel.InternalLLMResponse{Response: transformerModel.Response{Usage: &transformerModel.Usage{PromptTokens: 0, CompletionTokens: 30}}}, "test-model")
 
 	if m.Stats.InputToken != 0 {
 		t.Fatalf("input token: got %d want 0", m.Stats.InputToken)
@@ -43,9 +41,7 @@ func TestSetInternalResponsePreservesOutputOnlyUsage(t *testing.T) {
 // 上游正常上报 input 时不触发兜底（保留真实值，而非估算值）。
 func TestSetInternalResponseNoFallbackWhenInputReported(t *testing.T) {
 	m := &RelayMetrics{}
-	m.SetInternalResponse(&transformerModel.InternalLLMResponse{
-		Usage: &transformerModel.Usage{PromptTokens: 12, CompletionTokens: 7},
-	}, "test-model")
+	m.SetInternalResponse(&transformerModel.InternalLLMResponse{Response: transformerModel.Response{Usage: &transformerModel.Usage{PromptTokens: 12, CompletionTokens: 7}}}, "test-model")
 
 	if m.Stats.InputToken != 12 {
 		t.Fatalf("input token: got %d want 12 (reported, not fallback)", m.Stats.InputToken)
@@ -58,9 +54,7 @@ func TestSetInternalResponseNoFallbackWhenInputReported(t *testing.T) {
 // 仅缓存命中（input_tokens=0 但 cache_read>0）属于已上报输入，不应被估算覆盖。
 func TestSetInternalResponseNoFallbackWhenCacheOnly(t *testing.T) {
 	m := &RelayMetrics{}
-	m.SetInternalResponse(&transformerModel.InternalLLMResponse{
-		Usage: &transformerModel.Usage{PromptTokens: 0, CacheReadInputTokens: 40, CompletionTokens: 5},
-	}, "test-model")
+	m.SetInternalResponse(&transformerModel.InternalLLMResponse{Response: transformerModel.Response{Usage: &transformerModel.Usage{PromptTokens: 40, PromptTokensDetails: &transformerModel.PromptTokensDetails{CachedTokens: 40}, CompletionTokens: 5}}}, "test-model")
 
 	if m.Stats.InputToken != 40 {
 		t.Fatalf("input token: got %d want 40 (normalized cache-only input)", m.Stats.InputToken)
@@ -69,13 +63,11 @@ func TestSetInternalResponseNoFallbackWhenCacheOnly(t *testing.T) {
 
 func TestSetInternalResponseNormalizesAnthropicInput(t *testing.T) {
 	m := &RelayMetrics{}
-	m.SetInternalResponse(&transformerModel.InternalLLMResponse{
-		Usage: &transformerModel.Usage{
-			PromptTokens:             120,
-			CacheReadInputTokens:     500,
-			CacheCreationInputTokens: 30,
-			CompletionTokens:         80,
-		},
+	m.SetInternalResponse(&transformerModel.InternalLLMResponse{Response: transformerModel.Response{Usage: &transformerModel.Usage{
+		PromptTokens:        650,
+		PromptTokensDetails: &transformerModel.PromptTokensDetails{CachedTokens: 500, WriteCachedTokens: 30},
+		CompletionTokens:    80,
+	}},
 	}, "test-model")
 
 	if m.Stats.InputToken != 650 {

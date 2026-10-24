@@ -3,10 +3,12 @@ package relay
 import (
 	"fmt"
 	"testing"
+
+	"github.com/looplj/axonhub/llm"
 )
 
 func TestPublicRelayErrorMessagePreservesUpstreamJSONMessage(t *testing.T) {
-	err := newUpstreamHTTPError(400, []byte(`{"error":{"message":"thinking.budget_tokens must be less than max_tokens","type":"invalid_request_error"},"type":"error"}`))
+	err := &llm.ResponseError{StatusCode: 400, Detail: llm.ErrorDetail{Message: `{"error":{"message":"thinking.budget_tokens must be less than max_tokens","type":"invalid_request_error"},"type":"error"}`}}
 	wrapped := fmt.Errorf("channel claude failed: %w", err)
 
 	if got, want := publicRelayErrorMessage(wrapped), "thinking.budget_tokens must be less than max_tokens"; got != want {
@@ -43,7 +45,7 @@ func TestPublicRelayErrorMessageFallsBackForUnstructuredErrors(t *testing.T) {
 	if got := publicRelayErrorMessage(fmt.Errorf("dial failed")); got != "channel failed" {
 		t.Fatalf("publicRelayErrorMessage() = %q, want channel failed", got)
 	}
-	if got := publicRelayErrorMessage(newUpstreamHTTPError(502, []byte(`<html>bad gateway</html>`))); got != "channel failed" {
+	if got := publicRelayErrorMessage(&llm.ResponseError{StatusCode: 502}); got != "channel failed" {
 		t.Fatalf("unstructured upstream error should stay private, got %q", got)
 	}
 }

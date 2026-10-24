@@ -135,16 +135,18 @@ func (m *RelayMetrics) SetInternalResponse(resp *transformerModel.InternalLLMRes
 	}
 
 	if usage := resp.Usage; usage != nil {
-		nonCachedInput := usage.BillableNonCachedInput()
-		cacheReadTokens := usage.BillableCacheReadInput()
-		cacheWriteTokens := usage.BillableCacheWriteInput()
+		var cacheReadTokens, cacheWriteTokens int64
+		if usage.PromptTokensDetails != nil {
+			cacheReadTokens = usage.PromptTokensDetails.CachedTokens
+			cacheWriteTokens = usage.PromptTokensDetails.WriteCachedTokens
+		}
+		nonCachedInput := max(int64(0), usage.PromptTokens-cacheReadTokens-cacheWriteTokens)
 
 		m.BillInputTokens = intPtr(int(nonCachedInput))
 		m.CacheReadTokens = intPtr(int(cacheReadTokens))
 		m.CacheWriteTokens = intPtr(int(cacheWriteTokens))
-		// Normalize input totals across protocols. OpenAI/Gemini already include
-		// cached reads in PromptTokens, while Anthropic reports them separately.
-		m.Stats.InputToken = usage.EffectiveInputTokens()
+		// AxonHub normalizes input totals, including cache read/write tokens.
+		m.Stats.InputToken = usage.PromptTokens
 		m.Stats.OutputToken = usage.CompletionTokens
 		m.Stats.CacheReadToken = cacheReadTokens
 		m.Stats.CacheWriteToken = cacheWriteTokens
@@ -208,7 +210,7 @@ func (m *RelayMetrics) SaveWithChannelStats(ctx context.Context, success bool, e
 
 	// 缺少输入用量时只记录诊断信息，不对请求正文做本地分词估算。
 	if success && (m.InternalResponse == nil || m.InternalResponse.Usage == nil ||
-		m.InternalResponse.Usage.EffectiveInputTokens() == 0) {
+		m.InternalResponse.Usage.PromptTokens == 0) {
 		log.Debugw("relay.usage_missing",
 			"actual_model", m.ActualModel,
 			"channel_id", logChannelID,
@@ -350,7 +352,7 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 	// their existing per-request cache breakdown. Aggregated stats use the
 	// normalized total input above.
 	relayLog.InputTokens = int(m.Stats.InputToken)
-	if m.InternalResponse != nil && m.InternalResponse.Usage != nil && m.InternalResponse.Usage.EffectiveInputTokens() > 0 {
+	if m.InternalResponse != nil && m.InternalResponse.Usage != nil && m.InternalResponse.Usage.PromptTokens > 0 {
 		relayLog.InputTokens = int(m.InternalResponse.Usage.PromptTokens)
 	}
 	relayLog.OutputTokens = int(m.Stats.OutputToken)
@@ -427,7 +429,7 @@ func wsRecoveryPtr(value model.RelayLogWSRecovery) *model.RelayLogWSRecovery {
 	return &value
 }
 
-// filterResponseForLog 创建响应的浅拷贝，过滤掉 images、MultipleContent 中的图片数据和 Audio.Data 以减少存储压力
+// filterResponseForLog 只在日志副本中省略图片和音频数据，保留转发响应。
 func (m *RelayMetrics) filterResponseForLog(resp *transformerModel.InternalLLMResponse) *transformerModel.InternalLLMResponse {
 	if resp == nil {
 		return nil
@@ -438,7 +440,6 @@ func (m *RelayMetrics) filterResponseForLog(resp *transformerModel.InternalLLMRe
 			return nil
 		}
 		c := *msg
-		c.Images = nil
 		if len(c.Content.MultipleContent) > 0 {
 			parts := make([]transformerModel.MessageContentPart, 0, len(c.Content.MultipleContent))
 			for _, p := range c.Content.MultipleContent {

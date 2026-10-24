@@ -74,13 +74,13 @@ func isClientCancellation(ctx context.Context, err error) bool {
 // Besides strict finish_reason completion, content plus usage is accepted for
 // relay stations that drop the final SSE marker after delivering the turn.
 func streamResponseCompleted(resp *model.InternalLLMResponse) bool {
-	if resp == nil {
+	if resp == nil || resp.Error != nil {
 		return false
 	}
-	if len(resp.EmbeddingData) > 0 {
+	if resp.Embedding != nil && len(resp.Embedding.Data) > 0 {
 		return true
 	}
-	if len(resp.RerankPayload) > 0 || resp.IsSystemOneResponse() || len(resp.DecisionsPayload) > 0 {
+	if resp.Rerank != nil || resp.IsSystemOneResponse() || resp.Decisions != nil {
 		return true
 	}
 	if len(resp.Choices) == 0 {
@@ -131,6 +131,9 @@ func choiceHasDeliveredContent(choice *model.Choice) bool {
 // already populated aggregate metrics before cancellation became visible.
 func metricsSuggestCompletedStream(metrics *RelayMetrics) bool {
 	if metrics == nil {
+		return false
+	}
+	if metrics.InternalResponse != nil && metrics.InternalResponse.Error != nil {
 		return false
 	}
 	if streamResponseCompleted(metrics.InternalResponse) {

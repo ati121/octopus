@@ -70,7 +70,7 @@ func TestForwardViaWSUsesAxonHubWithLegacyPassthroughSetting(t *testing.T) {
 	defer serverConn.Close(websocket.StatusNormalClosure, "")
 
 	rawBody := []byte(`{"type":"response.create","model":"client-model","input":"hello","stream":false,"background":true}`)
-	internalReq := &transformerModel.InternalLLMRequest{Model: "gpt-4o", Stream: boolPtr(true), RawAPIFormat: transformerModel.APIFormatOpenAIResponse}
+	internalReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: "gpt-4o", Stream: boolPtr(true), APIFormat: transformerModel.APIFormatOpenAIResponse}}
 	req := &relayRequest{
 		c:               nil,
 		ctx:             context.Background(),

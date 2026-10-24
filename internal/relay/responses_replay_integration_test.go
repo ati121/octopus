@@ -23,16 +23,14 @@ func TestHTTPReplayIntegration(t *testing.T) {
 	channelKeyID := 5
 
 	// === Simulate first successful request ===
-	firstReq := &transformerModel.InternalLLMRequest{
-		Model: requestModel,
+	firstReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: requestModel,
 		Messages: []transformerModel.Message{
 			{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("What is AI?")}},
 		},
-		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
+		APIFormat: transformerModel.APIFormatOpenAIResponse},
 	}
 
-	firstResp := &transformerModel.InternalLLMResponse{
-		ID:    "resp_first123",
+	firstResp := &transformerModel.InternalLLMResponse{Response: transformerModel.Response{ID: "resp_first123",
 		Model: requestModel,
 		Choices: []transformerModel.Choice{
 			{
@@ -41,8 +39,7 @@ func TestHTTPReplayIntegration(t *testing.T) {
 					Content: transformerModel.MessageContent{Content: stringPtr("AI is...")},
 				},
 			},
-		},
-		RawResponsesOutputItems: json.RawMessage(`[{"type":"message","role":"assistant","content":[{"type":"text","text":"AI is..."}]}]`),
+		}}, RawResponsesOutputItems: json.RawMessage(`[{"type":"message","role":"assistant","content":[{"type":"text","text":"AI is..."}]}]`),
 	}
 
 	// Save state after first turn
@@ -66,13 +63,12 @@ func TestHTTPReplayIntegration(t *testing.T) {
 	storeResponsesReplayState(apiKeyID, groupID, requestModel, state, time.Minute)
 
 	// === Simulate second request with previous_response_id ===
-	secondReq := &transformerModel.InternalLLMRequest{
-		Model:              requestModel,
+	secondReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: requestModel,
 		PreviousResponseID: stringPtr("resp_first123"),
 		Messages: []transformerModel.Message{
 			{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("Tell me more")}},
 		},
-		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
+		APIFormat: transformerModel.APIFormatOpenAIResponse},
 	}
 
 	// Resolve replay state
@@ -127,22 +123,20 @@ func TestHTTPReplayStreamingRequest(t *testing.T) {
 	requestModel := "gpt-4"
 
 	stream := true
-	firstReq := &transformerModel.InternalLLMRequest{
-		Model:  requestModel,
+	firstReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: requestModel,
 		Stream: &stream,
 		Messages: []transformerModel.Message{
 			{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("Stream test")}},
 		},
-		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
+		APIFormat: transformerModel.APIFormatOpenAIResponse},
 	}
 
-	firstResp := &transformerModel.InternalLLMResponse{
-		ID:                      "resp_stream456",
-		Model:                   requestModel,
-		RawResponsesOutputItems: json.RawMessage(`[{"type":"message","role":"assistant","content":[{"type":"text","text":"Streaming..."}]}]`),
+	firstResp := &transformerModel.InternalLLMResponse{Response: transformerModel.Response{ID: "resp_stream456",
+		Model: requestModel,
+
 		Choices: []transformerModel.Choice{
 			{Message: &transformerModel.Message{Role: "assistant", Content: transformerModel.MessageContent{Content: stringPtr("Streaming...")}}},
-		},
+		}}, RawResponsesOutputItems: json.RawMessage(`[{"type":"message","role":"assistant","content":[{"type":"text","text":"Streaming..."}]}]`),
 	}
 
 	state := &wsConversationState{
@@ -154,14 +148,13 @@ func TestHTTPReplayStreamingRequest(t *testing.T) {
 	storeResponsesReplayState(apiKeyID, groupID, requestModel, state, time.Minute)
 
 	// Second streaming request with previous_response_id
-	secondReq := &transformerModel.InternalLLMRequest{
-		Model:              requestModel,
+	secondReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: requestModel,
 		Stream:             &stream,
 		PreviousResponseID: stringPtr("resp_stream456"),
 		Messages: []transformerModel.Message{
 			{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("Continue")}},
 		},
-		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
+		APIFormat: transformerModel.APIFormatOpenAIResponse},
 	}
 
 	loadedState := resolveResponsesReplayState(apiKeyID, groupID, requestModel, secondReq)
@@ -226,16 +219,14 @@ func TestHTTPReplayWithToolCalls(t *testing.T) {
 	groupID := 100
 	requestModel := "gpt-4"
 
-	firstReq := &transformerModel.InternalLLMRequest{
-		Model: requestModel,
+	firstReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: requestModel,
 		Messages: []transformerModel.Message{
 			{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("What's the weather?")}},
 		},
-		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
+		APIFormat: transformerModel.APIFormatOpenAIResponse},
 	}
 
-	firstResp := &transformerModel.InternalLLMResponse{
-		ID:    "resp_tool789",
+	firstResp := &transformerModel.InternalLLMResponse{Response: transformerModel.Response{ID: "resp_tool789",
 		Model: requestModel,
 		Choices: []transformerModel.Choice{
 			{
@@ -246,8 +237,7 @@ func TestHTTPReplayWithToolCalls(t *testing.T) {
 					},
 				},
 			},
-		},
-		RawResponsesOutputItems: json.RawMessage(`[{"type":"function_call","call_id":"call_abc","name":"get_weather","arguments":"{}"}]`),
+		}}, RawResponsesOutputItems: json.RawMessage(`[{"type":"function_call","call_id":"call_abc","name":"get_weather","arguments":"{}"}]`),
 	}
 
 	state := &wsConversationState{
@@ -259,13 +249,12 @@ func TestHTTPReplayWithToolCalls(t *testing.T) {
 	storeResponsesReplayState(apiKeyID, groupID, requestModel, state, time.Minute)
 
 	// Second request with tool output
-	secondReq := &transformerModel.InternalLLMRequest{
-		Model:              requestModel,
+	secondReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: requestModel,
 		PreviousResponseID: stringPtr("resp_tool789"),
 		Messages: []transformerModel.Message{
 			{Role: "tool", ToolCallID: stringPtr("call_abc"), Content: transformerModel.MessageContent{Content: stringPtr("Sunny, 25°C")}},
 		},
-		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
+		APIFormat: transformerModel.APIFormatOpenAIResponse},
 	}
 
 	loadedState := resolveResponsesReplayState(apiKeyID, groupID, requestModel, secondReq)
@@ -296,21 +285,19 @@ func TestHTTPReplayMultiTurnChain(t *testing.T) {
 	channelKeyID := 30
 
 	// === Turn 1: Initial request ===
-	turn1Req := &transformerModel.InternalLLMRequest{
-		Model: requestModel,
+	turn1Req := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: requestModel,
 		Messages: []transformerModel.Message{
 			{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("Hello")}},
 		},
-		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
+		APIFormat: transformerModel.APIFormatOpenAIResponse},
 	}
 
-	turn1Resp := &transformerModel.InternalLLMResponse{
-		ID:                      "resp_turn1",
-		Model:                   requestModel,
-		RawResponsesOutputItems: json.RawMessage(`[{"type":"message","role":"assistant","content":[{"type":"text","text":"Hi there!"}]}]`),
+	turn1Resp := &transformerModel.InternalLLMResponse{Response: transformerModel.Response{ID: "resp_turn1",
+		Model: requestModel,
+
 		Choices: []transformerModel.Choice{
 			{Message: &transformerModel.Message{Role: "assistant", Content: transformerModel.MessageContent{Content: stringPtr("Hi there!")}}},
-		},
+		}}, RawResponsesOutputItems: json.RawMessage(`[{"type":"message","role":"assistant","content":[{"type":"text","text":"Hi there!"}]}]`),
 	}
 
 	state1 := &wsConversationState{
@@ -322,13 +309,12 @@ func TestHTTPReplayMultiTurnChain(t *testing.T) {
 	storeResponsesReplayState(apiKeyID, groupID, requestModel, state1, time.Minute)
 
 	// === Turn 2: Replay continuation ===
-	turn2Req := &transformerModel.InternalLLMRequest{
-		Model:              requestModel,
+	turn2Req := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: requestModel,
 		PreviousResponseID: stringPtr("resp_turn1"),
 		Messages: []transformerModel.Message{
 			{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("How are you?")}},
 		},
-		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
+		APIFormat: transformerModel.APIFormatOpenAIResponse},
 	}
 
 	loadedState2 := resolveResponsesReplayState(apiKeyID, groupID, requestModel, turn2Req)
@@ -348,13 +334,12 @@ func TestHTTPReplayMultiTurnChain(t *testing.T) {
 	}
 
 	// Simulate turn 2 response
-	turn2Resp := &transformerModel.InternalLLMResponse{
-		ID:                      "resp_turn2",
-		Model:                   requestModel,
-		RawResponsesOutputItems: json.RawMessage(`[{"type":"message","role":"assistant","content":[{"type":"text","text":"I'm good!"}]}]`),
+	turn2Resp := &transformerModel.InternalLLMResponse{Response: transformerModel.Response{ID: "resp_turn2",
+		Model: requestModel,
+
 		Choices: []transformerModel.Choice{
 			{Message: &transformerModel.Message{Role: "assistant", Content: transformerModel.MessageContent{Content: stringPtr("I'm good!")}}},
-		},
+		}}, RawResponsesOutputItems: json.RawMessage(`[{"type":"message","role":"assistant","content":[{"type":"text","text":"I'm good!"}]}]`),
 	}
 
 	// Save turn 2 state (based on existing state)
@@ -365,13 +350,12 @@ func TestHTTPReplayMultiTurnChain(t *testing.T) {
 	storeResponsesReplayState(apiKeyID, groupID, requestModel, state2, time.Minute)
 
 	// === Turn 3: Continue replay from turn 2 ===
-	turn3Req := &transformerModel.InternalLLMRequest{
-		Model:              requestModel,
+	turn3Req := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: requestModel,
 		PreviousResponseID: stringPtr("resp_turn2"),
 		Messages: []transformerModel.Message{
 			{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("Great!")}},
 		},
-		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
+		APIFormat: transformerModel.APIFormatOpenAIResponse},
 	}
 
 	loadedState3 := resolveResponsesReplayState(apiKeyID, groupID, requestModel, turn3Req)
@@ -443,12 +427,11 @@ func TestHTTPReplayFailedMergeKeepsOriginalRequest(t *testing.T) {
 
 	// Request with previous_response_id but NO current messages or raw input items
 	// This will cause buildRequestInputItems to fail and return ok=false
-	req := &transformerModel.InternalLLMRequest{
-		Model:              requestModel,
+	req := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: requestModel,
 		PreviousResponseID: stringPtr("resp_empty"),
 		Messages:           nil, // Empty messages
-		RawInputItems:      nil, // Empty raw items
-		RawAPIFormat:       transformerModel.APIFormatOpenAIResponse,
+		// Empty raw items
+		APIFormat: transformerModel.APIFormatOpenAIResponse}, RawInputItems: nil,
 	}
 
 	originalPrevID := req.OpenAIPreviousResponseID()

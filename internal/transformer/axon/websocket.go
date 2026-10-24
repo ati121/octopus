@@ -60,6 +60,10 @@ func (t *WebSocketTransport) DoStream(ctx context.Context, request *httpclient.R
 	return t.executor.DoStream(ctx, request)
 }
 
+func (t *WebSocketTransport) Do(ctx context.Context, request *httpclient.Request) (*httpclient.Response, error) {
+	return t.executor.Do(ctx, request)
+}
+
 // ResetWebSocketTransportsForTest drops every cached transport. Tests point
 // channels at ephemeral servers, so a transport must never survive a test.
 func ResetWebSocketTransportsForTest() {

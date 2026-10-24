@@ -227,7 +227,7 @@ func (f modelFetchRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, e
 	return f(req)
 }
 
-func TestFetchAnthropicModelsUsesSenseNovaBearerAuth(t *testing.T) {
+func TestFetchAnthropicModelsUsesStandardAuthRegardlessOfHost(t *testing.T) {
 	var authorization string
 	var apiKey string
 	client := &http.Client{Transport: modelFetchRoundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -252,11 +252,11 @@ func TestFetchAnthropicModelsUsesSenseNovaBearerAuth(t *testing.T) {
 	if len(models) != 1 || models[0] != "sensenova-6.8-flash-lite" {
 		t.Fatalf("models = %v", models)
 	}
-	if authorization != "Bearer sense-model-key" {
+	if authorization != "" {
 		t.Fatalf("Authorization = %q", authorization)
 	}
-	if apiKey != "" {
-		t.Fatalf("X-API-Key should be empty, got %q", apiKey)
+	if apiKey != "sense-model-key" {
+		t.Fatalf("X-API-Key = %q", apiKey)
 	}
 }
 

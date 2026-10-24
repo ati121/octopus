@@ -1,6 +1,10 @@
 package relay
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/looplj/axonhub/llm"
+)
 
 const (
 	CodeRelayModelNotSupported     = "relay.model_not_supported"
@@ -16,7 +20,7 @@ const (
 // ErrEmptyUpstreamResponse marks a successful HTTP response with no usable
 // completion payload. It is retryable so the relay can fail over before writing
 // a blank response to the client.
-var ErrEmptyUpstreamResponse = errors.New("upstream returned empty response body")
+var ErrEmptyUpstreamResponse = llm.ErrEmptyResponse
 
 // errRelayNoAvailableChannel 记录「分组下没有任何可用渠道」这个终态。
 var errRelayNoAvailableChannel = errors.New("no available channel")

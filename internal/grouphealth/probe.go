@@ -124,86 +124,28 @@ func buildProbeInternalRequest(channelType outbound.OutboundType, modelName stri
 	stream := false
 	ping := "ping"
 	one := int64(1)
-
+	native := llm.Request{Model: modelName, RequestType: llm.RequestTypeChat, APIFormat: outbound.APIFormatOf(channelType), Stream: &stream, MaxTokens: &one, Messages: []llm.Message{{Role: "user", Content: llm.MessageContent{Content: &ping}}}}
 	switch channelType {
 	case outbound.OutboundTypeRerank:
-		return &transformerModel.InternalLLMRequest{
-			Model:         modelName,
-			RawAPIFormat:  transformerModel.APIFormatRerank,
-			RerankPayload: []byte(`{"model":"probe","query":"ping","documents":["ping"]}`),
-		}
+		native.Messages = nil
+		native.RequestType = llm.RequestTypeRerank
+		native.Rerank = &llm.RerankRequest{Query: "ping", Documents: []string{"ping"}}
 	case outbound.OutboundTypeSystemOne:
-		// System One 直接使用 AxonHub 的原生请求结构，本地不再保存原始报文。
-		return &transformerModel.InternalLLMRequest{
-			Model:        modelName,
-			RawAPIFormat: transformerModel.APIFormatSystemOne,
-			Native: &llm.Request{
-				Model:       modelName,
-				RequestType: llm.RequestTypeSystemOne,
-				APIFormat:   llm.APIFormatTypeSafeSystemOne,
-				SystemOne: &llm.SystemOneRequest{
-					State: "ping",
-					Questions: map[string]llm.SystemOneQuestion{
-						"probe": {Type: "noul", Instructions: "Is this a ping?"},
-					},
-				},
-			},
-		}
+		native.Messages = nil
+		native.RequestType = llm.RequestTypeSystemOne
+		native.SystemOne = &llm.SystemOneRequest{State: "ping", Questions: map[string]llm.SystemOneQuestion{"probe": {Type: "noul", Instructions: "Is this a ping?"}}}
 	case outbound.OutboundTypeDecisions:
-		return &transformerModel.InternalLLMRequest{
-			Model:            modelName,
-			RawAPIFormat:     transformerModel.APIFormatOpenAIDecisions,
-			DecisionsPayload: []byte(`{"model":"probe","input":"ping","questions":[{"type":"noul","name":"probe","instructions":"Is this a ping?"}]}`),
-		}
+		native.Messages = nil
+		native.RequestType = llm.RequestTypeDecisions
+		native.Decisions = &llm.DecisionsRequest{Body: []byte(`{"model":"probe","input":"ping","questions":[{"type":"noul","name":"probe","instructions":"Is this a ping?"}]}`)}
 	case outbound.OutboundTypeOpenAIEmbedding:
-		return &transformerModel.InternalLLMRequest{
-			Model:        modelName,
-			RawAPIFormat: transformerModel.APIFormatOpenAIEmbedding,
-			EmbeddingInput: &transformerModel.EmbeddingInput{
-				Single: &ping,
-			},
-		}
+		native.Messages = nil
+		native.RequestType = llm.RequestTypeEmbedding
+		native.Embedding = &llm.EmbeddingRequest{Input: llm.EmbeddingInput{String: ping}}
 	case outbound.OutboundTypeOpenAIResponse, outbound.OutboundTypeCodex:
-		return &transformerModel.InternalLLMRequest{
-			Model:               modelName,
-			RawAPIFormat:        transformerModel.APIFormatOpenAIResponse,
-			Messages:            []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &ping}}},
-			Stream:              &stream,
-			MaxCompletionTokens: &one,
-		}
-	case outbound.OutboundTypeAnthropic:
-		return &transformerModel.InternalLLMRequest{
-			Model:        modelName,
-			RawAPIFormat: transformerModel.APIFormatAnthropicMessage,
-			Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &ping}}},
-			Stream:       &stream,
-			MaxTokens:    &one,
-		}
-	case outbound.OutboundTypeGemini:
-		return &transformerModel.InternalLLMRequest{
-			Model:        modelName,
-			RawAPIFormat: transformerModel.APIFormatGeminiContents,
-			Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &ping}}},
-			Stream:       &stream,
-			MaxTokens:    &one,
-		}
-	case outbound.OutboundTypeVolcengine:
-		return &transformerModel.InternalLLMRequest{
-			Model:        modelName,
-			RawAPIFormat: transformerModel.APIFormatOpenAIChatCompletion,
-			Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &ping}}},
-			Stream:       &stream,
-			MaxTokens:    &one,
-		}
-	default:
-		return &transformerModel.InternalLLMRequest{
-			Model:        modelName,
-			RawAPIFormat: transformerModel.APIFormatOpenAIChatCompletion,
-			Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &ping}}},
-			Stream:       &stream,
-			MaxTokens:    &one,
-		}
+		native.MaxCompletionTokens = &one
 	}
+	return &transformerModel.InternalLLMRequest{Request: native}
 }
 
 func applyCustomHeaders(request *http.Request, headers []model.CustomHeader) {

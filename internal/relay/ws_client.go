@@ -393,11 +393,10 @@ func warmupUpstreamWSConnection(ctx context.Context, channel *dbmodel.Channel, u
 		return fmt.Errorf("upstream ws unavailable: %w", err)
 	}
 	out := axon.NewWebSocketOutbound(channel.EndpointPath, wsProxyConfig(channel))
-	view := &transformerModel.InternalLLMRequest{
-		Model:        channel.Model,
-		Stream:       boolPtr(true),
-		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
-		Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: strPtrValue("ping")}}},
+	view := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: channel.Model,
+		Stream:    boolPtr(true),
+		APIFormat: transformerModel.APIFormatOpenAIResponse,
+		Messages:  []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: strPtrValue("ping")}}}},
 	}
 	wire, err := out.WireRequest(warmupCtx, view, channel.GetBaseUrl(), usedKey.ChannelKey)
 	if err != nil {
@@ -576,6 +575,9 @@ func runWSRelay(ctx context.Context, req *relayRequest, group *dbmodel.Group) ws
 				}
 			}
 
+			req.streamPayloadWritten.Store(false)
+			req.responseCollected.Store(false)
+			req.metrics.ResetAttemptResponse()
 			ra := &relayAttempt{
 				relayRequest:         req,
 				outAdapter:           outAdapter,

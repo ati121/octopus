@@ -15,6 +15,7 @@ import (
 	"github.com/bestruirui/octopus/internal/relay/balancer"
 	"github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/gin-gonic/gin"
+	"github.com/looplj/axonhub/llm/httpclient"
 )
 
 // maxSSEEventSize 定义 SSE 事件的最大大小。
@@ -37,6 +38,11 @@ func init() {
 		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
 			maxRawStreamBufferSize = v
 		}
+	}
+	for _, ct := range []string{"text/event-stream", "text/event-stream; charset=utf-8"} {
+		httpclient.RegisterDecoder(ct, func(ctx context.Context, body io.ReadCloser) httpclient.StreamDecoder {
+			return httpclient.NewSSEDecoderWithMaxEventSize(ctx, body, maxSSEEventSize)
+		})
 	}
 }
 
@@ -74,19 +80,6 @@ type StreamWriter interface {
 	Written() bool
 	Header() http.Header
 	WriteHeader(code int)
-}
-
-// UpstreamReader abstracts reading events from upstream (SSE or WebSocket).
-type UpstreamReader interface {
-	// ReadEvent reads the next event data. Returns io.EOF at end of stream.
-	ReadEvent(ctx context.Context) ([]byte, error)
-	// StatusCode returns the HTTP status code (for error handling).
-	StatusCode() int
-	// Headers returns the response headers.
-	Headers() http.Header
-	// Body returns the raw response body for non-stream scenarios.
-	Body() io.ReadCloser
-	Close() error
 }
 
 type relayRequest struct {

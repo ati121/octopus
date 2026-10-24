@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/bestruirui/octopus/internal/transformer/model"
-	"github.com/looplj/axonhub/llm"
 	"github.com/tidwall/gjson"
 )
 
@@ -53,7 +52,7 @@ func TestCodexSSEToNonStream(t *testing.T) {
 				t.Fatal(err)
 			}
 			if gjson.GetBytes(body, "choices.0.message.content").String() != "answer" {
-				t.Fatalf("lost content: %s; raw=%s; native=%+v", body, response.RawResponsesOutputItems, response.Native)
+				t.Fatalf("lost content: %s; raw=%s; native=%+v", body, response.RawResponsesOutputItems, response.Response)
 			}
 			if response.Usage == nil || response.Usage.PromptTokens != 12 || response.Usage.CompletionTokens != 3 {
 				t.Fatalf("lost usage: %+v", response.Usage)
@@ -65,32 +64,30 @@ func TestCodexSSEToNonStream(t *testing.T) {
 	}
 }
 
-func TestNativeRequestIsolatesAttempts(t *testing.T) {
-	in := NewInbound(1)
-	original, err := in.TransformRequest(t.Context(), []byte(`{"model":"group","input":"hello","tools":[{"type":"web_search"}],"metadata":{"test":"original"}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, _ := json.Marshal(original.Native)
-	private := llm.CloneProviderExtensions(original.Native.ProviderExtensions)
-	first, err := NativeRequest(t.Context(), original)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first.Messages[0].Role = "assistant"
-	first.Metadata["test"] = "changed"
-	if first.RawRequest != nil {
-		first.RawRequest.Body[0] = ' '
-	}
-	if first.ProviderExtensions != nil && first.ProviderExtensions.OpenAIResponses != nil {
-		first.ProviderExtensions.OpenAIResponses.Request.RawTools = nil
-	}
-	after, _ := json.Marshal(original.Native)
-	if !bytes.Equal(snapshot, after) {
-		t.Fatal("attempt mutated shared request")
-	}
-	if private != nil && len(private.OpenAIResponses.Request.RawTools) != len(original.Native.ProviderExtensions.OpenAIResponses.Request.RawTools) {
-		t.Fatal("attempt mutated private provider fields")
+func TestNativeRequestIsolatesTransformerAttempts(t *testing.T) {
+	for _, input := range []struct {
+		kind int
+		body string
+	}{
+		{0, `{"model":"group","messages":[{"role":"user","content":"hello"}],"stream":true}`},
+		{1, `{"model":"group","input":"hello","tools":[{"type":"web_search"}],"metadata":{"test":"original"},"stream":true}`},
+		{2, `{"model":"group","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":true}`},
+	} {
+		original, err := NewInbound(input.kind).TransformRequest(t.Context(), []byte(input.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot, _ := json.Marshal(original)
+		for _, kind := range []int{0, 1, 2, 3, 4, 6, 0, 1} {
+			_, err := NewOutbound(kind).WireRequest(t.Context(), original, "https://gateway.example/v1", "key")
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, _ := json.Marshal(original)
+			if !bytes.Equal(snapshot, after) {
+				t.Fatalf("transformer %d mutated input %d", kind, input.kind)
+			}
+		}
 	}
 }
 
@@ -100,7 +97,7 @@ func TestAnthropicCacheUsageProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Usage == nil || response.Usage.EffectiveInputTokens() != 35 || response.Usage.BillableCacheReadInput() != 20 || response.Usage.BillableCacheWriteInput() != 5 {
+	if response.Usage == nil || response.Usage.PromptTokens != 35 || response.Usage.PromptTokensDetails.CachedTokens != 20 || response.Usage.PromptTokensDetails.WriteCachedTokens != 5 {
 		t.Fatalf("cache accounting changed: %+v", response.Usage)
 	}
 }
@@ -119,6 +116,32 @@ func TestNativeProviderExtensionsSurviveProjection(t *testing.T) {
 	body, _ := io.ReadAll(request.Body)
 	if gjson.GetBytes(body, "tools.0.type").String() != "web_search" {
 		t.Fatalf("native tool lost: %s", body)
+	}
+}
+
+func TestStandardAuthDoesNotDependOnHost(t *testing.T) {
+	for _, base := range []string{"https://token.sensenova.cn/v1", "https://gateway.example/v1"} {
+		for _, kind := range []int{0, 2} {
+			view, err := NewInbound(0).TransformRequest(t.Context(), []byte(`{"model":"group","messages":[{"role":"user","content":"hello"}]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := NewOutbound(kind).WireRequest(t.Context(), view, base, "selected-key")
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, err := HTTPRequest(t.Context(), wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == 2 {
+				if request.Header.Get("X-Api-Key") != "selected-key" || request.Header.Get("Authorization") != "" {
+					t.Fatalf("Anthropic auth changed for %s: %v", base, request.Header)
+				}
+			} else if request.Header.Get("Authorization") != "Bearer selected-key" || request.Header.Get("X-Api-Key") != "" {
+				t.Fatalf("Chat auth changed for %s: %v", base, request.Header)
+			}
+		}
 	}
 }
 

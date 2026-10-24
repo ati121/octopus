@@ -3,23 +3,21 @@
 package axon
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 
-	"github.com/bestruirui/octopus/internal/providercompat"
 	"github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/utils/iolimit"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/auth"
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/looplj/axonhub/llm/oauth"
+	streamusage "github.com/looplj/axonhub/llm/pipeline/stream"
 	"github.com/looplj/axonhub/llm/transformer"
 	"github.com/looplj/axonhub/llm/transformer/anthropic"
 	"github.com/looplj/axonhub/llm/transformer/doubao"
@@ -85,181 +83,72 @@ func (i *Inbound) TransformHTTPRequest(ctx context.Context, req *http.Request, b
 	if err != nil {
 		return nil, err
 	}
+	r.RawRequest = wire
 	return ProjectRequest(r, i.Format, body)
 }
 
-// ProjectRequest creates an observation/session view. Native remains authoritative.
+func (i *Inbound) SetCollector(collect func(context.Context) (*model.InternalLLMResponse, error)) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.collect = collect
+}
+
+func (o *Outbound) Configure(base, key string) error { return o.configure(base, key) }
+
+// ProjectRequest attaches relay state without serializing the protocol object.
 func ProjectRequest(r *llm.Request, format model.APIFormat, raw []byte) (*model.InternalLLMRequest, error) {
-	// The transport body is not part of the observation view. Serializing it
-	// would encode the entire request a second time, including inline media.
-	projection := *r
-	projection.RawRequest = nil
-	b, err := json.Marshal(&projection)
-	if err != nil {
-		return nil, err
-	}
-	var view model.InternalLLMRequest
-	if err := json.Unmarshal(b, &view); err != nil {
-		return nil, fmt.Errorf("project request: %w", err)
-	}
-	view.Native, view.RawAPIFormat, view.RawRequest = r, format, raw
-	if r.Embedding != nil {
-		b, _ := json.Marshal(r.Embedding)
-		var fields struct {
-			Input *model.EmbeddingInput `json:"input"`
-		}
-		if err := json.Unmarshal(b, &fields); err != nil {
-			return nil, err
-		}
-		view.EmbeddingInput = fields.Input
-	}
-	if r.Rerank != nil {
-		view.RerankPayload = append([]byte(nil), raw...)
-	}
-	if r.Decisions != nil {
-		view.DecisionsPayload = append([]byte(nil), raw...)
+	r.APIFormat = format
+	view := &model.InternalLLMRequest{Request: *r, RawBody: raw}
+	if r.RawRequest != nil {
+		view.Query = r.RawRequest.Query
 	}
 	if format == model.APIFormatOpenAIResponse {
-		var wire struct {
-			Input    json.RawMessage `json:"input"`
-			Previous *string         `json:"previous_response_id"`
+		var input struct {
+			Input json.RawMessage `json:"input"`
 		}
-		if err := json.Unmarshal(raw, &wire); err != nil {
+		if err := json.Unmarshal(raw, &input); err != nil {
 			return nil, err
 		}
-		if len(wire.Input) > 0 && wire.Input[0] == '[' {
-			view.SetOpenAIRawInputItems(wire.Input)
+		if len(input.Input) > 0 && input.Input[0] == '[' {
+			view.RawInputItems = input.Input
 		}
-		view.PreviousResponseID = wire.Previous
 	}
-	return &view, nil
+	return view, nil
 }
 
 func NativeRequest(ctx context.Context, view *model.InternalLLMRequest) (*llm.Request, error) {
 	if view == nil {
 		return nil, errors.New("request is nil")
 	}
-	if view.Native != nil {
-		r := cloneNativeRequest(view.Native)
-		if r.Decisions != nil && len(r.Decisions.Body) == 0 {
-			r.Decisions.Body = append([]byte(nil), view.DecisionsPayload...)
+	r := cloneNativeRequest(&view.Request)
+	if view.Query != nil {
+		if r.RawRequest == nil {
+			r.RawRequest = &httpclient.Request{Headers: make(http.Header)}
 		}
-		r.Model, r.Stream = view.Model, view.Stream
-		if view.Stream != nil {
-			stream := *view.Stream
-			r.Stream = &stream
-		}
-		if r.RawRequest != nil {
-			r.RawRequest.Query = cloneRequestQuery(view.Query)
-		}
-		if view.RawAPIFormat == model.APIFormatOpenAIResponse {
-			r.PreviousResponseID = view.GetOpenAIResponsesOptions().PreviousResponseID
-			if r.PreviousResponseID != nil {
-				previous := *r.PreviousResponseID
-				r.PreviousResponseID = &previous
-			}
-			if view.IsOpenAIExactReplayRequest() {
-				// Session recovery changes raw input, so parse that request with AxonHub again.
-				body, err := sjson.SetRawBytes(view.RawRequest, "input", view.OpenAIRawInputItems())
-				if err != nil {
-					return nil, err
-				}
-				body, _ = sjson.DeleteBytes(body, "previous_response_id")
-				body, _ = sjson.DeleteBytes(body, "conversation")
-				body, _ = sjson.SetBytes(body, "model", view.Model)
-				return responses.NewInboundTransformer().TransformRequest(ctx, &httpclient.Request{Method: "POST", Body: body, ContentType: "application/json", Headers: http.Header{"Content-Type": {"application/json"}}, Query: view.Query})
-			}
-		}
-		return r, nil
+		r.RawRequest.Query = cloneRequestQuery(view.Query)
 	}
-	// Locally generated health probes contain no provider extensions.
-	if len(view.DecisionsPayload) > 0 {
-		r, e := NewInbound(6).TransformRequest(ctx, view.DecisionsPayload)
-		if e != nil {
-			return nil, e
-		}
-		r.Native.Model = view.Model
-		return r.Native, nil
-	}
-	if len(view.RerankPayload) > 0 {
-		r, e := NewInbound(4).TransformRequest(ctx, view.RerankPayload)
-		if e != nil {
-			return nil, e
-		}
-		r.Native.Model = view.Model
-		return r.Native, nil
-	}
-	b, err := json.Marshal(view)
-	if err != nil {
-		return nil, err
-	}
-	var r llm.Request
-	if err := json.Unmarshal(b, &r); err != nil {
-		return nil, err
-	}
-	if view.EmbeddingInput != nil {
-		b, err = json.Marshal(map[string]any{"model": view.Model, "input": view.EmbeddingInput, "dimensions": view.EmbeddingDimensions, "encoding_format": view.EmbeddingEncodingFormat})
+	if view.IsOpenAIExactReplayRequest() {
+		body, err := sjson.SetRawBytes(view.RawBody, "input", view.OpenAIRawInputItems())
 		if err != nil {
 			return nil, err
 		}
-		return openai.NewEmbeddingInboundTransformer().TransformRequest(ctx, &httpclient.Request{Method: "POST", Body: b, ContentType: "application/json", Headers: make(http.Header)})
+		body, _ = sjson.DeleteBytes(body, "previous_response_id")
+		body, _ = sjson.DeleteBytes(body, "conversation")
+		body, _ = sjson.SetBytes(body, "model", view.Model)
+		return responses.NewInboundTransformer().TransformRequest(ctx, &httpclient.Request{Method: "POST", Body: body, ContentType: "application/json", Headers: make(http.Header), Query: view.Query})
 	}
-	return &r, nil
+	return r, nil
 }
 
 func ProjectResponse(r *llm.Response) (*model.InternalLLMResponse, error) {
 	if r == nil {
 		return nil, nil
 	}
-	b, err := json.Marshal(r)
-	if err != nil {
-		return nil, err
-	}
-	var view model.InternalLLMResponse
-	if err = json.Unmarshal(b, &view); err != nil {
-		return nil, fmt.Errorf("project response: %w", err)
-	}
-	view.Native = r
-	if r.Error != nil && view.Error != nil {
-		view.Error.StatusCode = r.Error.StatusCode
-	}
-	if r.Embedding != nil {
-		b, _ := json.Marshal(r.Embedding)
-		var f struct {
-			Data []model.EmbeddingObject `json:"data"`
-		}
-		if err = json.Unmarshal(b, &f); err != nil {
-			return nil, err
-		}
-		view.EmbeddingData = f.Data
-	}
-	if r.Rerank != nil {
-		view.RerankPayload, _ = json.Marshal(r.Rerank)
-	}
-	if r.Decisions != nil {
-		// llm.DecisionsResponse.Body is also untagged; prefer the raw upstream
-		// body so the inbound transformer can return it unchanged.
-		if len(r.Decisions.Body) > 0 {
-			view.DecisionsPayload = append([]byte(nil), r.Decisions.Body...)
-		} else if len(r.Decisions.Answers) > 0 {
-			view.DecisionsPayload, _ = json.Marshal(r.Decisions)
-		}
-	}
-	return &view, nil
+	return &model.InternalLLMResponse{Response: *r}, nil
 }
 
 func (i *Inbound) TransformResponse(ctx context.Context, view *model.InternalLLMResponse) ([]byte, error) {
-	r := view.Native
-	if r == nil {
-		b, e := json.Marshal(view)
-		if e != nil {
-			return nil, e
-		}
-		r = &llm.Response{}
-		if e = json.Unmarshal(b, r); e != nil {
-			return nil, e
-		}
-	}
+	r := &view.Response
 	wire, err := i.Transformer.TransformResponse(ctx, r)
 	if err != nil {
 		return nil, err
@@ -276,15 +165,6 @@ func (i *Inbound) GetInternalResponse(ctx context.Context) (*model.InternalLLMRe
 		return i.collect(ctx)
 	}
 	return i.response, nil
-}
-func (i *Inbound) StreamTerminalEvents() map[string]struct{} {
-	switch i.Format {
-	case model.APIFormatOpenAIResponse:
-		return map[string]struct{}{"response.completed": {}, "response.failed": {}, "response.incomplete": {}}
-	case model.APIFormatAnthropicMessage:
-		return map[string]struct{}{"message_stop": {}}
-	}
-	return nil
 }
 
 type Outbound struct {
@@ -449,9 +329,6 @@ func (o *Outbound) TransformRequest(ctx context.Context, view *model.InternalLLM
 	if err != nil {
 		return nil, err
 	}
-	if o.Kind == 2 {
-		providercompat.SetAnthropicAuthHeader(req.Header, base, key)
-	}
 	return req, nil
 }
 
@@ -466,13 +343,9 @@ func (o *Outbound) WireRequest(ctx context.Context, view *model.InternalLLMReque
 	if err != nil {
 		return nil, err
 	}
-	// Chat-compatible streams only report final usage when explicitly requested.
-	if (o.Kind == 0 || o.Kind == 4) && r.Stream != nil && *r.Stream &&
-		(r.RequestType == llm.RequestTypeChat || r.RequestType == "") {
-		if r.StreamOptions == nil {
-			r.StreamOptions = &llm.StreamOptions{}
-		}
-		r.StreamOptions.IncludeUsage = true
+	r, err = streamusage.EnsureUsage().OnInboundLlmRequest(ctx, r)
+	if err != nil {
+		return nil, err
 	}
 	o.Request, err = o.Transformer.TransformRequest(ctx, r)
 	if err != nil {
@@ -483,49 +356,12 @@ func (o *Outbound) WireRequest(ctx context.Context, view *model.InternalLLMReque
 	}); ok {
 		o.Request = finalizer.FinalizeTransportRequest(o.Request)
 	}
-	if !o.Request.SkipInboundQueryMerge {
-		if o.Request.Query == nil {
-			o.Request.Query = make(url.Values)
-		}
-		for k, v := range view.Query {
-			if _, ok := o.Request.Query[k]; !ok {
-				o.Request.Query[k] = v
-			}
-		}
-	}
+	o.Request = httpclient.MergeInboundRequest(o.Request, r.RawRequest)
 	return o.Request, nil
 }
 
 func HTTPRequest(ctx context.Context, r *httpclient.Request) (*http.Request, error) {
-	u, err := url.Parse(r.URL)
-	if err != nil {
-		return nil, err
-	}
-	q := u.Query()
-	for k, v := range r.Query {
-		q[k] = v
-	}
-	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, r.Method, u.String(), bytes.NewReader(r.Body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header = r.Headers.Clone()
-	if req.Header == nil {
-		req.Header = make(http.Header)
-	}
-	if r.ContentType != "" {
-		req.Header.Set("Content-Type", r.ContentType)
-	}
-	if r.Auth != nil {
-		switch r.Auth.Type {
-		case httpclient.AuthTypeBearer:
-			req.Header.Set("Authorization", "Bearer "+r.Auth.APIKey)
-		case httpclient.AuthTypeAPIKey:
-			req.Header.Set(r.Auth.HeaderKey, r.Auth.APIKey)
-		}
-	}
-	return req, nil
+	return httpclient.BuildHttpRequest(ctx, r)
 }
 
 func (o *Outbound) TransformResponse(ctx context.Context, r *http.Response) (*model.InternalLLMResponse, error) {
@@ -582,13 +418,13 @@ func ResponsesPayload(ctx context.Context, view *model.InternalLLMRequest) ([]by
 }
 
 func MarshalResponsesInputItems(messages []model.Message) (json.RawMessage, error) {
-	r, err := NativeRequest(context.Background(), &model.InternalLLMRequest{Model: "session", Messages: messages})
+	r, err := NativeRequest(context.Background(), &model.InternalLLMRequest{Request: llm.Request{Model: "session", Messages: messages}})
 	if err != nil {
 		return nil, err
 	}
 	array := true
 	r.TransformOptions.ArrayInputs = &array
-	body, err := ResponsesPayload(context.Background(), &model.InternalLLMRequest{Model: r.Model, Native: r})
+	body, err := ResponsesPayload(context.Background(), &model.InternalLLMRequest{Request: *r})
 	if err != nil {
 		return nil, err
 	}

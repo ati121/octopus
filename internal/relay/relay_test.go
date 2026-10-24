@@ -26,6 +26,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
+	"github.com/looplj/axonhub/llm/httpclient"
 )
 
 func TestParseRequestReturnsBadRequestForInvalidPayload(t *testing.T) {
@@ -56,7 +57,7 @@ func TestParseRequestAcceptsRerankPayload(t *testing.T) {
 	if string(rawBody) != body {
 		t.Fatalf("expected raw request body to be preserved, got %s", rawBody)
 	}
-	if request.Model != "Pro/BAAI/bge-reranker-v2-m3" || request.RawAPIFormat != transformerModel.APIFormatRerank {
+	if request.Model != "Pro/BAAI/bge-reranker-v2-m3" || request.APIFormat != transformerModel.APIFormatRerank {
 		t.Fatalf("unexpected rerank request: %+v", request)
 	}
 	if request.Query.Get("trace") != "1" {
@@ -68,31 +69,18 @@ func TestParseRequestAcceptsRerankPayload(t *testing.T) {
 }
 
 func TestChannelTypeCompatibilitySeparatesChatEmbeddingAndRerank(t *testing.T) {
-	chatRequest := &transformerModel.InternalLLMRequest{
-		Model:    "chat-model",
-		Messages: []transformerModel.Message{{Role: "user"}},
+	chatRequest := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: "chat-model",
+		Messages: []transformerModel.Message{{Role: "user"}}},
 	}
-	embeddingRequest := &transformerModel.InternalLLMRequest{
-		Model:          "embedding-model",
-		EmbeddingInput: &transformerModel.EmbeddingInput{Multiple: []string{"hello"}},
+	embeddingRequest := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: "embedding-model", Embedding: &llm.EmbeddingRequest{Input: llm.EmbeddingInput{StringArray: []string{"hello"}}}}}
+	rerankRequest := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: "rerank-model", Rerank: &llm.RerankRequest{Query: "q", Documents: []string{"d"}}}}
+	systemOneRequest := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: "jev-latest",
+
+		RequestType: llm.RequestTypeSystemOne,
+		APIFormat:   llm.APIFormatTypeSafeSystemOne,
+		SystemOne:   &llm.SystemOneRequest{State: "s"}},
 	}
-	rerankRequest := &transformerModel.InternalLLMRequest{
-		Model:         "rerank-model",
-		RerankPayload: json.RawMessage(`{"query":"q","documents":["d"]}`),
-	}
-	systemOneRequest := &transformerModel.InternalLLMRequest{
-		Model: "jev-latest",
-		Native: &llm.Request{
-			Model:       "jev-latest",
-			RequestType: llm.RequestTypeSystemOne,
-			APIFormat:   llm.APIFormatTypeSafeSystemOne,
-			SystemOne:   &llm.SystemOneRequest{State: "s"},
-		},
-	}
-	decisionsRequest := &transformerModel.InternalLLMRequest{
-		Model:            "gpt-6-luna",
-		DecisionsPayload: json.RawMessage(`{"input":"i","questions":[{"type":"choice"}]}`),
-	}
+	decisionsRequest := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: "gpt-6-luna", Decisions: &llm.DecisionsRequest{Body: []byte(`{"input":"i","questions":[{"type":"choice"}]}`)}}}
 
 	tests := []struct {
 		name        string
@@ -137,20 +125,6 @@ func TestChannelTypeCompatibilitySeparatesChatEmbeddingAndRerank(t *testing.T) {
 	}
 }
 
-func TestIsEmptyUpstreamResponseAcceptsRerankPayload(t *testing.T) {
-	response := &transformerModel.InternalLLMResponse{RerankPayload: json.RawMessage(`{"results":[]}`)}
-	if isEmptyUpstreamResponse(response) {
-		t.Fatal("expected rerank payload to count as a non-empty upstream response")
-	}
-}
-
-func TestIsEmptyUpstreamResponseAcceptsSystemOneResponse(t *testing.T) {
-	response := &transformerModel.InternalLLMResponse{Native: &llm.Response{SystemOne: &llm.SystemOneResponse{}}}
-	if isEmptyUpstreamResponse(response) {
-		t.Fatal("expected system one response to count as a non-empty upstream response")
-	}
-}
-
 func TestHandleStreamResponsePassthroughAnthropicPreservesRawSSE(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -178,10 +152,9 @@ func TestHandleStreamResponsePassthroughAnthropicPreservesRawSSE(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-	internalReq := &transformerModel.InternalLLMRequest{
-		Model:        "claude-haiku-4-5-20251001",
-		Stream:       boolPtr(true),
-		RawAPIFormat: transformerModel.APIFormatAnthropicMessage,
+	internalReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Messages: []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("hello")}}}, Model: "claude-haiku-4-5-20251001",
+		Stream:    boolPtr(true),
+		APIFormat: transformerModel.APIFormatAnthropicMessage},
 	}
 	req := &relayRequest{
 		c:               c,
@@ -228,10 +201,9 @@ func TestHandleStreamResponsePassthroughOpenAIResponsesPreservesRawSSE(t *testin
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	internalReq := &transformerModel.InternalLLMRequest{
-		Model:        "gpt-4o",
-		Stream:       boolPtr(true),
-		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
+	internalReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Messages: []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("hello")}}}, Model: "gpt-4o",
+		Stream:    boolPtr(true),
+		APIFormat: transformerModel.APIFormatOpenAIResponse},
 	}
 	req := &relayRequest{
 		c:               c,
@@ -310,10 +282,9 @@ func newOpenAIResponsesPassthroughAttempt(writer StreamWriter) (*relayAttempt, *
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	internalReq := &transformerModel.InternalLLMRequest{
-		Model:        "gpt-4o",
-		Stream:       boolPtr(true),
-		RawAPIFormat: transformerModel.APIFormatOpenAIResponse,
+	internalReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Messages: []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("hello")}}}, Model: "gpt-4o",
+		Stream:    boolPtr(true),
+		APIFormat: transformerModel.APIFormatOpenAIResponse},
 	}
 	req := &relayRequest{
 		c:               c,
@@ -414,7 +385,7 @@ func TestHandleStreamResponseV2DoesNotBufferSearchTools(t *testing.T) {
 	}{
 		{"client_function", transformerModel.Tool{Type: "function", Function: transformerModel.Function{Name: "web_search"}}},
 		{"responses_native", transformerModel.Tool{Type: "web_search"}},
-		{"anthropic_native", transformerModel.Tool{Type: "web_search_20250305", Function: transformerModel.Function{Name: "web_search"}, AnthropicServerSpec: json.RawMessage(`{"type":"web_search_20250305","name":"web_search"}`)}},
+		{"anthropic_native", transformerModel.Tool{Type: "web_search_20250305", Function: transformerModel.Function{Name: "web_search"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -443,11 +414,10 @@ func assertSearchToolStreamIsImmediate(t *testing.T, tool transformerModel.Tool)
 		}
 	}
 
-	internalReq := &transformerModel.InternalLLMRequest{
-		Model:        "stream-model",
-		Stream:       boolPtr(true),
-		RawAPIFormat: transformerModel.APIFormatOpenAIChatCompletion,
-		Tools:        []transformerModel.Tool{tool},
+	internalReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Messages: []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("hello")}}}, Model: "stream-model",
+		Stream:    boolPtr(true),
+		APIFormat: transformerModel.APIFormatOpenAIChatCompletion,
+		Tools:     []transformerModel.Tool{tool}},
 	}
 	req := &relayRequest{
 		c:               c,
@@ -552,10 +522,9 @@ func TestHandleStreamResponsePassthroughAnthropicClientCancelAfterTerminal(t *te
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-	internalReq := &transformerModel.InternalLLMRequest{
-		Model:        "claude-haiku-4-5-20251001",
-		Stream:       boolPtr(true),
-		RawAPIFormat: transformerModel.APIFormatAnthropicMessage,
+	internalReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Messages: []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("hello")}}}, Model: "claude-haiku-4-5-20251001",
+		Stream:    boolPtr(true),
+		APIFormat: transformerModel.APIFormatAnthropicMessage},
 	}
 	req := &relayRequest{
 		c:               c,
@@ -710,11 +679,8 @@ func TestHandlerRecordsAnthropicStreamErrorAsFailure(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("stream response status = %d, want 200", recorder.Code)
 	}
-	if !strings.Contains(recorder.Body.String(), `"type":"response.failed"`) {
-		t.Fatalf("expected response.failed SSE, got %s", recorder.Body.String())
-	}
-	if strings.Contains(recorder.Body.String(), `"output":null`) || !strings.Contains(recorder.Body.String(), `"output":[]`) {
-		t.Fatalf("response.failed must contain output: [], got %s", recorder.Body.String())
+	if !strings.Contains(recorder.Body.String(), `"type":"error"`) || !strings.Contains(recorder.Body.String(), "upstream overloaded") {
+		t.Fatalf("expected AxonHub error event, got %s", recorder.Body.String())
 	}
 
 	logs, err := op.RelayLogList(ctx, nil, nil, nil, 1, 10)
@@ -996,7 +962,7 @@ func TestHandlerPassthroughsOpenAIResponsesRawTools(t *testing.T) {
 		}
 		capturedBody = append([]byte(nil), body...)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":1,"model":"gpt-4o","output":[],"status":"completed"}`))
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":1,"model":"gpt-4o","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"status":"completed"}`))
 	}))
 	defer server.Close()
 
@@ -1388,26 +1354,19 @@ data: [DONE]
 
 func TestRelayWithoutParamOverridesDoesNotReadRequestBody(t *testing.T) {
 	ctx := setupRelayTestDB(t)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://gateway.example/v1/chat/completions", strings.NewReader(`{"messages":[]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := request.Body
-	request.GetBody = func() (io.ReadCloser, error) {
-		t.Error("request body must not be reread for local token estimation")
-		return nil, errors.New("unexpected request body read")
-	}
+	body := []byte(`{"messages":[]}`)
+	request := &httpclient.Request{Body: body}
 	attempt := &relayAttempt{
 		relayRequest: &relayRequest{
 			ctx:             ctx,
-			internalRequest: &transformerModel.InternalLLMRequest{Model: "no-override-model"},
+			internalRequest: &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: "no-override-model"}},
 		},
 		channel: &model.Channel{},
 	}
-	if err := attempt.applyParamOverride(request); err != nil {
+	if err := attempt.applyParamOverrideToWire(request); err != nil {
 		t.Fatal(err)
 	}
-	if request.Body != body {
+	if &request.Body[0] != &body[0] {
 		t.Fatal("request body changed without overrides")
 	}
 }
@@ -1476,15 +1435,14 @@ func TestHandlerAppliesChannelParamOverride(t *testing.T) {
 }
 
 func TestRelayMetricsKeepsResponseModelAndTokenUsage(t *testing.T) {
-	metrics := NewRelayMetrics(0, "alias-model", nil, &transformerModel.InternalLLMRequest{Model: "alias-model"})
+	metrics := NewRelayMetrics(0, "alias-model", nil, &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: "alias-model"}})
 	metrics.StartTime = time.Now()
 
-	metrics.SetInternalResponse(&transformerModel.InternalLLMResponse{
-		Model: "gpt-4o-mini",
+	metrics.SetInternalResponse(&transformerModel.InternalLLMResponse{Response: transformerModel.Response{Model: "gpt-4o-mini",
 		Usage: &transformerModel.Usage{
 			PromptTokens:     1000,
 			CompletionTokens: 2000,
-		},
+		}},
 	}, "gpt-4o-mini")
 
 	if metrics.ActualModel != "gpt-4o-mini" {
@@ -1496,16 +1454,15 @@ func TestRelayMetricsKeepsResponseModelAndTokenUsage(t *testing.T) {
 }
 
 func TestRelayMetricsCapturesOpenAICompatibleInputBreakdown(t *testing.T) {
-	metrics := NewRelayMetrics(0, "alias-model", nil, &transformerModel.InternalLLMRequest{Model: "alias-model"})
-	metrics.SetInternalResponse(&transformerModel.InternalLLMResponse{
-		Model: "gpt-4o-mini",
+	metrics := NewRelayMetrics(0, "alias-model", nil, &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: "alias-model"}})
+	metrics.SetInternalResponse(&transformerModel.InternalLLMResponse{Response: transformerModel.Response{Model: "gpt-4o-mini",
 		Usage: &transformerModel.Usage{
 			PromptTokens:     1200,
 			CompletionTokens: 300,
 			PromptTokensDetails: &transformerModel.PromptTokensDetails{
 				CachedTokens: 900,
 			},
-		},
+		}},
 	}, "gpt-4o-mini")
 
 	if metrics.BillInputTokens == nil || *metrics.BillInputTokens != 300 {
@@ -1523,18 +1480,15 @@ func TestRelayMetricsCapturesOpenAICompatibleInputBreakdown(t *testing.T) {
 }
 
 func TestRelayMetricsCapturesAnthropicInputBreakdown(t *testing.T) {
-	metrics := NewRelayMetrics(0, "alias-model", nil, &transformerModel.InternalLLMRequest{Model: "alias-model"})
-	metrics.SetInternalResponse(&transformerModel.InternalLLMResponse{
-		Model: "claude-sonnet-4-5",
+	metrics := NewRelayMetrics(0, "alias-model", nil, &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Model: "alias-model"}})
+	metrics.SetInternalResponse(&transformerModel.InternalLLMResponse{Response: transformerModel.Response{Model: "claude-sonnet-4-5",
 		Usage: &transformerModel.Usage{
-			PromptTokens:             400,
-			CompletionTokens:         180,
-			CacheCreationInputTokens: 250,
-			CacheReadInputTokens:     1200,
+			PromptTokens:     1850,
+			CompletionTokens: 180,
 			PromptTokensDetails: &transformerModel.PromptTokensDetails{
-				CachedTokens: 1200,
+				CachedTokens: 1200, WriteCachedTokens: 250,
 			},
-		},
+		}},
 	}, "claude-sonnet-4-5")
 
 	if metrics.BillInputTokens == nil || *metrics.BillInputTokens != 400 {
@@ -1550,10 +1504,10 @@ func TestRelayMetricsCapturesAnthropicInputBreakdown(t *testing.T) {
 
 func TestDefaultWSModeForRequest(t *testing.T) {
 	previousResponseID := "resp_123"
-	if got := defaultWSModeForRequest(&transformerModel.InternalLLMRequest{PreviousResponseID: &previousResponseID}); got != model.RelayLogWSModeContinuation {
+	if got := defaultWSModeForRequest(&transformerModel.InternalLLMRequest{Request: transformerModel.Request{PreviousResponseID: &previousResponseID}}); got != model.RelayLogWSModeContinuation {
 		t.Fatalf("expected previous_response_id request to be marked as continuation, got %q", got)
 	}
-	if got := defaultWSModeForRequest(&transformerModel.InternalLLMRequest{Messages: []transformerModel.Message{{Role: "user"}}}); got != model.RelayLogWSModeFresh {
+	if got := defaultWSModeForRequest(&transformerModel.InternalLLMRequest{Request: transformerModel.Request{Messages: []transformerModel.Message{{Role: "user"}}}}); got != model.RelayLogWSModeFresh {
 		t.Fatalf("expected ordinary request to be marked as fresh, got %q", got)
 	}
 }
@@ -1673,7 +1627,7 @@ func TestForwardDoesNotUseWSForFreshHTTPIngress(t *testing.T) {
 	c, _ := gin.CreateTestContext(writer)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-4o","input":"hello"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
-	internalReq := &transformerModel.InternalLLMRequest{Model: "gpt-4o", Stream: boolPtr(false), RawAPIFormat: transformerModel.APIFormatOpenAIResponse}
+	internalReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Messages: []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("hello")}}}, Model: "gpt-4o", Stream: boolPtr(false), APIFormat: transformerModel.APIFormatOpenAIResponse}}
 	req := &relayRequest{
 		c:               c,
 		inAdapter:       inbound.Get(inbound.InboundTypeOpenAIResponse),
@@ -1729,7 +1683,7 @@ func TestForwardViaHTTPClearsDefaultGoUserAgent(t *testing.T) {
 	writer := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(writer)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	internalReq := &transformerModel.InternalLLMRequest{Model: "gpt-4o", Stream: boolPtr(false), RawAPIFormat: transformerModel.APIFormatOpenAIResponse}
+	internalReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Messages: []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("hello")}}}, Model: "gpt-4o", Stream: boolPtr(false), APIFormat: transformerModel.APIFormatOpenAIResponse}}
 	req := &relayRequest{c: c, inAdapter: inbound.Get(inbound.InboundTypeOpenAIResponse), internalRequest: internalReq, metrics: NewRelayMetrics(1, "gpt-4o", nil, internalReq), apiKeyID: 1, requestModel: "gpt-4o"}
 	ra := &relayAttempt{relayRequest: req, outAdapter: outbound.Get(channel.Type), channel: channel, usedKey: channel.Keys[0]}
 
@@ -1787,7 +1741,7 @@ func TestForwardViaWSPreservesClientUserAgentHeaders(t *testing.T) {
 	c, _ := gin.CreateTestContext(writer)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	c.Request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
-	internalReq := &transformerModel.InternalLLMRequest{Model: "gpt-4o", Stream: boolPtr(true)}
+	internalReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Messages: []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("hello")}}}, Model: "gpt-4o", Stream: boolPtr(true)}}
 	req := &relayRequest{
 		c:               c,
 		inAdapter:       inbound.Get(inbound.InboundTypeOpenAIResponse),
@@ -2153,7 +2107,7 @@ func TestHandleResponsesCompactSkipsIncompatibleChannels(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_cmp_2","object":"response.compaction","created_at":1,"output":[],"usage":{"input_tokens":1,"input_tokens_details":{"cached_tokens":0},"output_tokens":1,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2}}`))
+		_, _ = w.Write([]byte(`{"id":"resp_cmp_2","object":"response.compaction","created_at":1,"output":[{"id":"cmp_2","type":"compaction","encrypted_content":"test"}],"usage":{"input_tokens":1,"input_tokens_details":{"cached_tokens":0},"output_tokens":1,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2}}`))
 	}))
 	defer server.Close()
 

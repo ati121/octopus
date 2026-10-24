@@ -2,15 +2,15 @@ package relay
 
 import (
 	"errors"
-	"github.com/looplj/axonhub/llm"
 	"io"
 	"net"
 	"net/http"
 	"strings"
 
-	"github.com/bestruirui/octopus/internal/relay/stream"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 	"github.com/bestruirui/octopus/internal/utils/log"
+	"github.com/looplj/axonhub/llm"
+	"github.com/looplj/axonhub/llm/transformer/shared"
 )
 
 type wsPublicError struct {
@@ -127,7 +127,7 @@ func isUpstreamWSConnectionBroken(err error) bool {
 
 func shouldReconnectUpstreamWSBeforeReplay(err error) bool {
 	// Empty stream before first event should trigger reconnect
-	if errors.Is(err, stream.ErrEmptyUpstreamStream) || errors.Is(err, llm.ErrStreamIncomplete) {
+	if shared.IsResponsesRecoveryError(err) || errors.Is(err, llm.ErrEmptyResponse) || errors.Is(err, llm.ErrStreamIncomplete) {
 		log.Debugf("ws continuation error marked reconnectable before replay: %v", err)
 		return true
 	}
@@ -186,7 +186,7 @@ func requiresUpstreamWSContinuation(req *transformerModel.InternalLLMRequest) bo
 	if req.OpenAIPreviousResponseID() != "" {
 		return true
 	}
-	if len(req.GetOpenAIResponsesOptions().Conversation) > 0 {
+	if req.HasOpenAIConversation() {
 		return true
 	}
 	seenToolCalls := make(map[string]struct{})

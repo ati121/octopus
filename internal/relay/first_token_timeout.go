@@ -3,7 +3,6 @@ package relay
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -147,17 +146,4 @@ func relayRequestTimeoutSeconds() int {
 		return defaultRelayRequestTimeoutSeconds
 	}
 	return seconds
-}
-
-type closeWithFuncReadCloser struct {
-	io.ReadCloser
-	onClose func()
-}
-
-func (c *closeWithFuncReadCloser) Close() error {
-	err := c.ReadCloser.Close()
-	if c.onClose != nil {
-		c.onClose()
-	}
-	return err
 }

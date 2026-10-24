@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/looplj/axonhub/llm/httpclient"
 )
 
 // WSStreamWriter implements StreamWriter for WebSocket clients.
@@ -23,6 +24,21 @@ func NewWSStreamWriter(ctx context.Context, conn *websocket.Conn) *WSStreamWrite
 		conn: conn,
 		ctx:  ctx,
 	}
+}
+
+func (w *WSStreamWriter) WriteEvent(event *httpclient.StreamEvent) error {
+	if event == nil || len(event.Data) == 0 || bytes.Equal(event.Data, []byte("[DONE]")) {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	ctx, cancel := context.WithTimeout(w.ctx, wsWriteTimeout)
+	defer cancel()
+	if err := w.conn.Write(ctx, websocket.MessageText, event.Data); err != nil {
+		return err
+	}
+	w.written = true
+	return nil
 }
 
 func (w *WSStreamWriter) Write(data []byte) (int, error) {

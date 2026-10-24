@@ -3,7 +3,6 @@ package relay
 import (
 	"testing"
 
-	"github.com/bestruirui/octopus/internal/transformer/inbound"
 	transformerModel "github.com/bestruirui/octopus/internal/transformer/model"
 )
 
@@ -19,25 +18,19 @@ func TestChatStreamResponseCompleted(t *testing.T) {
 		{name: "nil response", response: nil, want: false},
 		{name: "no choices", response: &transformerModel.InternalLLMResponse{}, want: false},
 		{
-			name: "missing finish reason",
-			response: &transformerModel.InternalLLMResponse{
-				Choices: []transformerModel.Choice{{Index: 0}},
-			},
-			want: false,
+			name:     "missing finish reason",
+			response: &transformerModel.InternalLLMResponse{Response: transformerModel.Response{Choices: []transformerModel.Choice{{Index: 0}}}},
+			want:     false,
 		},
 		{
-			name: "empty finish reason",
-			response: &transformerModel.InternalLLMResponse{
-				Choices: []transformerModel.Choice{{Index: 0, FinishReason: &empty}},
-			},
-			want: false,
+			name:     "empty finish reason",
+			response: &transformerModel.InternalLLMResponse{Response: transformerModel.Response{Choices: []transformerModel.Choice{{Index: 0, FinishReason: &empty}}}},
+			want:     false,
 		},
 		{
-			name: "completed choice",
-			response: &transformerModel.InternalLLMResponse{
-				Choices: []transformerModel.Choice{{Index: 0, FinishReason: &stop}},
-			},
-			want: true,
+			name:     "completed choice",
+			response: &transformerModel.InternalLLMResponse{Response: transformerModel.Response{Choices: []transformerModel.Choice{{Index: 0, FinishReason: &stop}}}},
+			want:     true,
 		},
 	}
 
@@ -47,14 +40,5 @@ func TestChatStreamResponseCompleted(t *testing.T) {
 				t.Fatalf("streamResponseCompleted() = %t, want %t", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestInboundStreamTerminalEventsForOpenAIResponses(t *testing.T) {
-	events := inboundStreamTerminalEvents(inbound.Get(inbound.InboundTypeOpenAIResponse))
-	for _, eventType := range []string{"response.completed", "response.incomplete", "response.failed"} {
-		if _, ok := events[eventType]; !ok {
-			t.Fatalf("missing Responses terminal event %q", eventType)
-		}
 	}
 }

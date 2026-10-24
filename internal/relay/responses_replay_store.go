@@ -232,15 +232,6 @@ func estimateMessageSize(msg transformerModel.Message) int {
 	if msg.ReasoningContent != nil {
 		size += len(*msg.ReasoningContent)
 	}
-	for _, img := range msg.Images {
-		size += 64
-		if img.Text != nil {
-			size += len(*img.Text)
-		}
-		if img.ImageURL != nil {
-			size += len(img.ImageURL.URL)
-		}
-	}
 	return size
 }
 

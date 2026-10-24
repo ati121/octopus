@@ -117,9 +117,7 @@ func TestResolveResponsesReplayState(t *testing.T) {
 	}
 	storeResponsesReplayState(20, 200, "gpt-4", state, time.Minute)
 
-	req := &transformerModel.InternalLLMRequest{
-		PreviousResponseID: stringPtr("resp_test"),
-	}
+	req := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{PreviousResponseID: stringPtr("resp_test")}}
 
 	resolved := resolveResponsesReplayState(20, 200, "gpt-4", req)
 	if resolved == nil {

@@ -29,10 +29,9 @@ func newEmptyStreamTestAttempt(t *testing.T, inType inbound.InboundType, rawForm
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/test", nil)
-	internalReq := &transformerModel.InternalLLMRequest{
-		Model:        "gpt-4o",
-		Stream:       boolPtr(true),
-		RawAPIFormat: rawFormat,
+	internalReq := &transformerModel.InternalLLMRequest{Request: transformerModel.Request{Messages: []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: stringPtr("hello")}}}, Model: "gpt-4o",
+		Stream:    boolPtr(true),
+		APIFormat: rawFormat},
 	}
 	req := &relayRequest{
 		c:               c,
@@ -125,6 +124,7 @@ func TestPassthroughAnthropicEmptyStreamFails(t *testing.T) {
 func TestHandleResponseRejectsHollowUpstreamBody(t *testing.T) {
 	ra, recorder := newEmptyStreamTestAttempt(t, inbound.InboundTypeOpenAIChat, transformerModel.APIFormatOpenAIChatCompletion, outbound.OutboundTypeOpenAIChat)
 	ra.channel = &model.Channel{Name: "empty-channel", Type: outbound.OutboundTypeOpenAIChat}
+	ra.internalRequest.Stream = boolPtr(false)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},

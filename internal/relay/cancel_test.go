@@ -58,44 +58,42 @@ func TestStreamResponseCompleted(t *testing.T) {
 	}{
 		{name: "nil", resp: nil, want: false},
 		{name: "no choices", resp: &transformerModel.InternalLLMResponse{}, want: false},
-		{name: "system one response", resp: &transformerModel.InternalLLMResponse{Native: &llm.Response{SystemOne: &llm.SystemOneResponse{}}}, want: true},
+		{name: "system one response", resp: &transformerModel.InternalLLMResponse{Response: transformerModel.Response{SystemOne: &llm.SystemOneResponse{}}}, want: true},
 		{
 			name: "missing finish reason",
-			resp: &transformerModel.InternalLLMResponse{Choices: []transformerModel.Choice{{Index: 0}}},
+			resp: &transformerModel.InternalLLMResponse{Response: transformerModel.Response{Choices: []transformerModel.Choice{{Index: 0}}}},
 			want: false,
 		},
 		{
 			name: "empty finish reason",
-			resp: &transformerModel.InternalLLMResponse{Choices: []transformerModel.Choice{{Index: 0, FinishReason: &empty}}},
+			resp: &transformerModel.InternalLLMResponse{Response: transformerModel.Response{Choices: []transformerModel.Choice{{Index: 0, FinishReason: &empty}}}},
 			want: false,
 		},
 		{
 			name: "strict completion",
-			resp: &transformerModel.InternalLLMResponse{Choices: []transformerModel.Choice{{Index: 0, FinishReason: &stop}}},
+			resp: &transformerModel.InternalLLMResponse{Response: transformerModel.Response{Choices: []transformerModel.Choice{{Index: 0, FinishReason: &stop}}}},
 			want: true,
 		},
 		{
 			name: "soft completion with content and usage",
-			resp: &transformerModel.InternalLLMResponse{
-				Choices: []transformerModel.Choice{{
-					Index: 0,
-					Message: &transformerModel.Message{
-						Content: transformerModel.MessageContent{Content: &content},
-					},
-				}},
-				Usage: &transformerModel.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+			resp: &transformerModel.InternalLLMResponse{Response: transformerModel.Response{Choices: []transformerModel.Choice{{
+				Index: 0,
+				Message: &transformerModel.Message{
+					Content: transformerModel.MessageContent{Content: &content},
+				},
+			}},
+				Usage: &transformerModel.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}},
 			},
 			want: true,
 		},
 		{
 			name: "content without usage remains incomplete",
-			resp: &transformerModel.InternalLLMResponse{
-				Choices: []transformerModel.Choice{{
-					Index: 0,
-					Message: &transformerModel.Message{
-						Content: transformerModel.MessageContent{Content: &content},
-					},
-				}},
+			resp: &transformerModel.InternalLLMResponse{Response: transformerModel.Response{Choices: []transformerModel.Choice{{
+				Index: 0,
+				Message: &transformerModel.Message{
+					Content: transformerModel.MessageContent{Content: &content},
+				},
+			}}},
 			},
 			want: false,
 		},

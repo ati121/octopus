@@ -26,23 +26,5 @@ type Outbound interface {
 	TransformResponse(ctx context.Context, response *http.Response) (*InternalLLMResponse, error)
 }
 
-// InboundStreamTerminalProvider optionally describes terminal SSE events emitted
-// by an inbound transformer. The relay uses these events to distinguish a client
-// closing an already-complete stream from a premature disconnect.
-type InboundStreamTerminalProvider interface {
-	StreamTerminalEvents() map[string]struct{}
-}
-
-/*
-请求流程
-非流式
-
-client		-> inbound.TransformRequest(ctx, body)
-			-> outbound.TransformRequest(ctx, request)
- 			-> http.Do(request)
- 			-> outbound.TransformResponse(ctx, response)
-			-> inbound.TransformResponse(ctx, response)
-															-> client
-
-流式：所有事件经过 transformer/axon 的完整 AxonHub 迭代器。
-*/
+// Relay execution uses AxonHub pipeline for both streaming and non-streaming
+// responses; these interfaces expose routing, probes and response observation.
