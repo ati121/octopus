@@ -52,6 +52,7 @@ jobs:
         run: |
           rm -rf static/out
           mv web/out static/out
+          bash scripts/compress-static.sh "static/out"
 
       - name: Build binaries
         run: |

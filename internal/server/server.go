@@ -41,9 +41,19 @@ func Start() error {
 		c.Abort()
 	}))
 
+	// staticNoGzipExtensions 既是构建期已预压缩(.gz)的文本资源扩展名，也包含
+	// 本就不值得压缩的图片格式（gin-contrib/gzip 的默认排除项）。
+	// 它们从动态 gzip 排除后由 static 中间件按 Accept-Encoding 返回预压缩变体，
+	// 避免 gzipWriter 对预压缩响应二次压缩或误删 Content-Encoding 头。
+	staticNoGzipExtensions := []string{
+		".js", ".mjs", ".css", ".html", ".svg", ".json", ".txt",
+		".xml", ".webmanifest", ".map",
+		".png", ".gif", ".jpeg", ".jpg",
+	}
 	r.Use(gzip.Gzip(gzip.DefaultCompression,
 		gzip.WithExcludedPaths([]string{"/v1/"}),
 		gzip.WithExcludedPathsRegexs([]string{`/api/v1/log/stream`}),
+		gzip.WithExcludedExtensions(staticNoGzipExtensions),
 	))
 
 	r.Use(middleware.Logger(middleware.LoggerConfig{

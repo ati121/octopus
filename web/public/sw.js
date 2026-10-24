@@ -8,7 +8,7 @@
  * - FONT cache is version-independent (fonts persist across updates)
  */
 const CACHE_PREFIX = 'octopus';
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAMES = {
     static: `${CACHE_PREFIX}-static-${CACHE_VERSION}`,
     app: `${CACHE_PREFIX}-app-${CACHE_VERSION}`,
@@ -22,8 +22,14 @@ const SW_MESSAGE_TYPE = {
     CACHE_CLEARED: 'CACHE_CLEARED',
 };
 
-// Precache (PWA essentials)
-const PRECACHE_URLS = ['/', '/manifest.json', '/web-app-manifest-192x192.png', '/web-app-manifest-512x512.png', '/logo-dark.svg'];
+// 反向代理可能把应用挂在子路径下；所有路径判断与预缓存都以 SW scope 为基准，
+// 根路径部署时 scope 即 '/'，两种场景共用同一份相对逻辑。
+// SCOPE_PATH 以 '/' 结尾（如 '/' 或 '/octopus/'）。
+const SCOPE_URL = new URL('./', self.registration.scope);
+const SCOPE_PATH = SCOPE_URL.pathname;
+
+// Precache (PWA essentials) — 相对 URL 按 SW 脚本位置解析，随部署路径自动适配。
+const PRECACHE_URLS = ['./', './manifest.json', './web-app-manifest-192x192.png', './web-app-manifest-512x512.png', './logo-dark.svg'];
 
 // ============ 安装事件 ============
 self.addEventListener('install', (event) => {
@@ -63,7 +69,7 @@ self.addEventListener('fetch', (event) => {
     }
 
     // 跳过 API 请求和开发环境 HMR
-    if (url.pathname.startsWith('/api/') || url.pathname.includes('webpack-hmr')) {
+    if (url.pathname.startsWith(`${SCOPE_PATH}api/`) || url.pathname.includes('webpack-hmr')) {
         return;
     }
 
@@ -74,20 +80,20 @@ self.addEventListener('fetch', (event) => {
     }
 
     // /_next/static/ 资源：Cache First（带哈希，永不变）
-    if (url.pathname.startsWith('/_next/static/')) {
+    if (url.pathname.startsWith(`${SCOPE_PATH}_next/static/`)) {
         event.respondWith(cacheFirst(request, CACHE_NAMES.static));
         return;
     }
 
     // /_next/data/ (预取数据)：Network First
-    if (url.pathname.startsWith('/_next/data/')) {
+    if (url.pathname.startsWith(`${SCOPE_PATH}_next/data/`)) {
         event.respondWith(networkFirst(request, CACHE_NAMES.app));
         return;
     }
 
     // 页面导航：Network First，离线时返回缓存
     if (request.mode === 'navigate') {
-        event.respondWith(networkFirst(request, CACHE_NAMES.app, { fallbackUrl: '/' }));
+        event.respondWith(networkFirst(request, CACHE_NAMES.app, { fallbackUrl: SCOPE_URL.href }));
         return;
     }
 
