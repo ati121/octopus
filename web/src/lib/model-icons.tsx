@@ -53,6 +53,7 @@ type AvatarComponent = typeof OpenAI.Avatar;
 
 type ModelIconConfig = {
     prefixes: string[];
+    patterns?: RegExp[];
     Avatar: AvatarComponent;
     color: string;
 };
@@ -146,8 +147,8 @@ const MODEL_ICON_PATTERNS: ModelIconConfig[] = [
     { prefixes: ['doubao', 'skylark', 'bytedance'], Avatar: Doubao.Avatar, color: '#00D6C2' },
     // Yi series
     { prefixes: ['yi-', '01-ai'], Avatar: Yi.Avatar, color: '#1B1464' },
-    // Tencent - Hunyuan
-    { prefixes: ['hunyuan', 'hy3'], Avatar: Hunyuan.Avatar, color: '#0052D9' },
+    // Tencent - Hunyuan. `hy3`, `hy4` and later generations follow the `hy<number>` naming.
+    { prefixes: ['hunyuan'], patterns: [/^hy\d/], Avatar: Hunyuan.Avatar, color: '#0052D9' },
     // iFlytek - Spark
     { prefixes: ['spark'], Avatar: Spark.Avatar, color: '#0078FF' },
     // Baidu - ERNIE/Wenxin
@@ -175,7 +176,7 @@ const MODEL_ICON_PATTERNS: ModelIconConfig[] = [
     { prefixes: ['replicate'], Avatar: Replicate.Avatar, color: '#000000' },
     { prefixes: ['ollama'], Avatar: Ollama.Avatar, color: '#FFFFFF' },
     { prefixes: ['openrouter'], Avatar: OpenRouter.Avatar, color: '#6366F1' },
-    { prefixes: ['cloudflare'], Avatar: Cloudflare.Avatar, color: '#F38020' },
+    { prefixes: ['cloudflare', 'clef'], Avatar: Cloudflare.Avatar, color: '#F38020' },
     { prefixes: ['cerebras'], Avatar: Cerebras.Avatar, color: '#FF5722' },
     { prefixes: ['sambanova'], Avatar: SambaNova.Avatar, color: '#FF6B00' },
     { prefixes: ['novita'], Avatar: Novita.Avatar, color: '#7C3AED' },
@@ -228,12 +229,18 @@ export function getModelIcon(modelName: string): { Avatar: AvatarComponent; colo
     const nameToMatch = modelName.includes('/') ? modelName.split('/')[1] : modelName;
     const lowerName = nameToMatch.toLowerCase();
     const providerSegments = lowerFullName.split('/').slice(0, -1);
-    for (const { prefixes, Avatar, color } of MODEL_ICON_PATTERNS) {
-        if (prefixes.some(prefix =>
+    for (const { prefixes, patterns, Avatar, color } of MODEL_ICON_PATTERNS) {
+        const prefixMatch = prefixes.some(prefix =>
             lowerName.startsWith(prefix) ||
             lowerFullName.startsWith(prefix) ||
             providerSegments.some((segment) => segment.startsWith(prefix))
-        )) {
+        );
+        const patternMatch = patterns?.some(pattern =>
+            pattern.test(lowerName) ||
+            pattern.test(lowerFullName) ||
+            providerSegments.some((segment) => pattern.test(segment))
+        );
+        if (prefixMatch || patternMatch) {
             return { Avatar, color };
         }
     }
