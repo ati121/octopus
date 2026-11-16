@@ -325,6 +325,13 @@ function getAttemptStatusMeta(status: AttemptStatus, t: ReturnType<typeof useTra
                 containerClassName: 'bg-muted/40 border-border/60 hover:bg-muted/60',
                 messageClassName: 'text-muted-foreground border-border/50',
             };
+        case 'canceled':
+            return {
+                label: `499 · ${t('clientCanceled')}`,
+                badgeClassName: 'bg-muted text-muted-foreground',
+                containerClassName: 'bg-muted/40 border-border/60 hover:bg-muted/60',
+                messageClassName: 'text-muted-foreground border-border/50',
+            };
         case 'circuit_break':
             return {
                 label: t('circuitBreak'),
@@ -521,7 +528,9 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
     const requestAPIKeyName = useMemo(() => log.request_api_key_name?.trim() ?? '', [log.request_api_key_name]);
     const disableMutation = useUpdateSiteChannelModelDisabled();
 
-    const hasError = !log.processing && !!log.error;
+    const isClientCanceled = !log.processing && log.status_code === 499;
+    const hasError = !log.processing && !!log.error && !isClientCanceled;
+    const cancellationMessage = `499 · ${t('clientCanceled')}`;
     const hasAttempts = (log.attempts?.length ?? 0) > 0;
     const hasMultipleAttempts = (log.attempts?.length ?? 0) > 1;
     const cacheHitRate = getCacheHitRate(log);
@@ -536,9 +545,9 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
 
     const attemptTargets = siteTargets?.attempt_targets ?? [];
     const legacyErrorTarget = siteTargets?.legacy_error_target ?? null;
-    const showDiagnosticPanel = hasError || hasAttempts;
-    const diagnosticTitle = hasAttempts ? t('retryDetails') : t('errorInfo');
-    const diagnosticIcon = hasAttempts ? RotateCw : AlertCircle;
+    const showDiagnosticPanel = hasError || isClientCanceled || hasAttempts;
+    const diagnosticTitle = isClientCanceled ? cancellationMessage : hasAttempts ? t('retryDetails') : t('errorInfo');
+    const diagnosticIcon = isClientCanceled ? CircleOff : hasAttempts ? RotateCw : AlertCircle;
     const DiagnosticIcon = diagnosticIcon;
     const displayLog = detailLog ? {
         ...detailLog,
@@ -737,7 +746,12 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                     <span>{t('output')} {formatCompactTokenCount(log.output_tokens)}</span>
                                 </div>
                             </div>
-                            {hasError ? (
+                            {isClientCanceled ? (
+                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                    <CircleOff className="size-3.5 shrink-0" />
+                                    <span>{cancellationMessage}</span>
+                                </div>
+                            ) : hasError ? (
                                 <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 overflow-hidden">
                                     <p className="text-xs text-destructive line-clamp-2">{sanitizeErrorMessage(log.error)}</p>
                                 </div>
@@ -895,7 +909,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                                         const statusMeta = getAttemptStatusMeta(attempt.status, t);
                                                                         const attemptTarget = attemptTargets[attempt.originalIndex] ?? null;
                                                                         const canDisableAttempt = attempt.status === 'failed' && !!attemptTarget?.can_disable_model;
-                                                                        const sanitizedMsg = sanitizeErrorMessage(attempt.msg);
+                                                                        const sanitizedMsg = attempt.status === 'canceled' ? t('clientCanceled') : sanitizeErrorMessage(attempt.msg);
 
                                                                         return (
                                                                             <div

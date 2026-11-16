@@ -191,6 +191,11 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 
 		// ====== 失败 ======
 		op.ChannelKeyUpdate(usedKey)
+		if isClientCancellation(ctx, fwdErr) {
+			span.End(model.AttemptCanceled, statusClientClosedRequest, clientCanceledMessage)
+			metrics.SaveWithChannelStats(ctx, false, fwdErr, iter.Attempts(), false)
+			return
+		}
 		span.End(model.AttemptFailed, statusCode, fwdErr.Error())
 
 		// Channel 维度统计
@@ -375,10 +380,7 @@ func (m *imagesRelayMetrics) saveLog(ctx context.Context, success bool, err erro
 		relayLog.OutputTokens = int(m.Stats.OutputToken)
 	}
 
-	if err != nil {
-		relayLog.Error = err.Error()
-	}
-	relayLog.Success = success
+	setRelayLogOutcome(ctx, &relayLog, success, err)
 
 	var logErr error
 	if m.LogID != 0 {

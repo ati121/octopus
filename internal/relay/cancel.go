@@ -5,8 +5,28 @@ import (
 	"errors"
 	"strings"
 
+	dbmodel "github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/transformer/model"
 )
+
+const (
+	statusClientClosedRequest = 499
+	clientCanceledMessage     = "客户端已取消"
+)
+
+// setRelayLogOutcome keeps client cancellation distinct from upstream failures.
+// A completed response remains successful even if the client disconnects later.
+func setRelayLogOutcome(ctx context.Context, entry *dbmodel.RelayLog, success bool, err error) {
+	entry.Success = success
+	if !success && isClientCancellation(ctx, err) {
+		entry.StatusCode = statusClientClosedRequest
+		entry.Error = clientCanceledMessage
+		return
+	}
+	if err != nil {
+		entry.Error = err.Error()
+	}
+}
 
 var (
 	errLocalRelayBudgetExceeded = errors.New("local relay budget exceeded")

@@ -380,11 +380,7 @@ func (m *RelayMetrics) saveLog(ctx context.Context, success bool, err error, dur
 		}
 	}
 
-	// 错误信息
-	if err != nil {
-		relayLog.Error = err.Error()
-	}
-	relayLog.Success = success
+	setRelayLogOutcome(ctx, &relayLog, success, err)
 
 	var logErr error
 	if m.LogID != 0 {

@@ -6,6 +6,7 @@ type AttemptStatus string
 const (
 	AttemptSuccess      AttemptStatus = "success"       // 转发成功
 	AttemptFailed       AttemptStatus = "failed"        // 转发失败
+	AttemptCanceled     AttemptStatus = "canceled"      // 客户端主动取消
 	AttemptCircuitBreak AttemptStatus = "circuit_break" // 熔断跳过
 	AttemptSkipped      AttemptStatus = "skipped"       // 其他原因跳过（禁用、无Key、类型不兼容等）
 )
@@ -73,6 +74,7 @@ type RelayLog struct {
 	RequestContent       string              `json:"request_content"`                          // 请求内容
 	ResponseContent      string              `json:"response_content"`                         // 响应内容
 	Error                string              `json:"error"`                                    // 错误信息
+	StatusCode           int                 `json:"status_code,omitempty" gorm:"-"`           // 终态诊断状态码，客户端取消为 499
 	Success              bool                `json:"success" gorm:"not null;default:false"`    // 是否成功，便于状态筛选索引
 	Processing           bool                `json:"processing" gorm:"-"`                      // 是否仍在等待上游响应（仅实时日志）
 	Attempts             []ChannelAttempt    `json:"attempts" gorm:"serializer:json"`          // 所有尝试记录

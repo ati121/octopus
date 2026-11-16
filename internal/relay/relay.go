@@ -502,13 +502,13 @@ func (ra *relayAttempt) attempt() attemptResult {
 		if written {
 			msg = "client canceled after partial stream"
 		}
-		span.End(dbmodel.AttemptSkipped, statusCode, msg)
+		span.End(dbmodel.AttemptCanceled, statusClientClosedRequest, clientCanceledMessage)
 		return attemptResult{
 			Success:         false,
 			Written:         written,
 			Canceled:        true,
 			Err:             fmt.Errorf("%s: %w", msg, fwdErr),
-			StatusCode:      statusCode,
+			StatusCode:      statusClientClosedRequest,
 			DeferredPayload: ra.deferredStreamPayload,
 		}
 	}

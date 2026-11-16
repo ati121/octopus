@@ -140,6 +140,10 @@ func HandleResponsesCompact(c *gin.Context) {
 			}
 
 			statusCode, retryAfter, attemptErr = forwardResponsesCompact(c, metrics, iter, channel, usedKey, &transformerModel.InternalLLMRequest{Request: *compactReq})
+			if attemptErr != nil && isClientCancellation(c.Request.Context(), attemptErr) {
+				metrics.SaveWithChannelStats(c.Request.Context(), false, attemptErr, iter.Attempts(), false)
+				return
+			}
 			if attemptErr == nil {
 				success = true
 				break
@@ -205,7 +209,10 @@ func forwardResponsesCompact(c *gin.Context, metrics *RelayMetrics, iter *balanc
 	view.Model = iter.Item().ModelName
 	attempt := &relayAttempt{relayRequest: &relayRequest{c: c, inAdapter: &axon.Inbound{Transformer: axonResponses.NewCompactInboundTransformer()}, internalRequest: &view, metrics: metrics}, channel: channel, usedKey: usedKey, outAdapter: axon.NewOutboundWithEndpointPath(int(channel.Type), channel.EndpointPath)}
 	status, err := attempt.pipelineHTTP(c.Request.Context())
-	if err != nil {
+	if err != nil && isClientCancellation(c.Request.Context(), err) {
+		span.End(dbmodel.AttemptCanceled, statusClientClosedRequest, clientCanceledMessage)
+		return statusClientClosedRequest, 0, err
+	} else if err != nil {
 		span.End(dbmodel.AttemptFailed, status, err.Error())
 	} else {
 		span.End(dbmodel.AttemptSuccess, status, "")

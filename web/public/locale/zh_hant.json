@@ -733,6 +733,7 @@
             "retryDetails": "重試詳情",
             "attempts": "次嘗試",
             "processing": "響應中",
+            "clientCanceled": "用戶端已取消",
             "success": "成功",
             "failed": "失敗",
             "skipped": "跳過",

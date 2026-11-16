@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 /**
  * 尝试状态
  */
-export type AttemptStatus = 'success' | 'failed' | 'circuit_break' | 'skipped';
+export type AttemptStatus = 'success' | 'failed' | 'canceled' | 'circuit_break' | 'skipped';
 
 export type RelayLogWSMode = 'fresh' | 'continuation' | 'replay';
 
@@ -76,6 +76,7 @@ export interface RelayLog extends LogTiming {
     request_content: string;     // 请求内容
     response_content: string;    // 响应内容
     error: string;               // 错误信息
+    status_code?: number;        // 终态诊断状态码，客户端取消为 499
     processing: boolean;         // 是否仍在等待上游响应
     attempts?: ChannelAttempt[]; // 所有尝试记录
     total_attempts?: number;     // 总尝试次数

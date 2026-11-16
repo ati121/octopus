@@ -733,6 +733,7 @@
             "retryDetails": "Retry Details",
             "attempts": "attempts",
             "processing": "Responding",
+            "clientCanceled": "Client canceled",
             "success": "Success",
             "failed": "Failed",
             "skipped": "Skipped",
