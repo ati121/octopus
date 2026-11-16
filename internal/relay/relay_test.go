@@ -1854,6 +1854,9 @@ func TestHandlerRetryEnabledDoesNotTurnRecent429IntoNoAvailableKey(t *testing.T)
 func TestHandlerUsesNextKeyWhenFirstKeyCircuitIsOpen(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := setupRelayTestDB(t)
+	if err := op.SettingSetString(model.SettingKeyCircuitBreakerEnabled, "true"); err != nil {
+		t.Fatal(err)
+	}
 
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1914,6 +1917,9 @@ func TestHandlerUsesNextKeyWhenFirstKeyCircuitIsOpen(t *testing.T) {
 func TestSoftRateLimitFailureDoesNotTripOrAmplifyCircuitBreaker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := setupRelayTestDB(t)
+	if err := op.SettingSetString(model.SettingKeyCircuitBreakerEnabled, "true"); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := op.SettingSetInt(model.SettingKeyCircuitBreakerThreshold, 2); err != nil {
 		t.Fatalf("SettingSetInt threshold failed: %v", err)
@@ -2169,6 +2175,60 @@ func TestHandleResponsesCompactSkipsIncompatibleChannels(t *testing.T) {
 	if logs[0].Attempts[0].Status != model.AttemptSkipped {
 		t.Fatalf("expected first attempt to skip incompatible channel, got %#v", logs[0].Attempts[0])
 	}
+}
+
+func TestHandlerDisabledCircuitKeepsCallingUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := setupRelayTestDB(t)
+	op.StatsChannelRecentClear()
+	t.Cleanup(op.StatsChannelRecentClear)
+	var hits atomic.Int32
+	var status atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Error(w, `{"error":"upstream unavailable"}`, int(status.Load()))
+	}))
+	defer server.Close()
+	channel := &model.Channel{
+		Name: "single-upstream", Type: outbound.OutboundTypeOpenAIChat, Enabled: true,
+		BaseUrls: []model.BaseUrl{{URL: server.URL + "/v1"}}, Model: "model",
+		Keys: []model.ChannelKey{{Enabled: true, ChannelKey: "test-key"}},
+	}
+	if err := op.ChannelCreate(channel, ctx); err != nil {
+		t.Fatal(err)
+	}
+	group := &model.Group{Name: "single-upstream-group", Mode: model.GroupModeFailover}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: channel.ID, ModelName: "model", Priority: 1, Weight: 1}, ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []int{429, 503, 500} {
+		status.Store(int32(code))
+		for i := 0; i < 7; i++ {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"single-upstream-group","messages":[{"role":"user","content":"hello"}]}`))
+			c.Request.Header.Set("Content-Type", "application/json")
+			Handler(inbound.InboundTypeOpenAIChat, c)
+			if recorder.Code != code {
+				t.Fatalf("expected upstream status %d after repeated failures, got %d: %s", code, recorder.Code, recorder.Body.String())
+			}
+		}
+	}
+	if hits.Load() != 21 {
+		t.Fatalf("expected one upstream attempt per request, got %d", hits.Load())
+	}
+	if len(balancer.ListCircuitSnapshots()) != 0 {
+		t.Fatal("disabled breaker accumulated state")
+	}
+	for _, health := range op.StatsChannelRecentSnapshot(time.Hour) {
+		if health.ChannelID == channel.ID && health.RequestFailed == 21 {
+			return
+		}
+	}
+	t.Fatal("channel failure statistics were not preserved")
 }
 
 func setupRelayTestDB(t *testing.T) context.Context {

@@ -51,6 +51,7 @@ export function SettingReliability() {
     const t = useTranslations('setting');
     const outlier = useSettingToggle(SettingKey.OutlierRetireEnabled);
     const groupHealth = useSettingToggle(SettingKey.GroupHealthEnabled);
+    const circuitBreaker = useSettingToggle(SettingKey.CircuitBreakerEnabled);
 
     return (
         <SettingCard icon={ShieldCheck} title={t('reliability.title')}>
@@ -61,24 +62,29 @@ export function SettingReliability() {
 
             {/* 熔断器 */}
             <SettingSection title={t('circuitBreaker.title')} tooltip={t('circuitBreaker.hint')} />
-            <NumberFieldRow
-                settingKey={SettingKey.CircuitBreakerThreshold}
-                label={t('circuitBreaker.threshold.label')}
-                placeholder={t('circuitBreaker.threshold.placeholder')}
-                icon={Hash}
-            />
-            <NumberFieldRow
-                settingKey={SettingKey.CircuitBreakerCooldown}
-                label={t('circuitBreaker.cooldown.label')}
-                placeholder={t('circuitBreaker.cooldown.placeholder')}
-                icon={Timer}
-            />
-            <NumberFieldRow
-                settingKey={SettingKey.CircuitBreakerMaxCooldown}
-                label={t('circuitBreaker.maxCooldown.label')}
-                placeholder={t('circuitBreaker.maxCooldown.placeholder')}
-                icon={TimerOff}
-            />
+            <SettingRow label={t('circuitBreaker.enabled.label')} tooltip={t('circuitBreaker.enabled.description')}>
+                <Switch checked={circuitBreaker.enabled} onCheckedChange={circuitBreaker.toggle} />
+            </SettingRow>
+            {circuitBreaker.enabled && <>
+                <NumberFieldRow
+                    settingKey={SettingKey.CircuitBreakerThreshold}
+                    label={t('circuitBreaker.threshold.label')}
+                    placeholder={t('circuitBreaker.threshold.placeholder')}
+                    icon={Hash}
+                />
+                <NumberFieldRow
+                    settingKey={SettingKey.CircuitBreakerCooldown}
+                    label={t('circuitBreaker.cooldown.label')}
+                    placeholder={t('circuitBreaker.cooldown.placeholder')}
+                    icon={Timer}
+                />
+                <NumberFieldRow
+                    settingKey={SettingKey.CircuitBreakerMaxCooldown}
+                    label={t('circuitBreaker.maxCooldown.label')}
+                    placeholder={t('circuitBreaker.maxCooldown.placeholder')}
+                    icon={TimerOff}
+                />
+            </>}
 
             {/* 被动离群退役 */}
             <SettingSection title={t('outlierRetirement.title')} tooltip={t('outlierRetirement.hint')} />

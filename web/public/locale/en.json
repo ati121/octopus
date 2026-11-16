@@ -221,6 +221,10 @@
         },
         "circuitBreaker": {
             "title": "Circuit Breaker",
+            "enabled": {
+                "label": "Enable Local Circuit Breaker",
+                "description": "Off by default. Leave it off when an upstream gateway such as Magpie manages retries and cooldowns. Turning it off immediately clears existing circuit state without affecting group retries, request logs, or statistics."
+            },
             "threshold": {
                 "label": "Failure Threshold (consecutive failures)",
                 "placeholder": "Enter threshold"

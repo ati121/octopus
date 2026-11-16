@@ -1,6 +1,22 @@
 package op
 
+import "github.com/bestruirui/octopus/internal/model"
+
 var resetRelayBalancerStateForChannel func(int)
+var configureRelayCircuitBreaker func(bool)
+
+// RegisterRelayCircuitBreakerToggle 接入熔断开关，避免设置层依赖 relay 包。
+func RegisterRelayCircuitBreakerToggle(fn func(bool)) {
+	configureRelayCircuitBreaker = fn
+	syncCircuitBreakerSetting()
+}
+
+func syncCircuitBreakerSetting() {
+	if configureRelayCircuitBreaker != nil {
+		enabled, _ := SettingGetBool(model.SettingKeyCircuitBreakerEnabled)
+		configureRelayCircuitBreaker(enabled)
+	}
+}
 
 func RegisterRelayBalancerStateReset(fn func(int)) {
 	resetRelayBalancerStateForChannel = fn

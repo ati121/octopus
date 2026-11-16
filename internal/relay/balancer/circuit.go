@@ -41,6 +41,18 @@ type circuitEntry struct {
 var globalBreaker sync.Map // key: string -> value: *circuitEntry
 var circuitBreakerStoreMu sync.Mutex
 var circuitBreakerEntryCount int
+var circuitBreakerPolicyMu sync.RWMutex
+var circuitBreakerEnabled bool
+
+// 与正在记录的请求互斥，确保关闭后不会留下或重新生成旧熔断状态。
+func configureCircuitBreaker(enabled bool) {
+	circuitBreakerPolicyMu.Lock()
+	defer circuitBreakerPolicyMu.Unlock()
+	circuitBreakerEnabled = enabled
+	if !enabled {
+		resetCircuitBreakers()
+	}
+}
 
 const (
 	maxCircuitBreakerEntries = 10000
@@ -169,6 +181,11 @@ func GetCooldown(tripCount int) time.Duration {
 // IsTripped 检查通道是否处于熔断状态
 // 返回 tripped=true 表示该通道应被跳过，remaining 为剩余冷却时间
 func IsTripped(channelID, keyID int, modelName string) (tripped bool, remaining time.Duration) {
+	circuitBreakerPolicyMu.RLock()
+	defer circuitBreakerPolicyMu.RUnlock()
+	if !circuitBreakerEnabled {
+		return false, 0
+	}
 	key := circuitKey(channelID, keyID, modelName)
 	v, ok := globalBreaker.Load(key)
 	if !ok {
@@ -228,6 +245,11 @@ type CircuitSnapshot struct {
 
 func ListCircuitSnapshots() []CircuitSnapshot {
 	result := make([]CircuitSnapshot, 0)
+	circuitBreakerPolicyMu.RLock()
+	defer circuitBreakerPolicyMu.RUnlock()
+	if !circuitBreakerEnabled {
+		return result
+	}
 	globalBreaker.Range(func(key, value any) bool {
 		keyString, ok := key.(string)
 		if !ok {
@@ -283,6 +305,11 @@ func ListCircuitSnapshots() []CircuitSnapshot {
 
 // RecordSuccess 记录成功，重置熔断器状态
 func RecordSuccess(channelID, keyID int, modelName string) {
+	circuitBreakerPolicyMu.RLock()
+	defer circuitBreakerPolicyMu.RUnlock()
+	if !circuitBreakerEnabled {
+		return
+	}
 	key := circuitKey(channelID, keyID, modelName)
 	v, ok := globalBreaker.Load(key)
 	if !ok {
@@ -309,6 +336,11 @@ func RecordSuccess(channelID, keyID int, modelName string) {
 // FailureSoftRateLimit 用于 429/503 这类软失败：Closed 状态下不累计阈值，
 // HalfOpen 状态下重新进入 Open，但不放大 TripCount。
 func RecordFailure(channelID, keyID int, modelName string, kind FailureKind) {
+	circuitBreakerPolicyMu.RLock()
+	defer circuitBreakerPolicyMu.RUnlock()
+	if !circuitBreakerEnabled {
+		return
+	}
 	key := circuitKey(channelID, keyID, modelName)
 	var entry *circuitEntry
 	if kind == FailureSoftRateLimit {

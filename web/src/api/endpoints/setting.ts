@@ -21,6 +21,7 @@ export const SettingKey = {
     RelayLogKeepEnabled: 'relay_log_keep_enabled',
     RelayLogKeepPeriod: 'relay_log_keep_period',
     CORSAllowOrigins: 'cors_allow_origins',
+    CircuitBreakerEnabled: 'circuit_breaker_enabled',
     CircuitBreakerThreshold: 'circuit_breaker_threshold',
     CircuitBreakerCooldown: 'circuit_breaker_cooldown',
     CircuitBreakerMaxCooldown: 'circuit_breaker_max_cooldown',

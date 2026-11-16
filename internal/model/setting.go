@@ -17,6 +17,7 @@ const (
 	SettingKeyRelayLogKeepPeriod               SettingKey = "relay_log_keep_period"                // 日志保存时间范围(天)
 	SettingKeyRelayLogKeepEnabled              SettingKey = "relay_log_keep_enabled"               // 是否保留历史日志
 	SettingKeyCORSAllowOrigins                 SettingKey = "cors_allow_origins"                   // 跨域白名单(逗号分隔, 如 "example.com,example2.com"). 为空不允许跨域, "*"允许所有
+	SettingKeyCircuitBreakerEnabled            SettingKey = "circuit_breaker_enabled"              // 是否启用本地熔断，默认关闭
 	SettingKeyCircuitBreakerThreshold          SettingKey = "circuit_breaker_threshold"            // 熔断触发阈值（连续失败次数）
 	SettingKeyCircuitBreakerCooldown           SettingKey = "circuit_breaker_cooldown"             // 熔断基础冷却时间（秒）
 	SettingKeyCircuitBreakerMaxCooldown        SettingKey = "circuit_breaker_max_cooldown"         // 熔断最大冷却时间（秒），指数退避上限
@@ -63,6 +64,7 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeySiteCheckinInterval, Value: "24"},              // 默认24小时自动签到一次
 		{Key: SettingKeyRelayLogKeepPeriod, Value: "7"},                // 默认日志保存7天
 		{Key: SettingKeyRelayLogKeepEnabled, Value: "true"},            // 默认保留历史日志
+		{Key: SettingKeyCircuitBreakerEnabled, Value: "false"},         // 默认由上游网关管理熔断
 		{Key: SettingKeyCircuitBreakerThreshold, Value: "5"},           // 默认连续失败5次触发熔断
 		{Key: SettingKeyCircuitBreakerCooldown, Value: "60"},           // 默认基础冷却60秒
 		{Key: SettingKeyCircuitBreakerMaxCooldown, Value: "600"},       // 默认最大冷却600秒（10分钟）
@@ -125,7 +127,7 @@ func (s *Setting) Validate() error {
 			return fmt.Errorf("setting value must be non-negative")
 		}
 		return nil
-	case SettingKeyRelayLogKeepEnabled, SettingKeyResponsesWSEnabled, SettingKeyGroupHealthEnabled, SettingKeyStatsSiteModelBackfilled, SettingKeyOutlierRetireEnabled, SettingKeyAutoGroupCreateMissingEnabled, SettingKeyAutoGroupNormalizeEnabled:
+	case SettingKeyRelayLogKeepEnabled, SettingKeyCircuitBreakerEnabled, SettingKeyResponsesWSEnabled, SettingKeyGroupHealthEnabled, SettingKeyStatsSiteModelBackfilled, SettingKeyOutlierRetireEnabled, SettingKeyAutoGroupCreateMissingEnabled, SettingKeyAutoGroupNormalizeEnabled:
 		if s.Value != "true" && s.Value != "false" {
 			return fmt.Errorf("setting value must be true or false")
 		}

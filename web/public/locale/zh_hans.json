@@ -221,6 +221,10 @@
         },
         "circuitBreaker": {
             "title": "熔断器配置",
+            "enabled": {
+                "label": "启用本地熔断",
+                "description": "默认关闭。上游网关（如 Magpie）已管理重试和冷却时，可保持关闭；关闭会立即清空已有熔断状态，不影响分组重试、请求日志和统计。"
+            },
             "threshold": {
                 "label": "熔断触发阈值（连续失败次数）",
                 "placeholder": "请输入阈值"

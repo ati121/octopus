@@ -43,6 +43,9 @@ func SettingSetString(key model.SettingKey, value string) error {
 		return fmt.Errorf("setting not found")
 	}
 	if valueCache == value {
+		if key == model.SettingKeyCircuitBreakerEnabled {
+			syncCircuitBreakerSetting()
+		}
 		return nil
 	}
 	result := db.GetDB().Model(&model.Setting{Key: key}).Update("Value", value)
@@ -53,6 +56,9 @@ func SettingSetString(key model.SettingKey, value string) error {
 		return fmt.Errorf("failed to set setting, key not found")
 	}
 	settingCache.Set(key, value)
+	if key == model.SettingKeyCircuitBreakerEnabled {
+		syncCircuitBreakerSetting()
+	}
 	return nil
 }
 
@@ -137,5 +143,6 @@ func settingRefreshCache(ctx context.Context) error {
 	for _, setting := range settings {
 		settingCache.Set(setting.Key, setting.Value)
 	}
+	syncCircuitBreakerSetting()
 	return nil
 }
