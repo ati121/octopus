@@ -131,7 +131,7 @@ func TestChannelUpdateAddsDisabledKeyAsDisabled(t *testing.T) {
 // 中继按值拷走 ChannelKey 快照，请求结束后才把它写回缓存并在退出时落库。过去落库用的是
 // OnConflict{UpdateAll: true} 全字段覆盖，于是这份陈旧快照会把用户中途改过的 enabled /
 // remark 一起冲掉——每次正常重启都会把用户关掉的 Key 开关翻回启用。现在只回写运行时真正
-// 会变的三列。
+// 会变的状态码和最后使用时间。
 func TestChannelKeySaveDBOnlyWritesRuntimeColumns(t *testing.T) {
 	ctx := setupSiteOpTestDB(t)
 

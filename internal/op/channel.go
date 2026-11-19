@@ -13,7 +13,6 @@ import (
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/bestruirui/octopus/internal/utils/xstrings"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 var channelCache = cache.New[int, model.Channel](16)
@@ -125,26 +124,36 @@ func ChannelKeyUpdate(key model.ChannelKey) error {
 		return fmt.Errorf("invalid channel key")
 	}
 	_, ok := channelCache.UpdateIfPresent(key.ChannelID, func(ch model.Channel) model.Channel {
-		if len(ch.Keys) > 0 {
-			keys := make([]model.ChannelKey, len(ch.Keys))
-			copy(keys, ch.Keys)
-			for i := range keys {
-				if keys[i].ID == key.ID {
-					keys[i] = key
-					break
-				}
+		for i, current := range ch.Keys {
+			// 已删除或已轮换的凭据不能由在途请求的旧快照写回。
+			if current.ID != key.ID || current.ChannelKey != key.ChannelKey {
+				continue
 			}
+			if key.LastUseTimeStamp < current.LastUseTimeStamp {
+				return ch
+			}
+			current.StatusCode = key.StatusCode
+			current.LastUseTimeStamp = key.LastUseTimeStamp
+			keys := append([]model.ChannelKey(nil), ch.Keys...)
+			keys[i] = current
 			ch.Keys = keys
+			channelKeyCache.UpdateIfPresent(key.ID, func(cached model.ChannelKey) model.ChannelKey {
+				if cached.ChannelID == current.ChannelID && cached.ChannelKey == current.ChannelKey {
+					cached.StatusCode = current.StatusCode
+					cached.LastUseTimeStamp = current.LastUseTimeStamp
+				}
+				return cached
+			})
+			channelKeyCacheNeedUpdateLock.Lock()
+			channelKeyCacheNeedUpdate[key.ID] = struct{}{}
+			channelKeyCacheNeedUpdateLock.Unlock()
+			break
 		}
 		return ch
 	})
 	if !ok {
 		return fmt.Errorf("channel not found")
 	}
-	channelKeyCache.Set(key.ID, key)
-	channelKeyCacheNeedUpdateLock.Lock()
-	channelKeyCacheNeedUpdate[key.ID] = struct{}{}
-	channelKeyCacheNeedUpdateLock.Unlock()
 	return nil
 }
 func ChannelBaseUrlUpdate(channelID int, baseUrl []model.BaseUrl) error {
@@ -189,17 +198,17 @@ func ChannelKeySaveDB(ctx context.Context) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	// 只回写运行时真正会变的三列。用 UpdateAll 会把整行盖掉，那有两个后果：
-	// 一是 GORM 对 `default:true` 的 Enabled 做零值顶替，把用户关掉的开关重新写成
-	// true；二是中继按值拷走 ChannelKey 快照、请求结束才整体写回，中途被用户改过的
-	// enabled / remark 会被这份陈旧快照覆盖。限定列之后两个问题一起消失。
-	if err := db.GetDB().WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"status_code",
-			"last_use_time_stamp",
-		}),
-	}).CreateInBatches(&rows, 100).Error; err != nil {
+	// 只更新仍存在且凭据未轮换的记录，不能用 INSERT/ON CONFLICT 复活已删除的 Key。
+	if err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, key := range rows {
+			if err := tx.Model(&model.ChannelKey{}).
+				Where("id = ? AND channel_id = ? AND channel_key = ? AND last_use_time_stamp <= ?", key.ID, key.ChannelID, key.ChannelKey, key.LastUseTimeStamp).
+				Updates(map[string]interface{}{"status_code": key.StatusCode, "last_use_time_stamp": key.LastUseTimeStamp}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		channelKeyCacheNeedUpdateLock.Lock()
 		for _, id := range keyIDs {
 			channelKeyCacheNeedUpdate[id] = struct{}{}

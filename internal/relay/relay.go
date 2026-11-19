@@ -359,7 +359,9 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			return
 		}
 		if result.Written {
-			if metricsSuggestCompletedStream(metrics) {
+			// 聚合器可能为部分正文补全结束原因；明确的上游错误不能被完成兜底改成成功。
+			var upstreamErr *llm.ResponseError
+			if !errors.As(result.Err, &upstreamErr) && metricsSuggestCompletedStream(metrics) {
 				log.Debugf("stream written then error but metrics complete, treating as success")
 				metrics.SaveWithChannelStats(c.Request.Context(), true, nil, iter.Attempts(), false)
 			} else {

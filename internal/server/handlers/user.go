@@ -42,11 +42,12 @@ func login(c *gin.Context) {
 		resp.InvalidJSON(c)
 		return
 	}
-	if err := op.UserVerify(user.Username, user.Password); err != nil {
+	verifiedUser, err := op.UserAuthenticate(user.Username, user.Password)
+	if err != nil {
 		resp.InvalidCredentials(c)
 		return
 	}
-	token, expire, err := auth.GenerateJWTToken(user.Expire)
+	token, expire, err := auth.GenerateJWTToken(verifiedUser, user.Expire)
 	if err != nil {
 		resp.InternalError(c)
 		return

@@ -1,10 +1,10 @@
 # 第三方组件与重新构建
 
 Octopus 使用 AxonHub 的 `github.com/looplj/axonhub/llm` 库处理协议。
-锁定版本为 `v0.0.0-20261023163405-0d82a8e4400c`，版权归 AxonHub 贡献者所有，
+锁定版本为 `v0.0.0-20261119052401-eb020516b67b`，版权归 AxonHub 贡献者所有，
 该库及其使用适用 LGPL-3.0；本项目未修改库源码。
 
-- 上游及对应源码：[looplj/axonhub，提交 0d82a8e4400c](https://github.com/looplj/axonhub/tree/0d82a8e4400c/llm)。
+- 上游及对应源码：[looplj/axonhub，提交 eb020516b67b](https://github.com/looplj/axonhub/tree/eb020516b67b/llm)。
 - 许可证全文：[LGPL-3.0](licenses/LGPL-3.0.txt) 与其引用的 [GPL-3.0](licenses/GPL-3.0.txt)。
 - Octopus 自有代码继续遵循根目录 [LICENSE](LICENSE) 的 AGPL-3.0。
 - 历史派生代码的 MIT 声明保留在 `internal/transformer/NOTICE`，它不代表当前 AxonHub 库的许可证。
@@ -14,7 +14,7 @@ Octopus 使用 AxonHub 的 `github.com/looplj/axonhub/llm` 库处理协议。
 镜像内文件位于 `/usr/share/doc/octopus/`。源包通过
 `bash scripts/package-source.sh` 从已提交的干净 checkout 生成，不包括运行数据或密钥。
 
-解包后，使用 `BUILD_TOOLCHAIN.txt` 记录的 Go 版本（至少 1.26）重新构建：
+解包后，使用 `BUILD_TOOLCHAIN.txt` 记录的 Go 版本（至少 1.27.4）重新构建：
 
 ```sh
 CGO_ENABLED=0 go build -mod=vendor -tags=jsoniter -o octopus .

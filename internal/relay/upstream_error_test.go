@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -8,8 +9,13 @@ import (
 )
 
 func TestPublicRelayErrorMessagePreservesUpstreamJSONMessage(t *testing.T) {
-	err := &llm.ResponseError{StatusCode: 400, Detail: llm.ErrorDetail{Message: `{"error":{"message":"thinking.budget_tokens must be less than max_tokens","type":"invalid_request_error"},"type":"error"}`}}
+	cause := errors.New("upstream rejected request")
+	// AxonHub 以 error 接口返回 *ResponseError；保留指针才能使用其 Unwrap。
+	var err error = &llm.ResponseError{StatusCode: 400, Detail: llm.ErrorDetail{Message: `{"error":{"message":"thinking.budget_tokens must be less than max_tokens","type":"invalid_request_error"},"type":"error"}`}, Cause: cause}
 	wrapped := fmt.Errorf("channel claude failed: %w", err)
+	if !errors.Is(wrapped, cause) {
+		t.Fatal("包装错误丢失了上游原因")
+	}
 
 	if got, want := publicRelayErrorMessage(wrapped), "thinking.budget_tokens must be less than max_tokens"; got != want {
 		t.Fatalf("publicRelayErrorMessage() = %q, want %q", got, want)

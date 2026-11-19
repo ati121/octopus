@@ -1,8 +1,11 @@
 package auth
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"math/big"
 	"sync"
 	"time"
@@ -19,8 +22,8 @@ var (
 	jwtSecretKey  []byte
 )
 
-// getJWTSecret returns the JWT signing key, generating and persisting one if needed.
-func getJWTSecret() []byte {
+// 签名绑定已持久化的密码哈希，网页改密或 CLI 重置后重启都会使旧会话失效。
+func getJWTSecret(passwordHash string) []byte {
 	jwtSecretOnce.Do(func() {
 		secret, err := op.SettingGetString(model.SettingKeyJWTSecret)
 		if err == nil && secret != "" {
@@ -44,10 +47,15 @@ func getJWTSecret() []byte {
 		}
 		jwtSecretKey = []byte(generated)
 	})
-	return jwtSecretKey
+	mac := hmac.New(sha256.New, jwtSecretKey)
+	_, _ = mac.Write([]byte(passwordHash))
+	return mac.Sum(nil)
 }
 
-func GenerateJWTToken(expiresMin int) (string, string, error) {
+func GenerateJWTToken(user model.User, expiresMin int) (string, string, error) {
+	if expiresMin < -1 || user.Password == "" {
+		return "", "", fmt.Errorf("invalid login session")
+	}
 	now := time.Now()
 	claims := &jwt.RegisteredClaims{
 		IssuedAt:  jwt.NewNumericDate(now),
@@ -61,7 +69,7 @@ func GenerateJWTToken(expiresMin int) (string, string, error) {
 	} else if expiresMin == -1 {
 		claims.ExpiresAt = jwt.NewNumericDate(now.Add(time.Duration(30) * 24 * time.Hour))
 	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(getJWTSecret())
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(getJWTSecret(user.Password))
 	if err != nil {
 		return "", "", err
 	}
@@ -69,9 +77,13 @@ func GenerateJWTToken(expiresMin int) (string, string, error) {
 }
 
 func VerifyJWTToken(token string) bool {
+	user := op.UserGet()
+	if user.Password == "" {
+		return false
+	}
 	jwtToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
-		return getJWTSecret(), nil
-	})
+		return getJWTSecret(user.Password), nil
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer(conf.APP_NAME), jwt.WithExpirationRequired())
 	if err != nil || !jwtToken.Valid {
 		return false
 	}
