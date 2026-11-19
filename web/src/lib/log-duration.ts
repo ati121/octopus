@@ -47,3 +47,28 @@ export function durationPairText(ftutMs: number, liveMs: number | null, useTimeM
     }
     return formatDurationPair(firstTokenMs, useTimeMs);
 }
+
+// Magpie 的输出速度口径：输出 Token / 首字之后的生成时长。
+// 首字到结束不足 1 秒时不显示，避免短请求或一次性突发输出造成误导。
+export function outputSpeedTokensPerSecond(
+    outputTokens: number,
+    firstTokenMs: number,
+    totalMs: number,
+): number | null {
+    if (!Number.isFinite(outputTokens) || outputTokens <= 0) return null;
+    if (!Number.isFinite(firstTokenMs) || firstTokenMs <= 0) return null;
+    if (!Number.isFinite(totalMs) || totalMs <= firstTokenMs) return null;
+
+    const generationMs = totalMs - firstTokenMs;
+    if (generationMs < 1000) return null;
+    return outputTokens * 1000 / generationMs;
+}
+
+export function formatOutputSpeed(
+    outputTokens: number,
+    firstTokenMs: number,
+    totalMs: number,
+): string | null {
+    const speed = outputSpeedTokensPerSecond(outputTokens, firstTokenMs, totalMs);
+    return speed == null ? null : `${Math.round(speed)} tok/s`;
+}

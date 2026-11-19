@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Clock, Zap, AlertCircle, ArrowDownToLine, ArrowUpFromLine, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, CircleOff, Link } from 'lucide-react';
+import { Clock, Zap, Gauge, AlertCircle, ArrowDownToLine, ArrowUpFromLine, ArrowRight, ArrowDown, Send, MessageSquare, Loader2, RotateCw, ChevronDown, ChevronUp, Pin, KeyRound, CircleOff, Link } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { motion, AnimatePresence } from 'motion/react';
-import { durationPairText, liveLogElapsedMs } from '@/lib/log-duration';
+import { durationPairText, formatOutputSpeed, liveLogElapsedMs } from '@/lib/log-duration';
 import { LogContent } from './LogContent';
 import { getLogDetail, type RelayLog, type RelayLogWSMode, type RelayLogWSExecMode, type RelayLogWSRecovery, type ChannelAttempt, type AttemptStatus, type LogSiteActionTarget as ApiLogSiteActionTarget, type LogSiteActionTargets as ApiLogSiteActionTargets } from '@/api/endpoints/log';
 import { getModelIcon } from '@/lib/model-icons';
@@ -142,6 +142,20 @@ function makeDisableTargetKey(target: LogSiteActionTarget | null | undefined) {
 function formatCompactTokenCount(value: number): string {
     const token = formatTokens(value).formatted;
     return `${token.value}${token.unit}`;
+}
+
+function OutputSpeedBadge({ speed }: { speed: string | null }) {
+    if (!speed) return null;
+
+    return (
+        <span
+            className="ml-1 inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-emerald-600 dark:text-emerald-400"
+            aria-label={speed}
+        >
+            <Gauge className="size-3 shrink-0" />
+            {speed}
+        </span>
+    );
 }
 
 function hasCacheTokens(log: RelayLog) {
@@ -556,6 +570,12 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
         response_content: detailLog.response_content,
     } : log;
     const liveElapsedMs = useLiveProcessingMs(log);
+    const outputSpeed = displayLog.processing
+        || displayLog.success === false
+        || displayLog.status_code === 499
+        || !!displayLog.error
+        ? null
+        : formatOutputSpeed(displayLog.output_tokens, displayLog.ftut, displayLog.use_time);
 
     useEffect(() => {
         if (detailRequestID === 0) return;
@@ -743,7 +763,10 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                 </div>
                                 <div className="flex items-center gap-1.5">
                                     <ArrowUpFromLine className="size-3.5 shrink-0 text-purple-500" />
-                                    <span>{t('output')} {formatCompactTokenCount(log.output_tokens)}</span>
+                                    <span className="flex min-w-0 items-center whitespace-nowrap">
+                                        {t('output')} {formatCompactTokenCount(log.output_tokens)}
+                                        <OutputSpeedBadge speed={outputSpeed} />
+                                    </span>
                                 </div>
                             </div>
                             {isClientCanceled ? (
@@ -998,6 +1021,7 @@ export function LogCard({ log, siteTargets }: { log: RelayLog; siteTargets: LogS
                                                 <Badge variant="secondary" className="ml-auto text-xs">
                                                     {formatCompactTokenCount(displayLog.output_tokens)} {t('tokens')}
                                                 </Badge>
+                                                <OutputSpeedBadge speed={outputSpeed} />
                                             </div>
                                             <div className="flex-1 overflow-auto min-h-0">
                                                 <LogContent kind="response" content={displayLog.response_content} fallbackText={t('noResponseContent')} isLoading={detailLoading} />

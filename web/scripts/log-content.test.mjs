@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getLogContentPreview, textBoundary } from '../src/components/modules/log/content-preview.ts';
-import { durationPairText, liveLogElapsedMs, observeLogTiming } from '../src/lib/log-duration.ts';
+import { durationPairText, formatOutputSpeed, liveLogElapsedMs, observeLogTiming, outputSpeedTokensPerSecond } from '../src/lib/log-duration.ts';
 
 test('最近的用户输入不被系统提示、工具结果或更早的对话替代', () => {
     assert.equal(getLogContentPreview({ messages: [
@@ -100,4 +100,16 @@ test('中途打开的日志从快照耗时继续，旧日志回退毫秒或秒�
     assert.equal(liveLogElapsedMs(legacy, 500), 3000);
     const precise = observeLogTiming({ time: 100, start_time_ms: 100900, processing: true }, 0, 102500);
     assert.equal(liveLogElapsedMs(precise, 500), 2100);
+});
+
+test('输出速度按首字后的生成时长计算', () => {
+    assert.equal(Math.round(outputSpeedTokensPerSecond(1200, 680, 5360)), 256);
+    assert.equal(formatOutputSpeed(1200, 680, 5360), '256 tok/s');
+});
+
+test('首字到结束不足一秒时隐藏输出速度', () => {
+    assert.equal(outputSpeedTokensPerSecond(1200, 680, 1679), null);
+    assert.equal(formatOutputSpeed(1200, 680, 1680), '1200 tok/s');
+    assert.equal(formatOutputSpeed(0, 680, 5360), null);
+    assert.equal(formatOutputSpeed(1200, 0, 5360), null);
 });
