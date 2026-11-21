@@ -111,5 +111,17 @@ test('首字到结束不足一秒时隐藏输出速度', () => {
     assert.equal(outputSpeedTokensPerSecond(1200, 680, 1679), null);
     assert.equal(formatOutputSpeed(1200, 680, 1680), '1200 tok/s');
     assert.equal(formatOutputSpeed(0, 680, 5360), null);
-    assert.equal(formatOutputSpeed(1200, 0, 5360), null);
+});
+
+test('非流式速度以完整请求耗时计算并标为下限', () => {
+    assert.equal(outputSpeedTokensPerSecond(1200, 0, 10000), 120);
+    assert.equal(formatOutputSpeed(1200, 0, 10000), '≥120 tok/s');
+    assert.equal(formatOutputSpeed(1200, 0, 1000), '≥1200 tok/s');
+    assert.equal(formatOutputSpeed(1200, 0, 1100), '≥1090 tok/s');
+});
+
+test('非流式短耗时或少于一千输出 Token 时不显示速度', () => {
+    assert.equal(formatOutputSpeed(999, 0, 10000), null);
+    assert.equal(formatOutputSpeed(1200, 0, 999), null);
+    assert.equal(formatOutputSpeed(0, 0, 10000), null);
 });

@@ -48,16 +48,23 @@ export function durationPairText(ftutMs: number, liveMs: number | null, useTimeM
     return formatDurationPair(firstTokenMs, useTimeMs);
 }
 
-// Magpie 的输出速度口径：输出 Token / 首字之后的生成时长。
-// 首字到结束不足 1 秒时不显示，避免短请求或一次性突发输出造成误导。
+// 流式请求用首字后的生成时长计算；非流式只有整条请求耗时，按下限显示。
+// 首字到结束不足 1 秒时不显示；非流式至少 1000 Token 且总耗时至少 1 秒。
 export function outputSpeedTokensPerSecond(
     outputTokens: number,
     firstTokenMs: number,
     totalMs: number,
 ): number | null {
     if (!Number.isFinite(outputTokens) || outputTokens <= 0) return null;
-    if (!Number.isFinite(firstTokenMs) || firstTokenMs <= 0) return null;
-    if (!Number.isFinite(totalMs) || totalMs <= firstTokenMs) return null;
+    if (!Number.isFinite(firstTokenMs) || firstTokenMs < 0) return null;
+    if (!Number.isFinite(totalMs) || totalMs <= 0) return null;
+
+    if (firstTokenMs === 0) {
+        if (outputTokens < 1000 || totalMs < 1000) return null;
+        return outputTokens * 1000 / totalMs;
+    }
+
+    if (totalMs <= firstTokenMs) return null;
 
     const generationMs = totalMs - firstTokenMs;
     if (generationMs < 1000) return null;
@@ -70,5 +77,7 @@ export function formatOutputSpeed(
     totalMs: number,
 ): string | null {
     const speed = outputSpeedTokensPerSecond(outputTokens, firstTokenMs, totalMs);
-    return speed == null ? null : `${Math.round(speed)} tok/s`;
+    if (speed == null) return null;
+    if (firstTokenMs === 0) return `≥${Math.floor(speed)} tok/s`;
+    return `${Math.round(speed)} tok/s`;
 }
